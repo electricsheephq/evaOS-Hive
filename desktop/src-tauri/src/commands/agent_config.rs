@@ -20,7 +20,6 @@ use crate::{
 };
 
 /// Subset of the goose file config exposed to the frontend for gate evaluation.
-///
 /// Only the fields the dialog gate needs — not the full `RuntimeConfigSurface`.
 /// The gate uses this to know which requirements are already satisfied in the
 /// harness config file, so it can show "Set in goose config" rather than
@@ -599,7 +598,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::managed_agents::{BackendKind, RespondTo};
+    use crate::managed_agents::{BackendKind, RespondTo, RuntimeAuthProbe};
 
     fn goose_runtime() -> &'static KnownAcpRuntime {
         &KnownAcpRuntime {
@@ -631,8 +630,8 @@ mod tests {
             context_limit_env_var: Some("GOOSE_CONTEXT_LIMIT"),
             required_normalized_fields: &["model", "provider"],
             login_hint: None,
-            readiness_probe_args: None,
-            auth_probe_args: None,
+            readiness_probe_suffix: None,
+            auth_probe: RuntimeAuthProbe::NotApplicable,
         }
     }
 

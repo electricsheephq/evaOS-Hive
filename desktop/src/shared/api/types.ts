@@ -529,6 +529,7 @@ export type AuthStatus =
   | { status: "logged_out" }
   | { status: "config_invalid"; diagnostic: string }
   | { status: "not_applicable" }
+  | { status: "checked_on_launch" }
   | { status: "unknown" };
 
 export type AcpRuntimeCatalogEntry = {

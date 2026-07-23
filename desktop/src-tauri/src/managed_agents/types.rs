@@ -564,6 +564,9 @@ pub enum AuthStatus {
     /// No command-level authentication probe applies. Authentication may be
     /// handled by the ACP initialize/auth-method handshake at launch.
     NotApplicable,
+    /// Provider authentication/setup is unverified until the bounded ACP
+    /// initialize/auth-method handshake runs.
+    CheckedOnLaunch,
     /// Probe was not attempted (runtime unavailable or probe timed out).
     Unknown,
 }
