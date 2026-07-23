@@ -29,6 +29,28 @@ use crate::handlers::side_effects::{
 };
 use crate::state::AppState;
 
+const RELAY_MEMBERSHIP_REMOVED_REASON: &str = "blocked: relay membership removed";
+
+#[derive(Debug, Eq, PartialEq)]
+enum RemovalDisposition {
+    Removed,
+    AlreadyAbsent,
+}
+
+fn removal_disposition(result: RemoveResult) -> Result<RemovalDisposition, String> {
+    match result {
+        RemoveResult::Removed => Ok(RemovalDisposition::Removed),
+        // A repeated command must be safe and must re-fan-out the disconnect
+        // in case the first Redis publish was lost. Durable absence is still
+        // the authorization backstop.
+        RemoveResult::NotFound => Ok(RemovalDisposition::AlreadyAbsent),
+        RemoveResult::IsOwner => Err("cannot remove the relay owner".to_string()),
+        RemoveResult::RoleMismatch => {
+            Err("actor not authorized: admins can only remove members".to_string())
+        }
+    }
+}
+
 /// Extract the hex pubkey from the first `p` tag, returning it as a `String`.
 fn extract_p_tag_hex(event: &Event) -> Option<String> {
     for tag in event.tags.iter() {
@@ -252,30 +274,36 @@ pub async fn handle_relay_admin_event(
                     .map_err(|e| format!("database error: {e}"))?
             };
 
-            match remove_result {
-                RemoveResult::Removed => {}
-                RemoveResult::IsOwner => {
-                    return Err("cannot remove the relay owner".to_string());
-                }
-                RemoveResult::NotFound => {
-                    return Err(format!("member not found: {target_hex}"));
-                }
-                RemoveResult::RoleMismatch => {
-                    return Err("actor not authorized: admins can only remove members".to_string());
-                }
-            }
+            let disposition = removal_disposition(remove_result)?;
+            let target_pubkey = hex::decode(&target_hex)
+                .map_err(|e| format!("invalid target pubkey encoding: {e}"))?;
+
+            // The DB mutation/absence check above is the durable authorization
+            // backstop. Close matching sockets on this pod and fan the same
+            // community-scoped command to every other pod. Repeating an
+            // already-completed removal intentionally replays this fan-out.
+            let closed_locally = state.disconnect_pubkey_clusterwide(
+                tenant,
+                &target_pubkey,
+                &event.id.to_hex(),
+                RELAY_MEMBERSHIP_REMOVED_REASON,
+            );
 
             info!(
                 sender = %sender_hex,
                 target = %target_hex,
-                "relay member removed"
+                ?disposition,
+                closed_locally,
+                "relay member removal enforced"
             );
 
-            if let Err(e) = publish_nip43_member_removed(tenant, state, &target_hex).await {
-                warn!(error = %e, "failed to publish NIP-43 member removed event");
-            }
-            if let Err(e) = publish_nip43_membership_list(tenant, state).await {
-                warn!(error = %e, "failed to publish NIP-43 membership list");
+            if disposition == RemovalDisposition::Removed {
+                if let Err(e) = publish_nip43_member_removed(tenant, state, &target_hex).await {
+                    warn!(error = %e, "failed to publish NIP-43 member removed event");
+                }
+                if let Err(e) = publish_nip43_membership_list(tenant, state).await {
+                    warn!(error = %e, "failed to publish NIP-43 membership list");
+                }
             }
         }
 
@@ -429,6 +457,30 @@ mod tests {
     fn extract_tag_value_wrong_name() {
         let event = make_test_event(9030, vec![vec!["role", "admin"]]);
         assert_eq!(extract_tag_value(&event, "p"), None);
+    }
+
+    #[test]
+    fn removal_disposition_accepts_idempotent_retry() {
+        assert_eq!(
+            removal_disposition(RemoveResult::Removed),
+            Ok(RemovalDisposition::Removed)
+        );
+        assert_eq!(
+            removal_disposition(RemoveResult::NotFound),
+            Ok(RemovalDisposition::AlreadyAbsent)
+        );
+    }
+
+    #[test]
+    fn removal_disposition_preserves_protected_role_errors() {
+        assert_eq!(
+            removal_disposition(RemoveResult::IsOwner),
+            Err("cannot remove the relay owner".to_string())
+        );
+        assert_eq!(
+            removal_disposition(RemoveResult::RoleMismatch),
+            Err("actor not authorized: admins can only remove members".to_string())
+        );
     }
 
     #[test]
