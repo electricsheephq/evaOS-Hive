@@ -597,6 +597,25 @@ impl AcpClient {
             .session_id)
     }
 
+    /// Load an existing ACP session. Callers must first verify that initialize
+    /// advertised `agentCapabilities.loadSession`.
+    pub async fn session_load(
+        &mut self,
+        session_id: &str,
+        cwd: &str,
+        mcp_servers: Vec<McpServer>,
+    ) -> Result<serde_json::Value, AcpError> {
+        self.send_request(
+            "session/load",
+            serde_json::json!({
+                "sessionId": session_id,
+                "cwd": cwd,
+                "mcpServers": mcp_servers,
+            }),
+        )
+        .await
+    }
+
     /// Send Goose's custom system-prompt request after `session/new`.
     pub async fn session_set_goose_system_prompt(
         &mut self,
@@ -3031,6 +3050,40 @@ mod tests {
         assert!(
             received["params"]["systemPrompt"].is_null(),
             "systemPrompt should NOT be in params when value is None"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_load_uses_standard_acp_request_shape() {
+        let script = r#"
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":0,"result":{"loaded":true,"_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        let result = client
+            .session_load(
+                "ses_persisted",
+                "/tmp/workspace",
+                vec![McpServer {
+                    name: "buzz".into(),
+                    command: "buzz-mcp".into(),
+                    args: vec!["--stdio".into()],
+                    env: vec![],
+                }],
+            )
+            .await
+            .expect("session/load should succeed");
+
+        let received = &result["_receivedRequest"];
+        assert_eq!(received["method"], "session/load");
+        assert_eq!(received["params"]["sessionId"], "ses_persisted");
+        assert_eq!(received["params"]["cwd"], "/tmp/workspace");
+        assert_eq!(received["params"]["mcpServers"][0]["name"], "buzz");
+        assert_eq!(received["params"]["mcpServers"][0]["command"], "buzz-mcp");
+        assert_eq!(
+            received["params"]["mcpServers"][0]["args"],
+            serde_json::json!(["--stdio"])
         );
     }
 

@@ -9,6 +9,7 @@ mod pool;
 mod pool_lifecycle;
 mod queue;
 mod relay;
+mod session_store;
 mod setup_mode;
 mod usage;
 
@@ -43,6 +44,7 @@ use pool::{
 use pool_lifecycle::PoolLifecycle;
 use queue::{CancelReason, EventQueue, FlushBatch, QueuedEvent, ThreadTags};
 use relay::{HarnessRelay, RelayEventPublisher};
+use session_store::{SessionScope, SessionStore};
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -792,6 +794,7 @@ fn handle_relay_observer_control_event(
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
     owner_pubkey_hex: &str,
+    session_store: &SessionStore,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
     if let Err(e) = buzz_core::verify_event(&event) {
@@ -835,7 +838,7 @@ fn handle_relay_observer_control_event(
             handle_cancel_turn_control(&payload, pool, observer);
         }
         Some("switch_model") => {
-            handle_switch_model_control(&payload, pool, observer);
+            handle_switch_model_control(&payload, pool, observer, session_store);
         }
         _ => {
             tracing::debug!(payload = %payload, "ignoring unknown observer control frame");
@@ -893,6 +896,7 @@ fn handle_switch_model_control(
     payload: &serde_json::Value,
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
+    session_store: &SessionStore,
 ) {
     let Some(channel_id) = payload
         .get("channelId")
@@ -931,7 +935,16 @@ fn handle_switch_model_control(
     } else {
         // Idle path: validate against the cached catalog before invalidating.
         match pool.switch_idle_agent_model(channel_id, model_id) {
-            IdleSwitchResult::Switched => "switched",
+            IdleSwitchResult::Switched => {
+                if let Err(error) = session_store.remove(channel_id) {
+                    tracing::warn!(
+                        target: "session_store",
+                        channel = %channel_id,
+                        "failed to remove mapping after model switch: {error}"
+                    );
+                }
+                "switched"
+            }
             IdleSwitchResult::UnsupportedModel => "unsupported_model",
             IdleSwitchResult::NoIdleAgent => "no_active_turn",
         }
@@ -1092,10 +1105,9 @@ fn any_respawn_in_flight(crash_history: &[SlotCircuit]) -> bool {
 /// Result of a background respawn task.
 struct RespawnResult {
     index: usize,
-    /// Tuple: (initialized client, protocol version, supports_goose_steer).
-    /// The third element is always `true` — the supervisor uses
-    /// try-and-tolerate for the steer extension.
-    result: Result<(AcpClient, u32, String)>,
+    /// Tuple: initialized client, protocol version, normalized agent name,
+    /// and ACP session-load capability.
+    result: Result<(AcpClient, u32, String, bool)>,
 }
 
 /// Outcome of a non-cancelling steer attempt, forwarded from a per-attempt
@@ -1139,7 +1151,7 @@ impl RespawnGuard {
     /// Send the result and disarm the guard. Uses `try_send` (sync) so there
     /// is no await boundary between marking `sent` and actually enqueueing —
     /// cancellation cannot slip between the two.
-    fn send(mut self, result: Result<(AcpClient, u32, String)>) {
+    fn send(mut self, result: Result<(AcpClient, u32, String, bool)>) {
         // Invariant: try_send succeeds because the channel capacity equals the
         // slot count, and respawn_in_flight guarantees at most one outstanding
         // result per slot. If this ever fails, the channel sizing or the
@@ -1478,6 +1490,15 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
+    let session_store = Arc::new(SessionStore::open(
+        config.session_store_path.clone(),
+        SessionScope::new(
+            &config.relay_url,
+            &pubkey_hex,
+            &config.agent_command,
+            &config.agent_args,
+        ),
+    ));
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -1512,6 +1533,7 @@ async fn tokio_main() -> Result<()> {
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
         relay_url: config.relay_url.clone(),
+        session_store,
     });
 
     if !config.memory_enabled {
@@ -1737,7 +1759,7 @@ async fn tokio_main() -> Result<()> {
         while let Ok(rr) = respawn_rx.try_recv() {
             crash_history[rr.index].respawn_in_flight = false;
             match rr.result {
-                Ok((acp, protocol_version, agent_name)) => {
+                Ok((acp, protocol_version, agent_name, load_session_supported)) => {
                     let agent = OwnedAgent {
                         index: rr.index,
                         acp,
@@ -1748,6 +1770,7 @@ async fn tokio_main() -> Result<()> {
                         agent_name,
                         goose_system_prompt_supported: None,
                         protocol_version,
+                        load_session_supported,
                     };
                     pool.return_agent(agent);
                     tracing::info!(agent = rr.index, "respawn complete");
@@ -1841,7 +1864,14 @@ async fn tokio_main() -> Result<()> {
                     match control_event {
                         Some(event) => {
                             if let Some(ref owner_hex) = owner_cache.pubkey {
-                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex);
+                                handle_relay_observer_control_event(
+                                    &config.keys,
+                                    event,
+                                    &mut pool,
+                                    observer.as_ref(),
+                                    owner_hex,
+                                    &ctx.session_store,
+                                );
                             } else {
                                 tracing::warn!("observer control frame received but no owner resolved — dropping");
                             }
@@ -1945,6 +1975,13 @@ async fn tokio_main() -> Result<()> {
                                     } else {
                                         0
                                     };
+                                    if let Err(error) = ctx.session_store.remove(ch) {
+                                        tracing::warn!(
+                                            target: "session_store",
+                                            channel = %ch,
+                                            "failed to remove mapping after channel removal: {error}"
+                                        );
+                                    }
                                     // Track removed channels so checked-out agents get
                                     // their sessions stripped when they return to the pool.
                                     removed_channels.insert(ch);
@@ -2072,6 +2109,15 @@ async fn tokio_main() -> Result<()> {
                                             );
                                         } else {
                                             let invalidated = pool.invalidate_channel_sessions(buzz_event.channel_id);
+                                            if let Err(error) =
+                                                ctx.session_store.remove(buzz_event.channel_id)
+                                            {
+                                                tracing::warn!(
+                                                    target: "session_store",
+                                                    channel = %buzz_event.channel_id,
+                                                    "failed to remove mapping after explicit rotation: {error}"
+                                                );
+                                            }
                                             tracing::info!(
                                                 channel_id = %buzz_event.channel_id,
                                                 invalidated,
@@ -2610,7 +2656,7 @@ async fn tokio_main() -> Result<()> {
     // Drain any respawn results that completed before the abort. Explicitly
     // shut down returned agents instead of relying on AcpClient::Drop.
     while let Ok(rr) = respawn_rx.try_recv() {
-        if let Ok((mut acp, _, _)) = rr.result {
+        if let Ok((mut acp, _, _, _)) = rr.result {
             acp.shutdown().await;
             tracing::debug!(agent = rr.index, "reaped respawned agent on shutdown");
         }
@@ -3595,6 +3641,14 @@ fn normalized_agent_name(init_result: &serde_json::Value) -> String {
         .to_ascii_lowercase()
 }
 
+fn supports_session_load(init_result: &serde_json::Value) -> bool {
+    init_result
+        .get("agentCapabilities")
+        .and_then(|capabilities| capabilities.get("loadSession"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 async fn shutdown_agent_slots(slots: &mut [Option<OwnedAgent>]) {
     for slot in slots {
         if let Some(mut agent) = slot.take() {
@@ -3693,6 +3747,7 @@ async fn initialize_agent_pool(
                             }),
                         );
                         let agent_name = normalized_agent_name(&init_result);
+                        let load_session_supported = supports_session_load(&init_result);
                         agent_slots.push(Some(OwnedAgent {
                             index: i,
                             acp,
@@ -3703,6 +3758,7 @@ async fn initialize_agent_pool(
                             agent_name,
                             goose_system_prompt_supported: None,
                             protocol_version,
+                            load_session_supported,
                         }));
                     }
                     Ok(Err(e)) => {
@@ -3753,7 +3809,7 @@ async fn spawn_and_init(
     has_generated_codex_config: bool,
     agent_index: usize,
     observer: Option<observer::ObserverHandle>,
-) -> Result<(AcpClient, u32, String)> {
+) -> Result<(AcpClient, u32, String, bool)> {
     let mut acp = AcpClient::spawn(command, args, extra_env, has_generated_codex_config)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
@@ -3771,7 +3827,8 @@ async fn spawn_and_init(
                 }),
             );
             let agent_name = normalized_agent_name(&init_result);
-            Ok((acp, protocol_version, agent_name))
+            let load_session_supported = supports_session_load(&init_result);
+            Ok((acp, protocol_version, agent_name, load_session_supported))
         }
         Err(e) => {
             // Explicitly shut down the spawned child to prevent zombie/leak.
@@ -4632,6 +4689,7 @@ mod build_mcp_servers_tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
+            session_store_path: std::path::PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,
@@ -4798,6 +4856,7 @@ mod error_outcome_emission_tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
+            session_store_path: std::path::PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,
@@ -4834,6 +4893,17 @@ mod error_outcome_emission_tests {
         );
     }
 
+    #[test]
+    fn detects_session_load_capability_from_initialize_result() {
+        assert!(supports_session_load(&serde_json::json!({
+            "agentCapabilities": { "loadSession": true }
+        })));
+        assert!(!supports_session_load(&serde_json::json!({
+            "agentCapabilities": { "loadSession": false }
+        })));
+        assert!(!supports_session_load(&serde_json::json!({})));
+    }
+
     /// Spawn a real but inert agent subprocess (`cat`) so the error paths have
     /// an `OwnedAgent` to move into respawn or return to the pool. The error
     /// branches never talk to the subprocess.
@@ -4852,6 +4922,7 @@ mod error_outcome_emission_tests {
             // Error branches under test never read this; 1 is the legacy
             // non-systemPrompt path, the simplest valid value.
             protocol_version: 1,
+            load_session_supported: false,
         }
     }
 
