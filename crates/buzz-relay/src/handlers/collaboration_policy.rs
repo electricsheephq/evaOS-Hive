@@ -13,7 +13,7 @@ use buzz_core::kind::{
     KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
 };
 use buzz_core::tenant::TenantContext;
-use buzz_db::{CollaborationPolicy, CommunityCollaborationAuthority};
+use buzz_db::{CollaborationPolicy, CommunityCollaborationAuthority, CommunityCollaborationGuard};
 
 use crate::state::AppState;
 
@@ -22,19 +22,19 @@ pub async fn enforce(
     tenant: &TenantContext,
     state: &Arc<AppState>,
     event: &Event,
-) -> Result<bool, String> {
+) -> Result<Option<CommunityCollaborationGuard>, String> {
     if !is_controlled_event(event) {
-        return Ok(false);
+        return Ok(None);
     }
 
-    let authority = state
+    let guard = state
         .db
-        .get_community_collaboration_authority(tenant.community())
+        .lock_community_collaboration_policy(tenant.community())
         .await
-        .map_err(|error| format!("collaboration authority lookup failed: {error}"))?
-        .ok_or_else(|| "collaboration authority unavailable".to_string())?;
+        .map_err(|error| format!("collaboration authority lookup failed: {error}"))?;
 
-    authorize(&authority, &event.pubkey.to_hex())
+    authorize(guard.authority(), &event.pubkey.to_hex())?;
+    Ok(Some(guard))
 }
 
 fn is_controlled_event(event: &Event) -> bool {
@@ -66,11 +66,11 @@ fn is_controlled_mutation(kind: u32, metadata_fields: &[&str]) -> bool {
 fn authorize(
     authority: &CommunityCollaborationAuthority,
     actor_pubkey: &str,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     match authority.policy {
-        CollaborationPolicy::Native => Ok(false),
+        CollaborationPolicy::Native => Ok(()),
         CollaborationPolicy::ControlPlane => match authority.owner_pubkey.as_deref() {
-            Some(owner) if owner.eq_ignore_ascii_case(actor_pubkey) => Ok(true),
+            Some(owner) if owner.eq_ignore_ascii_case(actor_pubkey) => Ok(()),
             Some(_) => Err(
                 "restricted: collaboration mutation requires the current community control identity"
                     .to_string(),
@@ -134,7 +134,7 @@ mod tests {
     fn native_policy_preserves_existing_authorization() {
         assert_eq!(
             authorize(&authority(CollaborationPolicy::Native, None), "actor"),
-            Ok(false)
+            Ok(())
         );
     }
 
@@ -144,7 +144,7 @@ mod tests {
         let stale = "bb".repeat(32);
         let configured = authority(CollaborationPolicy::ControlPlane, Some(&current));
 
-        assert_eq!(authorize(&configured, &current), Ok(true));
+        assert_eq!(authorize(&configured, &current), Ok(()));
         assert!(authorize(&configured, &stale).is_err());
         assert!(authorize(
             &authority(CollaborationPolicy::ControlPlane, None),

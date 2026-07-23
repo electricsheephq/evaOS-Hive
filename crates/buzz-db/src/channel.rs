@@ -341,6 +341,49 @@ pub async fn add_member(
     role: MemberRole,
     invited_by: Option<&[u8]>,
 ) -> Result<MemberRecord> {
+    add_member_with_authority(
+        pool,
+        community_id,
+        channel_id,
+        pubkey,
+        role,
+        invited_by,
+        false,
+    )
+    .await
+}
+
+/// Add a member after the caller has locked and verified the current
+/// control-plane identity for this community.
+pub async fn add_member_as_control_identity(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    pubkey: &[u8],
+    role: MemberRole,
+    invited_by: &[u8],
+) -> Result<MemberRecord> {
+    add_member_with_authority(
+        pool,
+        community_id,
+        channel_id,
+        pubkey,
+        role,
+        Some(invited_by),
+        true,
+    )
+    .await
+}
+
+async fn add_member_with_authority(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    pubkey: &[u8],
+    role: MemberRole,
+    invited_by: Option<&[u8]>,
+    control_plane_authorized: bool,
+) -> Result<MemberRecord> {
     if pubkey.len() != 32 {
         return Err(DbError::InvalidData(format!(
             "pubkey must be 32 bytes, got {}",
@@ -352,7 +395,9 @@ pub async fn add_member(
 
     let channel = get_channel_tx(&mut tx, community_id, channel_id).await?;
 
-    let effective_role = if channel.visibility == "private" {
+    let effective_role = if control_plane_authorized {
+        role
+    } else if channel.visibility == "private" {
         let inviter = invited_by.ok_or_else(|| {
             DbError::AccessDenied("private channel requires an invite".to_string())
         })?;
@@ -453,10 +498,33 @@ pub async fn remove_member(
     pubkey: &[u8],
     actor_pubkey: &[u8],
 ) -> Result<()> {
+    remove_member_with_authority(pool, community_id, channel_id, pubkey, actor_pubkey, false).await
+}
+
+/// Remove a member after the caller has locked and verified the current
+/// control-plane identity for this community.
+pub async fn remove_member_as_control_identity(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    pubkey: &[u8],
+    actor_pubkey: &[u8],
+) -> Result<()> {
+    remove_member_with_authority(pool, community_id, channel_id, pubkey, actor_pubkey, true).await
+}
+
+async fn remove_member_with_authority(
+    pool: &PgPool,
+    community_id: CommunityId,
+    channel_id: Uuid,
+    pubkey: &[u8],
+    actor_pubkey: &[u8],
+    control_plane_authorized: bool,
+) -> Result<()> {
     let mut tx = pool.begin().await?;
 
     let is_self_remove = pubkey == actor_pubkey;
-    if !is_self_remove {
+    if !is_self_remove && !control_plane_authorized {
         let actor_role_str = get_active_role_tx(&mut tx, community_id, channel_id, actor_pubkey)
             .await?
             .ok_or_else(|| DbError::AccessDenied("actor is not an active member".to_string()))?;
@@ -478,7 +546,7 @@ pub async fn remove_member(
     // Callers (REST handlers, NIP-29 handlers) also check this, but the DB
     // layer enforces it as the final safety net.
     let target_role = get_active_role_tx(&mut tx, community_id, channel_id, pubkey).await?;
-    if target_role.as_deref() == Some("owner") {
+    if !control_plane_authorized && target_role.as_deref() == Some("owner") {
         let row = sqlx::query(
             "SELECT COUNT(*) as cnt FROM channel_members \
              WHERE community_id = $1 AND channel_id = $2 AND role = 'owner' AND removed_at IS NULL",

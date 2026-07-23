@@ -1532,9 +1532,12 @@ async fn ingest_event_inner(
     // Server-owned policy is resolved from the host-bound community, never
     // from event tags. Run this after identity/scope checks and before any
     // command routing, storage, or side effect.
-    let control_plane_authorized = super::collaboration_policy::enforce(tenant, state, &event)
+    let collaboration_guard = super::collaboration_policy::enforce(tenant, state, &event)
         .await
         .map_err(IngestError::Rejected)?;
+    let control_plane_authorized = collaboration_guard.as_ref().is_some_and(|guard| {
+        guard.authority().policy == buzz_db::CollaborationPolicy::ControlPlane
+    });
 
     // Command kinds are routed AFTER signature verification, timestamp check,
     // pubkey/auth match, and scope validation — never before.
@@ -2447,9 +2450,14 @@ async fn ingest_event_inner(
     }
 
     if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
-        if let Err(e) =
-            crate::handlers::side_effects::handle_side_effects(tenant, kind_u32, &event, state)
-                .await
+        if let Err(e) = crate::handlers::side_effects::handle_side_effects(
+            tenant,
+            kind_u32,
+            &event,
+            state,
+            control_plane_authorized,
+        )
+        .await
         {
             warn!(event_id = %event_id_hex, kind = kind_u32, "Side effect failed: {e}");
         }

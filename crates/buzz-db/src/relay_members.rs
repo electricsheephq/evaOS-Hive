@@ -324,6 +324,10 @@ pub async fn bootstrap_owner(
 ) -> Result<()> {
     let pubkey = owner_pubkey.to_ascii_lowercase();
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(collaboration_authority_lock_key(community))
+        .execute(&mut *tx)
+        .await?;
 
     // 1. Upsert the configured owner for this community.
     sqlx::query(
@@ -359,6 +363,10 @@ pub async fn bootstrap_owner_with_collaboration_policy(
 ) -> Result<()> {
     let pubkey = owner_pubkey.to_ascii_lowercase();
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(collaboration_authority_lock_key(community))
+        .execute(&mut *tx)
+        .await?;
 
     sqlx::query(
         "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
@@ -437,6 +445,17 @@ pub fn owner_count_advisory_lock_key(pubkey_hex: &str) -> i64 {
     h as i64
 }
 
+/// Stable advisory-lock key for collaboration policy and owner authority.
+pub fn collaboration_authority_lock_key(community: CommunityId) -> i64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in community.as_uuid().as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    // Separate this namespace from pubkey ownership-count locks.
+    (hash ^ 0x434f_4c4c_4142_0000) as i64
+}
+
 /// Atomically transfers ownership of `community` to `new_owner_pubkey`.
 ///
 /// Runs in a single transaction:
@@ -469,6 +488,10 @@ pub async fn transfer_ownership(
     //    recipient cannot both pass the ownership count check.
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(owner_count_advisory_lock_key(&pubkey))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(collaboration_authority_lock_key(community))
         .execute(&mut *tx)
         .await?;
 
