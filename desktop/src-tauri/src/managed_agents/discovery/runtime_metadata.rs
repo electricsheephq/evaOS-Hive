@@ -59,14 +59,20 @@ pub(crate) struct KnownAcpRuntime {
     /// Human-readable hint shown in Doctor when the runtime is available but not
     /// authenticated. `None` when authentication is not established by a CLI probe.
     pub login_hint: Option<&'static str>,
-    /// CLI args for probing runtime dependency readiness. `args[0]` is the binary
-    /// name; the remainder are the subcommand. This must not be used to infer
-    /// provider authentication.
-    pub readiness_probe_args: Option<&'static [&'static str]>,
-    /// CLI args for probing authentication status. `args[0]` is the binary name;
-    /// the remainder are the subcommand. `None` when authentication is handled
-    /// by the ACP initialize/auth-method handshake or is otherwise not probeable.
-    pub auth_probe_args: Option<&'static [&'static str]>,
+    /// Args appended to the runtime's normal ACP command for probing dependency
+    /// readiness. This must not be used to infer provider authentication.
+    pub readiness_probe_suffix: Option<&'static [&'static str]>,
+    pub auth_probe: RuntimeAuthProbe,
+}
+
+/// How Buzz can truthfully discover authentication/setup for a runtime.
+#[derive(Clone, Copy)]
+pub(crate) enum RuntimeAuthProbe {
+    NotApplicable,
+    /// CLI args for probing authentication status. `args[0]` is the binary.
+    Cli(&'static [&'static str]),
+    /// Use the bounded ACP initialize/auth-method handshake at launch.
+    AcpHandshake,
 }
 
 impl KnownAcpRuntime {

@@ -43,6 +43,7 @@ fn availability_label(status: AcpAvailabilityStatus) -> String {
         AcpAvailabilityStatus::Available => "available",
         AcpAvailabilityStatus::AdapterMissing => "ACP adapter missing",
         AcpAvailabilityStatus::AdapterOutdated => "ACP adapter outdated",
+        AcpAvailabilityStatus::DependencyMissing => "ACP dependencies missing",
         AcpAvailabilityStatus::CliMissing => "CLI missing",
         AcpAvailabilityStatus::NotInstalled => "not installed",
     }

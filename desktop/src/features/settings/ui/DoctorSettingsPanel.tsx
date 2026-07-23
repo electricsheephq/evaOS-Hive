@@ -206,16 +206,18 @@ function RuntimeStatusChip({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
   const label =
     runtime.authStatus.status === "config_invalid"
       ? "Config error"
-      : runtime.availability === "adapter_missing"
-        ? "Adapter needed"
-        : runtime.availability === "adapter_outdated"
-          ? "Update needed"
-          : runtime.availability === "dependency_missing"
-            ? "Setup needed"
-            : runtime.availability === "cli_missing" ||
-                runtime.availability === "not_installed"
-              ? "CLI needed"
-              : null;
+      : runtime.authStatus.status === "checked_on_launch"
+        ? "Provider setup checked on launch"
+        : runtime.availability === "adapter_missing"
+          ? "Adapter needed"
+          : runtime.availability === "adapter_outdated"
+            ? "Update needed"
+            : runtime.availability === "dependency_missing"
+              ? "Setup needed"
+              : runtime.availability === "cli_missing" ||
+                  runtime.availability === "not_installed"
+                ? "CLI needed"
+                : null;
 
   if (!label) {
     return null;
@@ -334,7 +336,8 @@ function RuntimeRow({
 
   const canConnectAccount =
     runtime.availability === "available" &&
-    runtime.authStatus.status === "logged_out";
+    (runtime.authStatus.status === "logged_out" ||
+      runtime.authStatus.status === "checked_on_launch");
   const authMethodsQuery = useAcpAuthMethodsQuery(runtime.id, {
     enabled: canConnectAccount,
   });
