@@ -892,6 +892,21 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
+    // Durable relay-membership backstop: a pod can miss a Redis disconnect
+    // while offline or disconnected. Recheck only principals that currently
+    // authorize local sockets and converge within 15 seconds.
+    if state.config.require_relay_membership {
+        let membership_state = Arc::clone(&state);
+        let interval_value = std::env::var("BUZZ_RELAY_MEMBERSHIP_REVALIDATE_INTERVAL_SECS").ok();
+        let interval_secs = membership_revalidate_interval_secs(interval_value.as_deref());
+        let cancel = membership_state.community_revalidator_cancel.clone();
+        tokio::spawn(run_membership_revalidator(
+            membership_state,
+            std::time::Duration::from_secs(interval_secs),
+            cancel,
+        ));
+    }
+
     // Cross-pod connection-control consumer: receive disconnect commands from
     // Redis pub/sub (published by the pod that recorded a ban) and close any
     // matching local sockets. A member's live connections may land on any pod,
@@ -1075,6 +1090,30 @@ async fn run_community_revalidator(
         }
     })
     .await;
+}
+
+async fn run_membership_revalidator(
+    state: Arc<AppState>,
+    period: std::time::Duration,
+    cancel: CancellationToken,
+) {
+    run_periodic_until_cancelled(period, cancel, || async {
+        let closed = state.revalidate_live_memberships().await;
+        if closed > 0 {
+            tracing::info!(
+                closed,
+                "closed sockets for removed relay members during revalidation"
+            );
+        }
+    })
+    .await;
+}
+
+fn membership_revalidate_interval_secs(value: Option<&str>) -> u64 {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(10)
+        .clamp(1, 15)
 }
 
 async fn run_periodic_until_cancelled<Tick, TickFuture>(
@@ -1805,8 +1844,8 @@ mod tests {
 
     use super::{
         buzz_auto_migrate_enabled, dropped_in_memory_keys, idle_timeout_secs,
-        refresh_legacy_active_gauge_recency, run_periodic_until_cancelled, EmissionScope,
-        InMemoryMetricKey,
+        membership_revalidate_interval_secs, refresh_legacy_active_gauge_recency,
+        run_periodic_until_cancelled, EmissionScope, InMemoryMetricKey,
     };
     use metrics::GaugeFn;
     use metrics_util::{
@@ -1852,6 +1891,14 @@ mod tests {
         assert!(buzz_auto_migrate_enabled(Some(" 1 ")));
         assert!(buzz_auto_migrate_enabled(Some("yes")));
         assert!(buzz_auto_migrate_enabled(Some("on")));
+    }
+
+    #[test]
+    fn membership_revalidation_interval_never_exceeds_fifteen_seconds() {
+        assert_eq!(membership_revalidate_interval_secs(None), 10);
+        assert_eq!(membership_revalidate_interval_secs(Some("0")), 1);
+        assert_eq!(membership_revalidate_interval_secs(Some("15")), 15);
+        assert_eq!(membership_revalidate_interval_secs(Some("300")), 15);
     }
 
     #[test]

@@ -37,13 +37,20 @@ enum RemovalDisposition {
     AlreadyAbsent,
 }
 
-fn removal_disposition(result: RemoveResult) -> Result<RemovalDisposition, String> {
+fn removal_disposition(
+    result: RemoveResult,
+    target_is_virtual_agent: bool,
+) -> Result<RemovalDisposition, String> {
     match result {
         RemoveResult::Removed => Ok(RemovalDisposition::Removed),
         // A repeated command must be safe and must re-fan-out the disconnect
         // in case the first Redis publish was lost. Durable absence is still
-        // the authorization backstop.
-        RemoveResult::NotFound => Ok(RemovalDisposition::AlreadyAbsent),
+        // the authorization backstop. A NIP-OA virtual agent is deliberately
+        // absent from relay_members, so it is not a valid idempotent retry.
+        RemoveResult::NotFound if !target_is_virtual_agent => Ok(RemovalDisposition::AlreadyAbsent),
+        RemoveResult::NotFound => {
+            Err("member not found: target is authorized through an owner".to_string())
+        }
         RemoveResult::IsOwner => Err("cannot remove the relay owner".to_string()),
         RemoveResult::RoleMismatch => {
             Err("actor not authorized: admins can only remove members".to_string())
@@ -274,9 +281,19 @@ pub async fn handle_relay_admin_event(
                     .map_err(|e| format!("database error: {e}"))?
             };
 
-            let disposition = removal_disposition(remove_result)?;
             let target_pubkey = hex::decode(&target_hex)
                 .map_err(|e| format!("invalid target pubkey encoding: {e}"))?;
+            let target_is_virtual_agent = if remove_result == RemoveResult::NotFound {
+                state
+                    .db
+                    .get_agent_channel_policy(tenant.community(), &target_pubkey)
+                    .await
+                    .map_err(|e| format!("database error: {e}"))?
+                    .is_some_and(|(_, owner)| owner.is_some())
+            } else {
+                false
+            };
+            let disposition = removal_disposition(remove_result, target_is_virtual_agent)?;
 
             // The DB mutation/absence check above is the durable authorization
             // backstop. Close matching sockets on this pod and fan the same
@@ -462,23 +479,31 @@ mod tests {
     #[test]
     fn removal_disposition_accepts_idempotent_retry() {
         assert_eq!(
-            removal_disposition(RemoveResult::Removed),
+            removal_disposition(RemoveResult::Removed, false),
             Ok(RemovalDisposition::Removed)
         );
         assert_eq!(
-            removal_disposition(RemoveResult::NotFound),
+            removal_disposition(RemoveResult::NotFound, false),
             Ok(RemovalDisposition::AlreadyAbsent)
+        );
+    }
+
+    #[test]
+    fn removal_disposition_rejects_virtual_agent_as_retry() {
+        assert_eq!(
+            removal_disposition(RemoveResult::NotFound, true),
+            Err("member not found: target is authorized through an owner".to_string())
         );
     }
 
     #[test]
     fn removal_disposition_preserves_protected_role_errors() {
         assert_eq!(
-            removal_disposition(RemoveResult::IsOwner),
+            removal_disposition(RemoveResult::IsOwner, false),
             Err("cannot remove the relay owner".to_string())
         );
         assert_eq!(
-            removal_disposition(RemoveResult::RoleMismatch),
+            removal_disposition(RemoveResult::RoleMismatch, false),
             Err("actor not authorized: admins can only remove members".to_string())
         );
     }
