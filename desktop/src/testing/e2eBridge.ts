@@ -1024,6 +1024,7 @@ declare global {
     __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => ConnectionState;
     __BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
     __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
+    __BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_SET_MESH__?: (mesh: {
       admitted?: boolean;
       models?: Array<{ id: string; name: string | null }>;
@@ -3344,9 +3345,10 @@ function sendWsText(handler: WsHandler, payload: unknown[]) {
   });
 }
 
-function sendWsClose(handler: WsHandler) {
+function sendWsClose(handler: WsHandler, code?: number, reason?: string) {
   handler({
     type: "Close",
+    data: code === undefined ? undefined : { code, reason: reason ?? "" },
   });
 }
 
@@ -9102,6 +9104,14 @@ export function maybeInstallE2eTauriMocks() {
     const socketIds = [...mockSockets.keys()];
     for (const socketId of socketIds) disconnectMockSocket(socketId);
     return socketIds.length;
+  };
+  window.__BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__ = () => {
+    const sockets = [...mockSockets.values()];
+    mockSockets.clear();
+    for (const socket of sockets) {
+      sendWsClose(socket.handler, 1012, "relay restarting");
+    }
+    return sockets.length;
   };
   // Tests vary mesh admission and models to exercise provider discovery and
   // the managed-agent start preflight.
