@@ -836,6 +836,20 @@ async fn publish_relay_observer_event(
 /// Maximum age (seconds) for an observer control frame to be considered fresh.
 const OBSERVER_CONTROL_FRESHNESS_SECS: i64 = 300;
 
+fn clear_mapping_for_control(session_store: &SessionStore, channel_id: Uuid, action: &str) -> bool {
+    match session_store.remove(channel_id) {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::error!(
+                target: "session_store",
+                channel = %channel_id,
+                "{action} rejected because the durable mapping could not be cleared: {error}"
+            );
+            false
+        }
+    }
+}
+
 fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
     event: nostr::Event,
@@ -971,29 +985,25 @@ fn handle_switch_model_control(
         // Busy path: deliver over the oneshot. `false` means the oneshot was
         // already consumed this turn (a prior cancel/interrupt) — the turn is
         // already ending, so the switch cannot land on it.
-        if signal_in_flight_task(
-            pool,
-            channel_id,
-            ControlSignal::SwitchModel(model_id.to_string()),
-        ) {
-            "sent"
+        if clear_mapping_for_control(session_store, channel_id, "model switch") {
+            if signal_in_flight_task(
+                pool,
+                channel_id,
+                ControlSignal::SwitchModel(model_id.to_string()),
+            ) {
+                "sent"
+            } else {
+                "turn_ending"
+            }
         } else {
-            "turn_ending"
+            "persistence_error"
         }
     } else {
         // Idle path: validate against the cached catalog before invalidating.
-        match pool.switch_idle_agent_model(channel_id, model_id) {
-            IdleSwitchResult::Switched => {
-                if let Err(error) = session_store.remove(channel_id) {
-                    tracing::warn!(
-                        target: "session_store",
-                        channel = %channel_id,
-                        "failed to remove mapping after model switch: {error}"
-                    );
-                }
-                "switched"
-            }
+        match pool.switch_idle_agent_model(channel_id, model_id, session_store) {
+            IdleSwitchResult::Switched => "switched",
             IdleSwitchResult::UnsupportedModel => "unsupported_model",
+            IdleSwitchResult::PersistenceError => "persistence_error",
             IdleSwitchResult::NoIdleAgent => "no_active_turn",
         }
     };
@@ -2145,6 +2155,13 @@ async fn tokio_main() -> Result<()> {
                             if is_rotate {
                                 if let Some(owner) = owner_cache.get() {
                                     if buzz_event.event.pubkey.to_hex() == *owner {
+                                        if !clear_mapping_for_control(
+                                            &ctx.session_store,
+                                            buzz_event.channel_id,
+                                            "!rotate",
+                                        ) {
+                                            continue;
+                                        }
                                         let fired = signal_in_flight_task(
                                             &mut pool,
                                             buzz_event.channel_id,
@@ -2157,15 +2174,6 @@ async fn tokio_main() -> Result<()> {
                                             );
                                         } else {
                                             let invalidated = pool.invalidate_channel_sessions(buzz_event.channel_id);
-                                            if let Err(error) =
-                                                ctx.session_store.remove(buzz_event.channel_id)
-                                            {
-                                                tracing::warn!(
-                                                    target: "session_store",
-                                                    channel = %buzz_event.channel_id,
-                                                    "failed to remove mapping after explicit rotation: {error}"
-                                                );
-                                            }
                                             tracing::info!(
                                                 channel_id = %buzz_event.channel_id,
                                                 invalidated,
@@ -2401,6 +2409,10 @@ async fn tokio_main() -> Result<()> {
                 if let PromptSource::Channel(ch) = &result.source {
                     typing_channels.remove(ch);
                 }
+                // A checked-out task may have created and persisted a session
+                // after its channel was removed. Delete again at the return
+                // boundary so that late write cannot survive restart/re-add.
+                remove_returned_agent_mappings(&removed_channels, &ctx.session_store);
                 if handle_prompt_result(
                     &mut pool,
                     &mut queue,
@@ -3073,6 +3085,18 @@ fn spawn_failure_notice(
         tokio::spawn(async move {
             pool::post_failure_notice(&rest, channel_id, &thread_tags, &content).await;
         });
+    }
+}
+
+fn remove_returned_agent_mappings(removed_channels: &HashSet<Uuid>, session_store: &SessionStore) {
+    for channel_id in removed_channels {
+        if let Err(error) = session_store.remove(*channel_id) {
+            tracing::error!(
+                target: "session_store",
+                channel = %channel_id,
+                "failed to remove late ACP session mapping for removed channel: {error}"
+            );
+        }
     }
 }
 
@@ -5237,6 +5261,49 @@ mod error_outcome_emission_tests {
             "agentCapabilities": { "loadSession": false }
         })));
         assert!(!supports_session_load(&serde_json::json!({})));
+    }
+
+    fn test_session_store_at(path: std::path::PathBuf) -> SessionStore {
+        SessionStore::open(
+            path,
+            SessionScope::new("wss://relay.example", "aabb", "hermes", &["acp".into()]),
+        )
+    }
+
+    #[test]
+    fn returned_agent_cleanup_removes_late_membership_race_mapping() {
+        let path = std::env::temp_dir().join(format!(
+            "buzz-acp-returned-agent-test-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = test_session_store_at(path);
+        let removed_channel = Uuid::new_v4();
+        store
+            .record(removed_channel, "late-session".into())
+            .unwrap();
+        let removed = HashSet::from([removed_channel]);
+
+        remove_returned_agent_mappings(&removed, &store);
+
+        assert_eq!(store.get(removed_channel), None);
+        store.cleanup_test_files();
+    }
+
+    #[test]
+    fn control_mapping_clear_fails_closed_on_store_error() {
+        let path =
+            std::env::temp_dir().join(format!("buzz-acp-control-store-error-{}", Uuid::new_v4()));
+        std::fs::create_dir(&path).unwrap();
+        let store = test_session_store_at(path.clone());
+
+        assert!(!clear_mapping_for_control(
+            &store,
+            Uuid::new_v4(),
+            "!rotate"
+        ));
+
+        store.cleanup_test_files();
+        let _ = std::fs::remove_dir(path);
     }
 
     /// Spawn a real but inert agent subprocess (`cat`) so the error paths have

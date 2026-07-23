@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use atomic_write_file::AtomicWriteFile;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -63,6 +64,7 @@ impl Default for PersistedState {
 /// credential-bearing URLs and command arguments never reach disk.
 pub struct SessionStore {
     path: PathBuf,
+    lock_path: PathBuf,
     scope: SessionScope,
     state: Mutex<PersistedState>,
 }
@@ -78,6 +80,7 @@ impl SessionStore {
             PersistedState::default()
         });
         Self {
+            lock_path: lock_path(&path),
             path,
             scope,
             state: Mutex::new(state),
@@ -85,18 +88,44 @@ impl SessionStore {
     }
 
     pub fn get(&self, channel_id: Uuid) -> Option<String> {
-        self.state
-            .lock()
-            .expect("session store mutex poisoned")
+        let mut state = self.state.lock().expect("session store mutex poisoned");
+        let lock = match open_lock_file(&self.lock_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                tracing::warn!(
+                    target: "session_store",
+                    path = %self.lock_path.display(),
+                    "cannot lock ACP session mapping store; refusing persisted resume: {error}"
+                );
+                return None;
+            }
+        };
+        let latest = match read_state(&self.path) {
+            Ok(latest) => latest,
+            Err(error) => {
+                tracing::warn!(
+                    target: "session_store",
+                    path = %self.path.display(),
+                    "cannot read ACP session mapping store; refusing persisted resume: {error}"
+                );
+                let _ = FileExt::unlock(&lock);
+                return None;
+            }
+        };
+        *state = latest;
+        let result = state
             .mappings
             .iter()
             .find(|mapping| mapping.scope == self.scope && mapping.channel_id == channel_id)
-            .map(|mapping| mapping.session_id.clone())
+            .map(|mapping| mapping.session_id.clone());
+        let _ = FileExt::unlock(&lock);
+        result
     }
 
     pub fn record(&self, channel_id: Uuid, session_id: String) -> std::io::Result<()> {
         let mut state = self.state.lock().expect("session store mutex poisoned");
-        let mut next = state.clone();
+        let lock = open_lock_file(&self.lock_path)?;
+        let mut next = read_state_for_update(&self.path)?;
         if let Some(mapping) = next
             .mappings
             .iter_mut()
@@ -117,27 +146,33 @@ impl SessionStore {
         }
         sort_mappings(&mut next.mappings);
         write_state(&self.path, &next)?;
+        FileExt::unlock(&lock)?;
         *state = next;
         Ok(())
     }
 
     pub fn remove(&self, channel_id: Uuid) -> std::io::Result<bool> {
         let mut state = self.state.lock().expect("session store mutex poisoned");
-        let mut next = state.clone();
+        let lock = open_lock_file(&self.lock_path)?;
+        let mut next = read_state_for_update(&self.path)?;
         let old_len = next.mappings.len();
         next.mappings
             .retain(|mapping| !(mapping.scope == self.scope && mapping.channel_id == channel_id));
         if next.mappings.len() == old_len {
+            FileExt::unlock(&lock)?;
+            *state = next;
             return Ok(false);
         }
         write_state(&self.path, &next)?;
+        FileExt::unlock(&lock)?;
         *state = next;
         Ok(true)
     }
 
     #[cfg(test)]
-    pub fn test_path(&self) -> &Path {
-        &self.path
+    pub fn cleanup_test_files(&self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(&self.lock_path);
     }
 }
 
@@ -162,30 +197,82 @@ fn sort_mappings(mappings: &mut [SessionMapping]) {
     });
 }
 
-fn read_state(path: &Path) -> Result<PersistedState, String> {
+fn lock_path(path: &Path) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(".lock");
+    PathBuf::from(value)
+}
+
+fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    FileExt::lock_exclusive(&file)?;
+    Ok(file)
+}
+
+fn read_state_for_update(path: &Path) -> std::io::Result<PersistedState> {
+    match read_state(path) {
+        Ok(state) => Ok(state),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            tracing::warn!(
+                target: "session_store",
+                path = %path.display(),
+                "repairing invalid ACP session mapping store during update: {error}"
+            );
+            Ok(PersistedState::default())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn read_state(path: &Path) -> std::io::Result<PersistedState> {
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PersistedState::default());
         }
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(error),
     };
     if metadata.len() > MAX_STORE_BYTES {
-        return Err(format!(
-            "file is {} bytes; limit is {MAX_STORE_BYTES}",
-            metadata.len()
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "file is {} bytes; limit is {MAX_STORE_BYTES}",
+                metadata.len()
+            ),
         ));
     }
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-    let state: PersistedState =
-        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    let bytes = std::fs::read(path)?;
+    let state: PersistedState = serde_json::from_slice(&bytes)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     if state.version != STORE_VERSION {
-        return Err(format!("unsupported version {}", state.version));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("unsupported version {}", state.version),
+        ));
     }
     if state.mappings.len() > MAX_MAPPINGS {
-        return Err(format!(
-            "store has {} mappings; limit is {MAX_MAPPINGS}",
-            state.mappings.len()
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "store has {} mappings; limit is {MAX_MAPPINGS}",
+                state.mappings.len()
+            ),
         ));
     }
     Ok(state)
@@ -223,6 +310,11 @@ mod tests {
         SessionScope::new(relay, key, command, &["acp".to_owned()])
     }
 
+    fn cleanup(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(lock_path(path));
+    }
+
     #[test]
     fn round_trip_survives_reopen_and_keeps_channels_isolated() {
         let path = temp_path("round-trip");
@@ -240,7 +332,7 @@ mod tests {
         assert!(reopened.remove(first).unwrap());
         assert_eq!(reopened.get(first), None);
         assert_eq!(reopened.get(second).as_deref(), Some("session-two"));
-        let _ = std::fs::remove_file(path);
+        cleanup(&path);
     }
 
     #[test]
@@ -259,7 +351,7 @@ mod tests {
         ] {
             assert_eq!(SessionStore::open(path.clone(), changed).get(channel), None);
         }
-        let _ = std::fs::remove_file(path);
+        cleanup(&path);
     }
 
     #[test]
@@ -278,7 +370,7 @@ mod tests {
                 .as_deref(),
             Some("replacement")
         );
-        let _ = std::fs::remove_file(path);
+        cleanup(&path);
     }
 
     #[test]
@@ -310,7 +402,7 @@ mod tests {
                 "mapping {index} was lost"
             );
         }
-        let _ = std::fs::remove_file(path);
+        cleanup(&path);
     }
 
     #[test]
@@ -332,6 +424,37 @@ mod tests {
         assert!(!serialized.contains("runtime-marker"));
         assert!(!serialized.contains("argument-marker"));
         assert!(serialized.contains("session-id"));
-        let _ = std::fs::remove_file(path);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn independently_opened_stores_merge_concurrent_updates() {
+        let path = temp_path("cross-instance");
+        let scope = scope("wss://relay.example", "aabb", "hermes");
+        let first = Arc::new(SessionStore::open(path.clone(), scope.clone()));
+        let second = Arc::new(SessionStore::open(path.clone(), scope));
+        let first_channel = Uuid::new_v4();
+        let second_channel = Uuid::new_v4();
+
+        let first_writer = {
+            let store = Arc::clone(&first);
+            std::thread::spawn(move || {
+                store.record(first_channel, "first-session".into()).unwrap();
+            })
+        };
+        let second_writer = {
+            let store = Arc::clone(&second);
+            std::thread::spawn(move || {
+                store
+                    .record(second_channel, "second-session".into())
+                    .unwrap();
+            })
+        };
+        first_writer.join().unwrap();
+        second_writer.join().unwrap();
+
+        assert_eq!(first.get(first_channel).as_deref(), Some("first-session"));
+        assert_eq!(first.get(second_channel).as_deref(), Some("second-session"));
+        cleanup(&path);
     }
 }
