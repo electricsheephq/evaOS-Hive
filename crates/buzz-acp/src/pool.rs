@@ -39,6 +39,7 @@ use crate::queue::{
     PromptProfile, PromptProfileLookup, ThreadTags,
 };
 use crate::relay::{ChannelInfo, RestClient};
+use crate::session_store::SessionStore;
 
 /// Window within which agent activity before a hard-cap death qualifies
 /// the turn as "recently active" (eligible for requeue instead of dead-letter).
@@ -168,6 +169,8 @@ pub struct OwnedAgent {
     pub goose_system_prompt_supported: Option<bool>,
     /// Protocol version reported by the agent in its initialize response.
     pub protocol_version: u32,
+    /// Whether initialize advertised `agentCapabilities.loadSession`.
+    pub load_session_supported: bool,
 }
 
 fn has_system_prompt_support(
@@ -243,6 +246,7 @@ fn apply_completed_before_control_signal(
     state: &mut SessionState,
     source: &PromptSource,
     control_signal: &ControlSignal,
+    session_store: &SessionStore,
 ) {
     // Rotate and SwitchModel both invalidate so the next turn creates a fresh
     // session. For SwitchModel the caller has already set `desired_model`, so
@@ -251,7 +255,28 @@ fn apply_completed_before_control_signal(
         control_signal,
         ControlSignal::Rotate | ControlSignal::SwitchModel(_)
     ) {
-        state.invalidate(source);
+        invalidate_session(state, source, session_store);
+    }
+}
+
+fn invalidate_session(
+    state: &mut SessionState,
+    source: &PromptSource,
+    session_store: &SessionStore,
+) {
+    state.invalidate(source);
+    remove_persisted_session(source, session_store);
+}
+
+fn remove_persisted_session(source: &PromptSource, session_store: &SessionStore) {
+    if let PromptSource::Channel(channel_id) = source {
+        if let Err(error) = session_store.remove(*channel_id) {
+            tracing::warn!(
+                target: "session_store",
+                channel = %channel_id,
+                "failed to remove invalidated ACP session mapping: {error}"
+            );
+        }
     }
 }
 
@@ -477,6 +502,8 @@ pub struct PromptContext {
     /// the desktop keys per (agent, relay) pair, e.g. `session_config_captured`,
     /// mirroring the `managed_agent_runtime_lifecycle` frames.
     pub relay_url: String,
+    /// Durable, scope-bound channel-to-ACP-session mappings.
+    pub session_store: Arc<SessionStore>,
 }
 
 impl AgentPool {
@@ -876,6 +903,79 @@ async fn create_session_and_apply_model(
     }
 
     Ok(resp.session_id)
+}
+
+/// Load a durable channel session when the agent supports ACP `session/load`.
+///
+/// An ACP application error means the recorded session is no longer available,
+/// so only this channel's mapping is removed. Transport/protocol failures are
+/// returned because creating a replacement would guess at the agent's state.
+async fn load_persisted_channel_session(
+    agent: &mut OwnedAgent,
+    ctx: &PromptContext,
+    channel_id: Uuid,
+) -> Result<Option<String>, AcpError> {
+    let Some(session_id) = ctx.session_store.get(channel_id) else {
+        return Ok(None);
+    };
+
+    if !agent.load_session_supported {
+        if let Err(error) = ctx.session_store.remove(channel_id) {
+            tracing::warn!(
+                target: "session_store",
+                channel = %channel_id,
+                "failed to remove mapping for an agent without session/load: {error}"
+            );
+        }
+        return Ok(None);
+    }
+
+    match agent
+        .acp
+        .session_load(&session_id, &ctx.cwd, ctx.mcp_servers.clone())
+        .await
+    {
+        Ok(result) if agent.agent_name == "hermes-agent" && result.is_null() => {
+            tracing::info!(
+                target: "pool::session",
+                channel = %channel_id,
+                "Hermes no longer has the recorded ACP session; creating a replacement"
+            );
+            if let Err(error) = ctx.session_store.remove(channel_id) {
+                tracing::warn!(
+                    target: "session_store",
+                    channel = %channel_id,
+                    "failed to remove missing Hermes ACP session mapping: {error}"
+                );
+            }
+            Ok(None)
+        }
+        Ok(_) => {
+            tracing::info!(
+                target: "pool::session",
+                channel = %channel_id,
+                "loaded persisted ACP session"
+            );
+            Ok(Some(session_id))
+        }
+        Err(AcpError::AgentError { code, message }) => {
+            tracing::info!(
+                target: "pool::session",
+                channel = %channel_id,
+                code,
+                "recorded ACP session is unavailable ({message}); creating a replacement"
+            );
+            if let Err(error) = ctx.session_store.remove(channel_id) {
+                tracing::warn!(
+                    target: "session_store",
+                    channel = %channel_id,
+                    "failed to remove unavailable ACP session mapping: {error}"
+                );
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Send the appropriate ACP model-switch request with a timeout.
@@ -1419,26 +1519,66 @@ pub async fn run_prompt_task(
             if let Some(sid) = agent.state.sessions.get(cid) {
                 (sid.clone(), false)
             } else {
-                // Create new session with model application.
-                match create_session_and_apply_model(
-                    &mut agent,
-                    &ctx,
-                    agent_core.as_deref(),
-                    agent_canvas.as_deref(),
-                )
-                .await
-                {
-                    Ok(sid) => {
-                        tracing::info!(
-                            target: "pool::session",
-                            "created session {sid} for channel {cid}"
-                        );
+                match load_persisted_channel_session(&mut agent, &ctx, *cid).await {
+                    Ok(Some(sid)) => {
                         agent.state.sessions.insert(*cid, sid.clone());
-                        // Commit canvas only after session creation succeeds (I3).
-                        if let Some((pending_cid, section)) = pending_canvas.take() {
-                            agent.state.canvas_sections.insert(pending_cid, section);
+                        (sid, false)
+                    }
+                    Ok(None) => {
+                        // Create new session with model application.
+                        match create_session_and_apply_model(
+                            &mut agent,
+                            &ctx,
+                            agent_core.as_deref(),
+                            agent_canvas.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(sid) => {
+                                tracing::info!(
+                                    target: "pool::session",
+                                    "created session {sid} for channel {cid}"
+                                );
+                                agent.state.sessions.insert(*cid, sid.clone());
+                                if let Err(error) = ctx.session_store.record(*cid, sid.clone()) {
+                                    tracing::warn!(
+                                        target: "session_store",
+                                        channel = %cid,
+                                        "failed to persist ACP session mapping: {error}"
+                                    );
+                                }
+                                // Commit canvas only after session creation succeeds (I3).
+                                if let Some((pending_cid, section)) = pending_canvas.take() {
+                                    agent.state.canvas_sections.insert(pending_cid, section);
+                                }
+                                (sid, true)
+                            }
+                            Err(AcpError::AgentExited) => {
+                                agent.state.invalidate_all();
+                                send_prompt_result(
+                                    &result_tx,
+                                    &turn_id,
+                                    agent,
+                                    source,
+                                    PromptOutcome::AgentExited,
+                                    requeue_batch_if_queue(&ctx, batch),
+                                );
+                                return;
+                            }
+                            Err(e) => {
+                                // Session creation failed; pending canvas was never committed,
+                                // so the next retry will re-fetch a fresh revision.
+                                send_prompt_result(
+                                    &result_tx,
+                                    &turn_id,
+                                    agent,
+                                    source,
+                                    PromptOutcome::Error(e),
+                                    requeue_batch_if_queue(&ctx, batch),
+                                );
+                                return;
+                            }
                         }
-                        (sid, true)
                     }
                     Err(AcpError::AgentExited) => {
                         agent.state.invalidate_all();
@@ -1452,15 +1592,13 @@ pub async fn run_prompt_task(
                         );
                         return;
                     }
-                    Err(e) => {
-                        // Session creation failed; pending canvas was never committed,
-                        // so the next retry will re-fetch a fresh revision.
+                    Err(error) => {
                         send_prompt_result(
                             &result_tx,
                             &turn_id,
                             agent,
                             source,
-                            PromptOutcome::Error(e),
+                            PromptOutcome::Error(error),
                             requeue_batch_if_queue(&ctx, batch),
                         );
                         return;
@@ -1598,7 +1736,7 @@ pub async fn run_prompt_task(
                         .await
                     {
                         Ok(_) => {
-                            agent.state.invalidate(&source);
+                            invalidate_session(&mut agent.state, &source, &ctx.session_store);
                         }
                         Err(AcpError::AgentExited) => {
                             agent.state.invalidate_all();
@@ -1617,7 +1755,7 @@ pub async fn run_prompt_task(
                                 target: "pool::session",
                                 "cancel_with_cleanup failed during initial_message timeout: {e}"
                             );
-                            agent.state.invalidate(&source);
+                            invalidate_session(&mut agent.state, &source, &ctx.session_store);
                         }
                     }
                     send_prompt_result(
@@ -1653,7 +1791,7 @@ pub async fn run_prompt_task(
                         target: "pool::session",
                         "initial_message failed for channel {cid}: {e} — invalidating session"
                     );
-                    agent.state.invalidate(&source);
+                    invalidate_session(&mut agent.state, &source, &ctx.session_store);
                     send_prompt_result(
                         &result_tx,
                         &turn_id,
@@ -1811,6 +1949,15 @@ pub async fn run_prompt_task(
                         agent.desired_model = Some(model_id.clone());
                         agent.model_overridden = true;
                     }
+                    if matches!(
+                        control_signal,
+                        ControlSignal::Rotate | ControlSignal::SwitchModel(_)
+                    ) {
+                        // Persist owner intent before cancellation. Even if the
+                        // process exits during cleanup, the next agent must not
+                        // resume the session that was explicitly rotated.
+                        remove_persisted_session(&source, &ctx.session_store);
+                    }
                     // Control signal received. Guard against Race 1: the turn may
                     // have completed naturally just as cancel fired.
                     if agent.acp.has_in_flight_prompt() {
@@ -1822,7 +1969,7 @@ pub async fn run_prompt_task(
                         {
                             Ok(stop_reason) => {
                                 log_stop_reason(&source, &stop_reason);
-                                agent.state.invalidate(&source);
+                                invalidate_session(&mut agent.state, &source, &ctx.session_store);
                                 let retry_batch =
                                     requeue_cancelled_batch(&ctx, control_signal, batch);
 
@@ -1859,7 +2006,11 @@ pub async fn run_prompt_task(
                                 if failure.invalidate_all {
                                     agent.state.invalidate_all();
                                 } else {
-                                    agent.state.invalidate(&source);
+                                    invalidate_session(
+                                        &mut agent.state,
+                                        &source,
+                                        &ctx.session_store,
+                                    );
                                 }
 
                                 let usage = agent.acp.take_turn_usage();
@@ -1916,6 +2067,7 @@ pub async fn run_prompt_task(
                             &mut agent.state,
                             &source,
                             &control_signal,
+                            &ctx.session_store,
                         );
                         let usage = agent.acp.take_turn_usage();
                         publish_agent_turn_metric(
@@ -1975,7 +2127,7 @@ pub async fn run_prompt_task(
                     target: "pool::session",
                     "rotating session for {source:?} after {stop_reason:?}",
                 );
-                agent.state.invalidate(&source);
+                invalidate_session(&mut agent.state, &source, &ctx.session_store);
             }
 
             let core_stop = acp_stop_to_core(&stop_reason);
@@ -2086,7 +2238,7 @@ pub async fn run_prompt_task(
                         target: "pool::prompt",
                         "cancel_with_cleanup error: {e} — invalidating session"
                     );
-                    agent.state.invalidate(&source);
+                    invalidate_session(&mut agent.state, &source, &ctx.session_store);
                     let usage = agent.acp.take_turn_usage();
                     publish_agent_turn_metric(
                         &ctx,
@@ -2141,7 +2293,7 @@ pub async fn run_prompt_task(
             // session state (e.g. bad LLM response). The session is healthy —
             // don't invalidate it. Other errors may have corrupted state.
             if !matches!(e, AcpError::AgentError { .. }) {
-                agent.state.invalidate(&source);
+                invalidate_session(&mut agent.state, &source, &ctx.session_store);
             }
             let usage = agent.acp.take_turn_usage();
             publish_agent_turn_metric(
@@ -4222,14 +4374,30 @@ mod tests {
         (s, ch_a, ch_b)
     }
 
+    fn test_session_store() -> SessionStore {
+        SessionStore::open(
+            std::env::temp_dir().join(format!("buzz-acp-pool-test-{}.json", Uuid::new_v4())),
+            crate::session_store::SessionScope::new(
+                "wss://relay.example",
+                "aabb",
+                "test-agent",
+                &[],
+            ),
+        )
+    }
+
     #[test]
     fn test_rotate_after_natural_completion_invalidates_channel_state() {
         let (mut s, ch_a, ch_b) = make_state();
+        let store = test_session_store();
+        store.record(ch_a, "sess-a".into()).unwrap();
+        store.record(ch_b, "sess-b".into()).unwrap();
 
         apply_completed_before_control_signal(
             &mut s,
             &PromptSource::Channel(ch_a),
             &ControlSignal::Rotate,
+            &store,
         );
 
         assert!(!s.sessions.contains_key(&ch_a));
@@ -4241,6 +4409,9 @@ mod tests {
         assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
         assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
         assert_eq!(s.heartbeat_turn_count, 7);
+        assert_eq!(store.get(ch_a), None);
+        assert_eq!(store.get(ch_b).as_deref(), Some("sess-b"));
+        let _ = std::fs::remove_file(store.test_path());
     }
 
     #[test]
@@ -4251,6 +4422,7 @@ mod tests {
             &mut s,
             &PromptSource::Channel(ch_a),
             &ControlSignal::Cancel,
+            &test_session_store(),
         );
 
         assert_eq!(s.sessions.get(&ch_a).unwrap(), "sess-a");
@@ -4385,6 +4557,7 @@ mod tests {
             &mut s,
             &PromptSource::Channel(ch_a),
             &ControlSignal::SwitchModel("gpt-5".into()),
+            &test_session_store(),
         );
 
         assert!(!s.has_channel_state(&ch_a));
@@ -4961,6 +5134,7 @@ mod tests {
             agent_name: "unknown".into(),
             goose_system_prompt_supported: None,
             protocol_version: 2,
+            load_session_supported: false,
         };
 
         // Simulate dispatch: install a steer receiver (normally done by
@@ -5019,6 +5193,7 @@ mod tests {
             agent_name: "unknown".into(),
             goose_system_prompt_supported: None,
             protocol_version: 2,
+            load_session_supported: false,
         };
 
         // Simulate a completed turn: `steer_rx` was consumed by the read loop
@@ -5262,7 +5437,92 @@ mod tests {
             memory_enabled: false,
             harness_name: "goose".to_string(),
             relay_url: "ws://127.0.0.1:3000".to_string(),
+            session_store: Arc::new(SessionStore::open(
+                std::env::temp_dir().join(format!(
+                    "buzz-acp-prompt-context-test-{}.json",
+                    Uuid::new_v4()
+                )),
+                crate::session_store::SessionScope::new(
+                    "ws://127.0.0.1:3000",
+                    "aabb",
+                    "goose",
+                    &[],
+                ),
+            )),
         }
+    }
+
+    async fn load_test_agent(agent_name: &str, response: &str) -> OwnedAgent {
+        let script = format!("read -t 2 _REQ; echo '{response}'; sleep 1");
+        OwnedAgent {
+            index: 0,
+            acp: AcpClient::spawn("bash", &["-c".into(), script], &[], false)
+                .await
+                .expect("spawn ACP load test agent"),
+            state: SessionState::default(),
+            model_capabilities: None,
+            desired_model: None,
+            model_overridden: false,
+            agent_name: agent_name.into(),
+            goose_system_prompt_supported: None,
+            protocol_version: 2,
+            load_session_supported: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_hermes_session_removes_only_affected_mapping() {
+        let ctx = make_prompt_context_no_owner();
+        let other_channel = Uuid::new_v4();
+        let missing_channel = Uuid::new_v4();
+        ctx.session_store
+            .record(missing_channel, "missing-session".into())
+            .unwrap();
+        ctx.session_store
+            .record(other_channel, "other-session".into())
+            .unwrap();
+        let mut agent =
+            load_test_agent("hermes-agent", r#"{"jsonrpc":"2.0","id":0,"result":null}"#).await;
+
+        assert_eq!(
+            load_persisted_channel_session(&mut agent, &ctx, missing_channel)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(ctx.session_store.get(missing_channel), None);
+        assert_eq!(
+            ctx.session_store.get(other_channel).as_deref(),
+            Some("other-session")
+        );
+        let _ = std::fs::remove_file(ctx.session_store.test_path());
+    }
+
+    #[tokio::test]
+    async fn generic_agent_null_load_response_is_valid_success() {
+        let ctx = make_prompt_context_no_owner();
+        let channel = Uuid::new_v4();
+        ctx.session_store
+            .record(channel, "generic-session".into())
+            .unwrap();
+        let mut agent = load_test_agent(
+            "spec-compliant-agent",
+            r#"{"jsonrpc":"2.0","id":0,"result":null}"#,
+        )
+        .await;
+
+        assert_eq!(
+            load_persisted_channel_session(&mut agent, &ctx, channel)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("generic-session")
+        );
+        assert_eq!(
+            ctx.session_store.get(channel).as_deref(),
+            Some("generic-session")
+        );
+        let _ = std::fs::remove_file(ctx.session_store.test_path());
     }
 
     // ── render_canvas_section ────────────────────────────────────────────────
