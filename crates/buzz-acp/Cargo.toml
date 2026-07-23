@@ -42,6 +42,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 atomic-write-file = "0.3"
+fs2 = "0.4"
 
 # IDs
 uuid = { workspace = true }
