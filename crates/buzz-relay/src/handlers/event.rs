@@ -608,13 +608,14 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     )
     .increment(1);
 
-    let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids) = {
+    let (conn_id, pubkey_bytes, auth_pubkey, membership_pubkey, scopes, channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => (
                 conn.conn_id,
                 ctx.pubkey.to_bytes().to_vec(),
                 ctx.pubkey,
+                ctx.agent_owner_pubkey.unwrap_or(ctx.pubkey),
                 ctx.scopes.clone(),
                 ctx.channel_ids.clone(),
             ),
@@ -629,6 +630,40 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             }
         }
     };
+
+    // Redis disconnect delivery is best-effort. On closed relays, every new
+    // EVENT therefore rechecks the durable member principal before processing
+    // either the ephemeral or persistent path. NIP-OA agents are authorized by
+    // their verified owner, not by an absent direct relay_members row.
+    if state.config.require_relay_membership {
+        match state
+            .db
+            .is_relay_member(conn.tenant.community(), &membership_pubkey.to_hex())
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                reject("membership");
+                state.conn_manager.disconnect_membership_principal(
+                    conn.tenant.community(),
+                    membership_pubkey.as_bytes(),
+                    &event_id_hex,
+                    "blocked: relay membership removed",
+                );
+                return;
+            }
+            Err(error) => {
+                warn!(%error, "relay membership recheck failed");
+                reject("membership");
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "restricted: relay membership could not be verified",
+                ));
+                return;
+            }
+        }
+    }
 
     // Must run before both ephemeral and persistent branches. Persistent
     // events get a second check inside ingest_event() (step 3), but
