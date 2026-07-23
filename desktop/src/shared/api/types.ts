@@ -519,6 +519,7 @@ export type AcpAvailabilityStatus =
   | "available"
   | "adapter_missing"
   | "adapter_outdated"
+  | "dependency_missing"
   | "cli_missing"
   | "not_installed";
 

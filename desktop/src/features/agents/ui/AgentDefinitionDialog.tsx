@@ -627,9 +627,13 @@ export function AgentDefinitionDialog({
           ? `${selectedRuntime.label} CLI is installed but the ACP adapter is missing.`
           : selectedRuntime.availability === "adapter_outdated"
             ? `${selectedRuntime.label} ACP adapter is outdated — reinstall to continue.`
-            : selectedRuntime.requiresExternalCli
-              ? `${selectedRuntime.label} CLI is missing. ${selectedRuntime.installHint}`
-              : `${selectedRuntime.label} is not installed.`}{" "}
+            : selectedRuntime.availability === "dependency_missing"
+              ? `${selectedRuntime.label} is installed but its ACP dependencies need setup.`
+              : selectedRuntime.availability === "cli_missing"
+                ? `${selectedRuntime.label} ACP adapter is installed but the CLI is missing.`
+                : selectedRuntime.requiresExternalCli
+                  ? `${selectedRuntime.label} CLI is missing. ${selectedRuntime.installHint}`
+                  : `${selectedRuntime.label} is not installed.`}{" "}
         Visit Settings &gt; Agents to set it up.
       </p>
     ) : null;

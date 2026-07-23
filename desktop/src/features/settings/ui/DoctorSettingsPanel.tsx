@@ -210,10 +210,12 @@ function RuntimeStatusChip({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
         ? "Adapter needed"
         : runtime.availability === "adapter_outdated"
           ? "Update needed"
-          : runtime.availability === "cli_missing" ||
-              runtime.availability === "not_installed"
-            ? "CLI needed"
-            : null;
+          : runtime.availability === "dependency_missing"
+            ? "Setup needed"
+            : runtime.availability === "cli_missing" ||
+                runtime.availability === "not_installed"
+              ? "CLI needed"
+              : null;
 
   if (!label) {
     return null;
