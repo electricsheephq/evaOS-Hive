@@ -985,18 +985,16 @@ fn handle_switch_model_control(
         // Busy path: deliver over the oneshot. `false` means the oneshot was
         // already consumed this turn (a prior cancel/interrupt) — the turn is
         // already ending, so the switch cannot land on it.
-        if clear_mapping_for_control(session_store, channel_id, "model switch") {
-            if signal_in_flight_task(
-                pool,
-                channel_id,
-                ControlSignal::SwitchModel(model_id.to_string()),
-            ) {
-                "sent"
-            } else {
-                "turn_ending"
-            }
-        } else {
-            "persistence_error"
+        match deliver_durable_control(
+            pool,
+            session_store,
+            channel_id,
+            ControlSignal::SwitchModel(model_id.to_string()),
+            "model switch",
+        ) {
+            DurableControlDelivery::Sent => "sent",
+            DurableControlDelivery::NotDelivered => "turn_ending",
+            DurableControlDelivery::PersistenceError => "persistence_error",
         }
     } else {
         // Idle path: validate against the cached catalog before invalidating.
@@ -2155,24 +2153,40 @@ async fn tokio_main() -> Result<()> {
                             if is_rotate {
                                 if let Some(owner) = owner_cache.get() {
                                     if buzz_event.event.pubkey.to_hex() == *owner {
-                                        if !clear_mapping_for_control(
-                                            &ctx.session_store,
-                                            buzz_event.channel_id,
-                                            "!rotate",
-                                        ) {
-                                            continue;
-                                        }
-                                        let fired = signal_in_flight_task(
-                                            &mut pool,
-                                            buzz_event.channel_id,
-                                            ControlSignal::Rotate,
-                                        );
-                                        if fired {
-                                            tracing::info!(
-                                                channel_id = %buzz_event.channel_id,
-                                                "!rotate received — cancelling in-flight turn and rotating session"
-                                            );
+                                        let turn_in_flight = pool
+                                            .task_map()
+                                            .values()
+                                            .any(|m| m.channel_id == Some(buzz_event.channel_id));
+                                        if turn_in_flight {
+                                            match deliver_durable_control(
+                                                &mut pool,
+                                                &ctx.session_store,
+                                                buzz_event.channel_id,
+                                                ControlSignal::Rotate,
+                                                "!rotate",
+                                            ) {
+                                                DurableControlDelivery::Sent => {
+                                                    tracing::info!(
+                                                        channel_id = %buzz_event.channel_id,
+                                                        "!rotate received — cancelling in-flight turn and rotating session"
+                                                    );
+                                                }
+                                                DurableControlDelivery::NotDelivered => {
+                                                    tracing::info!(
+                                                        channel_id = %buzz_event.channel_id,
+                                                        "!rotate received while the in-flight turn was already ending"
+                                                    );
+                                                }
+                                                DurableControlDelivery::PersistenceError => {}
+                                            }
                                         } else {
+                                            if !clear_mapping_for_control(
+                                                &ctx.session_store,
+                                                buzz_event.channel_id,
+                                                "!rotate",
+                                            ) {
+                                                continue;
+                                            }
                                             let invalidated = pool.invalidate_channel_sessions(buzz_event.channel_id);
                                             tracing::info!(
                                                 channel_id = %buzz_event.channel_id,
@@ -2826,12 +2840,65 @@ fn signal_in_flight_task(
 
     if let Some(meta) = entry {
         if let Some(tx) = meta.control_tx.take() {
-            tracing::info!(channel = %channel_id, ?mode, "control signal sent to in-flight task");
-            let _ = tx.send(mode);
-            return true;
+            return match tx.send(mode) {
+                Ok(()) => {
+                    tracing::info!(
+                        channel = %channel_id,
+                        "control signal sent to in-flight task"
+                    );
+                    true
+                }
+                Err(mode) => {
+                    tracing::debug!(
+                        channel = %channel_id,
+                        ?mode,
+                        "in-flight task control receiver was already closed"
+                    );
+                    false
+                }
+            };
         }
     }
     false
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DurableControlDelivery {
+    Sent,
+    NotDelivered,
+    PersistenceError,
+}
+
+/// Clear the durable session mapping before delivering a reset-like control.
+///
+/// If the task-map entry is stale and the oneshot receiver has already closed,
+/// restore the prior mapping so a failed delivery cannot silently lose restart
+/// continuity.
+fn deliver_durable_control(
+    pool: &mut AgentPool,
+    session_store: &SessionStore,
+    channel_id: Uuid,
+    mode: ControlSignal,
+    action: &str,
+) -> DurableControlDelivery {
+    let previous_session_id = session_store.get(channel_id);
+    if !clear_mapping_for_control(session_store, channel_id, action) {
+        return DurableControlDelivery::PersistenceError;
+    }
+    if signal_in_flight_task(pool, channel_id, mode) {
+        return DurableControlDelivery::Sent;
+    }
+    if let Some(session_id) = previous_session_id {
+        if let Err(error) = session_store.record(channel_id, session_id) {
+            tracing::error!(
+                target: "session_store",
+                channel = %channel_id,
+                "{action} was not delivered and the prior durable mapping could not be restored: {error}"
+            );
+            return DurableControlDelivery::PersistenceError;
+        }
+    }
+    DurableControlDelivery::NotDelivered
 }
 
 /// Attempt the non-cancelling (ACP) steer for a freshly-queued event.
@@ -4421,6 +4488,50 @@ mod owner_control_command_tests {
             channel_id,
             ControlSignal::Rotate
         ));
+    }
+
+    #[tokio::test]
+    async fn failed_rotate_or_model_delivery_restores_durable_mapping() {
+        for mode in [
+            ControlSignal::Rotate,
+            ControlSignal::SwitchModel("test-model".into()),
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "buzz-acp-closed-control-test-{}.json",
+                Uuid::new_v4()
+            ));
+            let store = SessionStore::open(
+                path,
+                SessionScope::new("wss://relay.example", "aabb", "hermes", &["acp".into()]),
+            );
+            let channel_id = Uuid::new_v4();
+            store
+                .record(channel_id, "persisted-session".into())
+                .unwrap();
+
+            let mut pool = AgentPool::from_slots(vec![]);
+            let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+            drop(control_rx);
+            let abort_handle = pool.join_set.spawn(async {});
+            pool.task_map_mut().insert(
+                abort_handle.id(),
+                pool::TaskMeta {
+                    agent_index: 0,
+                    channel_id: Some(channel_id),
+                    turn_id: "closed-control-turn".to_string(),
+                    recoverable_batch: None,
+                    control_tx: Some(control_tx),
+                    steer_tx: None,
+                },
+            );
+
+            assert_eq!(
+                deliver_durable_control(&mut pool, &store, channel_id, mode, "test control"),
+                DurableControlDelivery::NotDelivered
+            );
+            assert_eq!(store.get(channel_id).as_deref(), Some("persisted-session"));
+            store.cleanup_test_files();
+        }
     }
 }
 
