@@ -350,6 +350,53 @@ pub async fn bootstrap_owner(
     Ok(())
 }
 
+/// Atomically bootstraps a community owner and its collaboration policy.
+pub async fn bootstrap_owner_with_collaboration_policy(
+    pool: &PgPool,
+    community: CommunityId,
+    owner_pubkey: &str,
+    collaboration_policy: crate::CollaborationPolicy,
+) -> Result<()> {
+    let pubkey = owner_pubkey.to_ascii_lowercase();
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
+         VALUES ($1, $2, 'owner', NULL) \
+         ON CONFLICT (community_id, pubkey) DO UPDATE SET role = 'owner', updated_at = now()",
+    )
+    .bind(community.as_uuid())
+    .bind(&pubkey)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE relay_members SET role = 'admin', updated_at = now() \
+         WHERE community_id = $1 AND role = 'owner' AND pubkey <> $2",
+    )
+    .bind(community.as_uuid())
+    .bind(&pubkey)
+    .execute(&mut *tx)
+    .await?;
+
+    let policy_update = sqlx::query(
+        "UPDATE communities SET collaboration_policy = $2 WHERE id = $1 AND archived_at IS NULL",
+    )
+    .bind(community.as_uuid())
+    .bind(collaboration_policy.as_str())
+    .execute(&mut *tx)
+    .await?;
+    if policy_update.rows_affected() != 1 {
+        tx.rollback().await?;
+        return Err(crate::DbError::NotFound(format!(
+            "active community {community}"
+        )));
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
 /// The result of a transfer-ownership attempt.
 #[derive(Debug, PartialEq)]
 pub enum TransferResult {

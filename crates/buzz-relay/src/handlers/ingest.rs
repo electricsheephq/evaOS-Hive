@@ -1529,10 +1529,24 @@ async fn ingest_event_inner(
         )));
     }
 
+    // Server-owned policy is resolved from the host-bound community, never
+    // from event tags. Run this after identity/scope checks and before any
+    // command routing, storage, or side effect.
+    let control_plane_authorized = super::collaboration_policy::enforce(tenant, state, &event)
+        .await
+        .map_err(IngestError::Rejected)?;
+
     // Command kinds are routed AFTER signature verification, timestamp check,
     // pubkey/auth match, and scope validation — never before.
     if buzz_core::kind::is_command_kind(kind_u32) {
-        return super::command_executor::handle_command(tenant, state, event, auth).await;
+        return super::command_executor::handle_command(
+            tenant,
+            state,
+            event,
+            auth,
+            control_plane_authorized,
+        )
+        .await;
     }
 
     // Product feedback is sidecarred directly into its private deployment table.
@@ -1903,9 +1917,15 @@ async fn ingest_event_inner(
     }
 
     if crate::handlers::side_effects::is_admin_kind(kind_u32) {
-        crate::handlers::side_effects::validate_admin_event(tenant, kind_u32, &event, state)
-            .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        crate::handlers::side_effects::validate_admin_event(
+            tenant,
+            kind_u32,
+            &event,
+            state,
+            control_plane_authorized,
+        )
+        .await
+        .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
 
     // Processed here (verify consent, mutate archived_identities, emit the

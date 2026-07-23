@@ -54,6 +54,9 @@ CREATE TABLE communities (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     host            VARCHAR(255) NOT NULL,
     signing_key     BYTEA,
+    collaboration_policy TEXT NOT NULL DEFAULT 'native'
+        CONSTRAINT chk_communities_collaboration_policy
+        CHECK (collaboration_policy IN ('native', 'control_plane')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     archived_at     TIMESTAMPTZ,
     CONSTRAINT chk_communities_id_not_nil CHECK (id <> '00000000-0000-0000-0000-000000000000'::uuid)

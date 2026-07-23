@@ -38,6 +38,7 @@ pub async fn handle_command(
     state: &Arc<AppState>,
     event: Event,
     auth: IngestAuth,
+    control_plane_authorized: bool,
 ) -> Result<IngestResult, IngestError> {
     // Ensure the authenticated user exists in the users table (foreign key requirement).
     // The old REST handlers did this via extract_auth_context; command executor must do it explicitly.
@@ -63,7 +64,9 @@ pub async fn handle_command(
     let kind = event.kind.as_u16() as u32;
     match kind {
         KIND_DM_OPEN => handle_dm_open(tenant, state, &event, &auth).await,
-        KIND_DM_ADD_MEMBER => handle_dm_add_member(tenant, state, &event, &auth).await,
+        KIND_DM_ADD_MEMBER => {
+            handle_dm_add_member(tenant, state, &event, &auth, control_plane_authorized).await
+        }
         KIND_DM_HIDE => handle_dm_hide(tenant, state, &event, &auth).await,
         KIND_WORKFLOW_DEF => handle_workflow_def(tenant, state, &event, &auth).await,
         KIND_WORKFLOW_TRIGGER => handle_workflow_trigger(tenant, state, &event, &auth).await,
@@ -445,6 +448,7 @@ async fn handle_dm_add_member(
     state: &Arc<AppState>,
     event: &Event,
     auth: &IngestAuth,
+    control_plane_authorized: bool,
 ) -> Result<IngestResult, IngestError> {
     let self_bytes = auth.pubkey().to_bytes().to_vec();
 
@@ -466,7 +470,7 @@ async fn handle_dm_add_member(
         .is_member_cached(tenant.community(), channel_id, &self_bytes)
         .await
         .map_err(|e| IngestError::Internal(format!("error: membership check: {e}")))?;
-    if !is_member {
+    if !is_member && !control_plane_authorized {
         return Err(IngestError::Rejected(
             "forbidden: not a member of this DM".into(),
         ));
