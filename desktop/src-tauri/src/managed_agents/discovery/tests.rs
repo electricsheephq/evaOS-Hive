@@ -2,15 +2,16 @@ use std::path::PathBuf;
 
 use super::overrides::{divergent_agent_command_override, update_time_agent_command_override};
 use super::{
-    apply_agent_command_update, classify_runtime, codex_adapter_availability,
-    codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
-    effective_agent_command, find_nvm_default_bin, find_via_login_shell,
-    is_login_shell_path_uninit, is_safe_nvm_tag, managed_agent_avatar_url, normalize_agent_args,
-    parse_semver_tag, probe_codex_acp_major_version, record_agent_command,
+    apply_agent_command_update, auth_status_without_probe, availability_after_readiness_probe,
+    classify_runtime, codex_adapter_availability, codex_adapter_is_outdated,
+    create_time_agent_command_override, default_agent_command, effective_agent_command,
+    find_nvm_default_bin, find_via_login_shell, is_login_shell_path_uninit, is_safe_nvm_tag,
+    managed_agent_avatar_url, normalize_agent_args, parse_semver_tag,
+    probe_codex_acp_major_version, readiness_probe_succeeds, record_agent_command,
     refresh_login_shell_path, BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
-    GOOSE_AVATAR_URL,
+    GOOSE_AVATAR_URL, HERMES_AVATAR_URL,
 };
-use crate::managed_agents::AcpAvailabilityStatus;
+use crate::managed_agents::{AcpAvailabilityStatus, AuthStatus};
 
 #[test]
 fn resolves_known_avatar_for_bare_command() {
@@ -36,6 +37,14 @@ fn resolves_known_avatar_for_command_paths_and_aliases() {
     assert_eq!(
         managed_agent_avatar_url("/usr/local/bin/claude-code-acp"),
         Some(CLAUDE_CODE_AVATAR_URL.to_string())
+    );
+    assert_eq!(
+        managed_agent_avatar_url("/usr/local/bin/hermes"),
+        Some(HERMES_AVATAR_URL.to_string())
+    );
+    assert_eq!(
+        managed_agent_avatar_url(r"C:\Tools\hermes-acp.exe"),
+        Some(HERMES_AVATAR_URL.to_string())
     );
 }
 
@@ -93,6 +102,100 @@ fn normalizes_buzz_agent_args_to_empty() {
     assert_eq!(
         normalize_agent_args("buzz-agent", vec!["acp".into()]),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn normalizes_hermes_args_for_each_supported_command() {
+    assert_eq!(
+        normalize_agent_args("hermes", Vec::new()),
+        vec!["acp".to_string()]
+    );
+    assert_eq!(
+        normalize_agent_args("/usr/local/bin/hermes", Vec::new()),
+        vec!["acp".to_string()]
+    );
+    assert_eq!(
+        normalize_agent_args("hermes-acp", Vec::new()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        normalize_agent_args("hermes-acp", vec!["acp".into()]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn hermes_metadata_separates_dependency_readiness_from_authentication() {
+    let hermes = super::known_acp_runtime_exact("hermes").expect("Hermes runtime metadata");
+
+    assert_eq!(hermes.commands, &["hermes", "hermes-acp"]);
+    assert_eq!(
+        hermes.readiness_probe_args,
+        Some(&["hermes", "acp", "--check"][..])
+    );
+    assert_eq!(hermes.auth_probe_args, None);
+    assert_eq!(hermes.skill_dir, Some(".hermes/skills"));
+    assert_eq!(hermes.config_file_path, Some("~/.hermes/config.yaml"));
+    assert_eq!(hermes.config_file_format, Some("yaml"));
+    assert_eq!(hermes.model_env_var, None);
+    assert_eq!(hermes.provider_env_var, None);
+    assert_eq!(
+        auth_status_without_probe(&AcpAvailabilityStatus::Available, hermes.auth_probe_args),
+        AuthStatus::NotApplicable
+    );
+    assert_ne!(
+        auth_status_without_probe(&AcpAvailabilityStatus::Available, hermes.auth_probe_args),
+        AuthStatus::LoggedIn,
+        "dependency readiness must never become an authentication claim"
+    );
+}
+
+#[test]
+fn runtime_readiness_probe_distinguishes_success_and_failure() {
+    let executable = std::env::current_exe().expect("current test executable");
+    let executable_str = executable.to_string_lossy();
+
+    assert!(readiness_probe_succeeds(
+        &executable,
+        &[executable_str.as_ref(), "--list"]
+    ));
+    assert!(!readiness_probe_succeeds(
+        &executable,
+        &[executable_str.as_ref(), "--buzz-invalid-readiness-probe"]
+    ));
+
+    assert_eq!(
+        availability_after_readiness_probe(
+            AcpAvailabilityStatus::Available,
+            Some(&executable),
+            &[executable_str.as_ref(), "--list"],
+        ),
+        AcpAvailabilityStatus::Available
+    );
+    assert_eq!(
+        availability_after_readiness_probe(
+            AcpAvailabilityStatus::Available,
+            Some(&executable),
+            &[executable_str.as_ref(), "--buzz-invalid-readiness-probe"],
+        ),
+        AcpAvailabilityStatus::DependencyMissing
+    );
+    assert_eq!(
+        availability_after_readiness_probe(
+            AcpAvailabilityStatus::Available,
+            None,
+            &["missing", "--check"],
+        ),
+        AcpAvailabilityStatus::DependencyMissing
+    );
+    assert_eq!(
+        availability_after_readiness_probe(
+            AcpAvailabilityStatus::NotInstalled,
+            Some(&executable),
+            &[executable_str.as_ref(), "--list"],
+        ),
+        AcpAvailabilityStatus::NotInstalled
     );
 }
 

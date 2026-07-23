@@ -18,6 +18,8 @@ const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/e
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
 const BUZZ_AGENT_AVATAR_URL: &str =
     "https://raw.githubusercontent.com/block/buzz/refs/heads/main/crates/buzz-agent/buzz-agent.png";
+const HERMES_AVATAR_URL: &str =
+    "https://raw.githubusercontent.com/NousResearch/hermes-agent/refs/heads/main/apps/desktop/public/hermes.png";
 
 fn common_binary_paths() -> &'static [PathBuf] {
     static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
@@ -92,6 +94,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: Some("GOOSE_CONTEXT_LIMIT"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
+        readiness_probe_args: None,
         auth_probe_args: None,
     },
     KnownAcpRuntime {
@@ -123,6 +126,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run the Claude CLI to complete authentication."),
+        readiness_probe_args: None,
         auth_probe_args: Some(&["claude", "auth", "status"]),
     },
     KnownAcpRuntime {
@@ -154,8 +158,47 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run `codex login` to authenticate."),
+        readiness_probe_args: None,
         // Verified: `codex login status` exits 0 when logged in, non-zero otherwise.
         auth_probe_args: Some(&["codex", "login", "status"]),
+    },
+    KnownAcpRuntime {
+        id: "hermes",
+        label: "Hermes Agent",
+        commands: &["hermes", "hermes-acp"],
+        aliases: &[],
+        avatar_url: HERMES_AVATAR_URL,
+        mcp_command: None,
+        mcp_hooks: false,
+        underlying_cli: Some("hermes"),
+        cli_install_commands: &[
+            "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+        ],
+        cli_install_commands_windows: &[
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"iex (irm https://hermes-agent.nousresearch.com/install.ps1)\"",
+        ],
+        adapter_install_commands: &[],
+        install_instructions_url: "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+        cli_install_hint: "Install Hermes Agent with the official installer.",
+        adapter_install_hint: "",
+        skill_dir: Some(".hermes/skills"),
+        supports_acp_model_switching: false,
+        model_env_var: None,
+        provider_env_var: None,
+        provider_locked: true,
+        default_env: &[],
+        config_file_path: Some("~/.hermes/config.yaml"),
+        config_file_format: Some("yaml"),
+        supports_acp_native_config: false,
+        thinking_env_var: None,
+        max_tokens_env_var: None,
+        context_limit_env_var: None,
+        required_normalized_fields: &[],
+        login_hint: None,
+        // This checks only the ACP dependency/import surface. Provider setup is
+        // discovered through the ACP initialize/auth-method handshake at launch.
+        readiness_probe_args: Some(&["hermes", "acp", "--check"]),
+        auth_probe_args: None,
     },
     KnownAcpRuntime {
         id: "buzz-agent",
@@ -186,6 +229,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: Some("BUZZ_AGENT_MAX_CONTEXT_TOKENS"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
+        readiness_probe_args: None,
         auth_probe_args: None,
     },
 ];
@@ -342,9 +386,9 @@ pub use overrides::{apply_agent_command_update, create_time_agent_command_overri
 
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
-        "goose" => Some(vec!["acp".to_string()]),
+        "goose" | "hermes" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" | "buzz-agent" => Some(Vec::new()),
+        | "claudecode" | "hermes-acp" | "buzz-agent" => Some(Vec::new()),
         _ => None,
     }
 }
@@ -994,6 +1038,41 @@ fn probe_auth_status(binary_path: &Path, probe_args: &[&str]) -> AuthStatus {
     }
 }
 
+fn readiness_probe_succeeds(binary_path: &Path, probe_args: &[&str]) -> bool {
+    matches!(
+        probe_auth_status(binary_path, probe_args),
+        AuthStatus::LoggedIn
+    )
+}
+
+fn availability_after_readiness_probe(
+    availability: AcpAvailabilityStatus,
+    binary_path: Option<&Path>,
+    probe_args: &[&str],
+) -> AcpAvailabilityStatus {
+    if availability != AcpAvailabilityStatus::Available {
+        return availability;
+    }
+
+    match binary_path {
+        Some(path) if readiness_probe_succeeds(path, probe_args) => {
+            AcpAvailabilityStatus::Available
+        }
+        _ => AcpAvailabilityStatus::DependencyMissing,
+    }
+}
+
+fn auth_status_without_probe(
+    availability: &AcpAvailabilityStatus,
+    auth_probe_args: Option<&[&str]>,
+) -> AuthStatus {
+    if *availability == AcpAvailabilityStatus::Available && auth_probe_args.is_none() {
+        AuthStatus::NotApplicable
+    } else {
+        AuthStatus::Unknown
+    }
+}
+
 pub fn command_availability(command: &str) -> CommandAvailabilityInfo {
     let resolved_path = resolve_command(command).map(|path| path.display().to_string());
     CommandAvailabilityInfo {
@@ -1182,6 +1261,19 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
                 }
             }
 
+            // Runtime dependency checks are distinct from authentication. Hermes
+            // `acp --check` validates only that its ACP dependencies can load.
+            if availability == AcpAvailabilityStatus::Available {
+                if let Some(probe_args) = runtime.readiness_probe_args {
+                    let probe_binary = resolve_command(probe_args[0]);
+                    availability = availability_after_readiness_probe(
+                        availability,
+                        probe_binary.as_deref(),
+                        probe_args,
+                    );
+                }
+            }
+
             // Warm the adapter-availability cache for the badge fallback.
             // The cache is scoped to the codex runtime; other runtimes leave it
             // unchanged. Invalidated by `clear_resolve_cache`.
@@ -1209,6 +1301,7 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
                 AcpAvailabilityStatus::CliMissing => cli_hint.to_string(),
                 AcpAvailabilityStatus::AdapterMissing => adapter_hint.to_string(),
                 AcpAvailabilityStatus::AdapterOutdated => adapter_hint.to_string(),
+                AcpAvailabilityStatus::DependencyMissing => cli_hint.to_string(),
                 AcpAvailabilityStatus::NotInstalled => {
                     if !cli_hint.is_empty() && !adapter_hint.is_empty() {
                         format!("{cli_hint} {adapter_hint}")
@@ -1296,14 +1389,10 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
     // Fill NotApplicable / Unknown for non-probed entries.
     for partial in &mut partials {
         if partial.entry.auth_status == AuthStatus::Unknown {
-            partial.entry.auth_status = if partial.entry.availability
-                == AcpAvailabilityStatus::Available
-                && partial.runtime.auth_probe_args.is_none()
-            {
-                AuthStatus::NotApplicable
-            } else {
-                AuthStatus::Unknown
-            };
+            partial.entry.auth_status = auth_status_without_probe(
+                &partial.entry.availability,
+                partial.runtime.auth_probe_args,
+            );
         }
     }
 
