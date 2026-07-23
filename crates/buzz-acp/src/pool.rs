@@ -708,6 +708,7 @@ impl AgentPool {
         &mut self,
         channel_id: Uuid,
         model_id: &str,
+        session_store: &SessionStore,
     ) -> IdleSwitchResult {
         let Some(agent) = self
             .agents
@@ -730,6 +731,14 @@ impl AgentPool {
             }
         }
 
+        if let Err(error) = session_store.remove(channel_id) {
+            tracing::error!(
+                target: "session_store",
+                channel = %channel_id,
+                "model switch rejected because the durable mapping could not be cleared: {error}"
+            );
+            return IdleSwitchResult::PersistenceError;
+        }
         agent.desired_model = Some(model_id.to_string());
         agent.model_overridden = true;
         agent.state.invalidate_channel(&channel_id);
@@ -745,6 +754,8 @@ pub enum IdleSwitchResult {
     /// Desired model is not in the agent's cached catalog — pick rejected,
     /// session untouched.
     UnsupportedModel,
+    /// Durable invalidation failed; model and in-memory session are untouched.
+    PersistenceError,
     /// No idle agent available (all checked out / none spawned).
     NoIdleAgent,
 }
@@ -957,22 +968,6 @@ async fn load_persisted_channel_session(
                 "loaded persisted ACP session"
             );
             Ok(Some(session_id))
-        }
-        Err(AcpError::AgentError { code, message }) => {
-            tracing::info!(
-                target: "pool::session",
-                channel = %channel_id,
-                code,
-                "recorded ACP session is unavailable ({message}); creating a replacement"
-            );
-            if let Err(error) = ctx.session_store.remove(channel_id) {
-                tracing::warn!(
-                    target: "session_store",
-                    channel = %channel_id,
-                    "failed to remove unavailable ACP session mapping: {error}"
-                );
-            }
-            Ok(None)
         }
         Err(error) => Err(error),
     }
@@ -4411,7 +4406,7 @@ mod tests {
         assert_eq!(s.heartbeat_turn_count, 7);
         assert_eq!(store.get(ch_a), None);
         assert_eq!(store.get(ch_b).as_deref(), Some("sess-b"));
-        let _ = std::fs::remove_file(store.test_path());
+        store.cleanup_test_files();
     }
 
     #[test]
@@ -5495,7 +5490,7 @@ mod tests {
             ctx.session_store.get(other_channel).as_deref(),
             Some("other-session")
         );
-        let _ = std::fs::remove_file(ctx.session_store.test_path());
+        ctx.session_store.cleanup_test_files();
     }
 
     #[tokio::test]
@@ -5522,7 +5517,72 @@ mod tests {
             ctx.session_store.get(channel).as_deref(),
             Some("generic-session")
         );
-        let _ = std::fs::remove_file(ctx.session_store.test_path());
+        ctx.session_store.cleanup_test_files();
+    }
+
+    #[tokio::test]
+    async fn non_missing_agent_error_preserves_mapping_and_propagates() {
+        let ctx = make_prompt_context_no_owner();
+        let channel = Uuid::new_v4();
+        ctx.session_store
+            .record(channel, "auth-blocked-session".into())
+            .unwrap();
+        let mut agent = load_test_agent(
+            "hermes-agent",
+            r#"{"jsonrpc":"2.0","id":0,"error":{"code":-32003,"message":"provider setup required"}}"#,
+        )
+        .await;
+
+        assert!(matches!(
+            load_persisted_channel_session(&mut agent, &ctx, channel).await,
+            Err(AcpError::AgentError { code: -32003, .. })
+        ));
+        assert_eq!(
+            ctx.session_store.get(channel).as_deref(),
+            Some("auth-blocked-session")
+        );
+        ctx.session_store.cleanup_test_files();
+    }
+
+    #[tokio::test]
+    async fn idle_model_switch_does_not_mutate_when_durable_clear_fails() {
+        let channel = Uuid::new_v4();
+        let mut agent = load_test_agent(
+            "spec-compliant-agent",
+            r#"{"jsonrpc":"2.0","id":0,"result":null}"#,
+        )
+        .await;
+        agent
+            .state
+            .sessions
+            .insert(channel, "existing-session".into());
+        let mut pool = AgentPool::from_slots(vec![Some(agent)]);
+        let path =
+            std::env::temp_dir().join(format!("buzz-acp-model-store-error-{}", Uuid::new_v4()));
+        std::fs::create_dir(&path).unwrap();
+        let store = SessionStore::open(
+            path.clone(),
+            crate::session_store::SessionScope::new(
+                "wss://relay.example",
+                "aabb",
+                "test-agent",
+                &[],
+            ),
+        );
+
+        assert_eq!(
+            pool.switch_idle_agent_model(channel, "new-model", &store),
+            IdleSwitchResult::PersistenceError
+        );
+        let unchanged = pool.agents_mut()[0].as_ref().unwrap();
+        assert_eq!(unchanged.desired_model, None);
+        assert_eq!(
+            unchanged.state.sessions.get(&channel).map(String::as_str),
+            Some("existing-session")
+        );
+
+        store.cleanup_test_files();
+        let _ = std::fs::remove_dir(path);
     }
 
     // ── render_canvas_section ────────────────────────────────────────────────
