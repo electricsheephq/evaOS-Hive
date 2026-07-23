@@ -554,6 +554,46 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn auth_handshake_uses_command_specific_hermes_acp_args() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let acp_path = temp.path().join("buzz-acp");
+        fs::write(
+            &acp_path,
+            "#!/bin/sh\nprintf '%s' \"$BUZZ_ACP_AGENT_ARGS\"\n",
+        )
+        .expect("write fake buzz-acp");
+        fs::set_permissions(&acp_path, fs::Permissions::from_mode(0o755))
+            .expect("chmod fake buzz-acp");
+        let adapter_path = temp.path().join("adapter");
+
+        let hermes = run_buzz_acp_auth_command_with_paths(
+            &acp_path,
+            "hermes",
+            &adapter_path,
+            ["auth-methods", "--json"],
+            None,
+        )
+        .expect("run Hermes auth handshake");
+        assert!(hermes.status.success());
+        assert_eq!(hermes.stdout, b"acp");
+
+        let hermes_acp = run_buzz_acp_auth_command_with_paths(
+            &acp_path,
+            "hermes-acp",
+            &adapter_path,
+            ["auth-methods", "--json"],
+            None,
+        )
+        .expect("run hermes-acp auth handshake");
+        assert!(hermes_acp.status.success());
+        assert!(hermes_acp.stdout.is_empty());
+    }
+
     #[test]
     fn shell_join_escapes_spaces_and_quotes() {
         assert_eq!(
