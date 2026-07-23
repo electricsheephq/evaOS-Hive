@@ -352,6 +352,25 @@ pub async fn provision_community(
     // Legacy convergence mode remains available to deployment operators and
     // startup tooling. Clients provisioning on behalf of end users must use
     // create_only so an existing owner can never be rotated by a create race.
+    if let Some(policy) = requested_policy {
+        let owner_hex = initial_owner
+            .as_deref()
+            .expect("validated above: policy requires initial owner");
+        let record = state
+            .db
+            .ensure_community_with_owner_and_policy(&request.host, owner_hex, policy)
+            .await
+            .map_err(|e| format!("failed to converge community owner/policy: {e}"))?;
+        publish_membership_snapshot_if_required(state, record.id, &record.host).await;
+        return Ok(ProvisionCommunityResponse {
+            community_id: record.id.to_string(),
+            host: record.host,
+            status: if record.created { "created" } else { "existed" },
+            owner_pubkey: initial_owner,
+            collaboration_policy: policy.as_str(),
+        });
+    }
+
     let record = state
         .db
         .ensure_configured_community(&request.host)
@@ -359,20 +378,11 @@ pub async fn provision_community(
         .map_err(|e| format!("failed to create community: {e}"))?;
 
     if let Some(owner_hex) = &initial_owner {
-        match requested_policy {
-            Some(policy) => state
-                .db
-                .bootstrap_owner_with_collaboration_policy(record.id, owner_hex, policy)
-                .await
-                .map_err(|e| {
-                    format!("community provisioned but owner/policy bootstrap failed: {e}")
-                })?,
-            None => state
-                .db
-                .bootstrap_owner(record.id, owner_hex)
-                .await
-                .map_err(|e| format!("community provisioned but owner bootstrap failed: {e}"))?,
-        }
+        state
+            .db
+            .bootstrap_owner(record.id, owner_hex)
+            .await
+            .map_err(|e| format!("community provisioned but owner bootstrap failed: {e}"))?;
         publish_membership_snapshot_if_required(state, record.id, &record.host).await;
     }
 
