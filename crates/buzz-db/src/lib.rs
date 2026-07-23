@@ -171,6 +171,12 @@ pub async fn insert_mentions(
 #[derive(Clone, Debug)]
 pub struct Db {
     pub(crate) pool: PgPool,
+    /// Small dedicated pool for collaboration advisory-lock guards.
+    ///
+    /// A guard lives across a request that also needs the writer pool. Keeping
+    /// these connections separate prevents controlled-write concurrency from
+    /// consuming every writer connection and deadlocking on a second acquire.
+    pub(crate) authority_pool: PgPool,
     /// Maximum connections configured for this pool (from [`DbConfig::max_connections`]).
     pub(crate) max_connections: u32,
     /// Optional read-replica pool (from [`DbConfig::read_database_url`]).
@@ -415,12 +421,21 @@ impl Db {
     /// proof hold for every insert path that goes through this pool.
     pub async fn new(config: &DbConfig) -> Result<Self> {
         let pool = Self::connect_pool(config, &config.database_url, true).await?;
+        let authority_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .min_connections(0)
+            .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
+            .max_lifetime(Duration::from_secs(config.max_lifetime_secs))
+            .idle_timeout(Duration::from_secs(config.idle_timeout_secs))
+            .connect(&config.database_url)
+            .await?;
         let read_pool = match &config.read_database_url {
             Some(url) => Some(Self::connect_pool(config, url, false).await?),
             None => None,
         };
         Ok(Self {
             pool,
+            authority_pool,
             max_connections: config.max_connections,
             read_pool,
             fence: std::sync::Arc::new(replica_fence::ReplicaFence::new()),
@@ -459,6 +474,7 @@ impl Db {
     pub fn from_pool(pool: PgPool) -> Self {
         Self {
             max_connections: pool.options().get_max_connections(),
+            authority_pool: pool.clone(),
             pool,
             read_pool: None,
             fence: std::sync::Arc::new(replica_fence::ReplicaFence::new()),
@@ -475,6 +491,7 @@ impl Db {
     pub fn from_pools(pool: PgPool, read_pool: PgPool) -> Self {
         Self {
             max_connections: pool.options().get_max_connections(),
+            authority_pool: pool.clone(),
             pool,
             read_pool: Some(read_pool),
             fence: std::sync::Arc::new(replica_fence::ReplicaFence::new()),
@@ -795,7 +812,7 @@ impl Db {
         &self,
         community_id: CommunityId,
     ) -> Result<CommunityCollaborationGuard> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.authority_pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock_shared($1)")
             .bind(relay_members::collaboration_authority_lock_key(
                 community_id,
