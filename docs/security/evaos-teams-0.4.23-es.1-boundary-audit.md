@@ -92,6 +92,13 @@ found two additional fix-lane blockers:
    incrementing it before any changed authority state, and emitting a
    content-free terminal callback when a socket becomes stale.
 
+The final targeted review of
+`2b00d9568e661cf0e3c6beddd5ac482fd005b7cd..4d2168ad2912388225d653e344f9c0f9d13c1da5`
+found one remaining check-to-enqueue race. Its disposition is **fixed now**:
+managed inbound generation validation and renderer enqueue share the same
+entitlement-transition lock, with a deterministic race regression proving that
+only a content-free `Close` is delivered after a transition.
+
 ## Exact next gate
 
 The source candidate may advance only after focused tests, canonical CI, and an

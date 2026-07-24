@@ -96,6 +96,7 @@ struct ConnectionHandle {
 struct ManagedConnectionAuthority {
     generation: Arc<AtomicU64>,
     expected_generation: u64,
+    transition: Arc<std::sync::Mutex<()>>,
 }
 
 impl ManagedConnectionAuthority {
@@ -282,6 +283,7 @@ async fn connect(
         managed_authority = Some(ManagedConnectionAuthority {
             generation: state.evaos_teams_access_generation.clone(),
             expected_generation,
+            transition: state.evaos_teams_access_transition.clone(),
         });
     }
     #[cfg(not(feature = "evaos-teams-managed"))]
@@ -411,29 +413,49 @@ async fn run_connection<S>(
                 if failed { break; }
             }
             incoming = socket.next() => {
-                if managed_authority
-                    .as_ref()
-                    .is_some_and(|authority| !authority.is_current())
-                {
-                    if let Ok(value) = serde_json::to_value(OutboundMessage::Close(None)) {
-                        let _ = on_message.send(value);
-                    }
-                    break;
-                }
                 let message = match incoming {
                     Some(Ok(message)) => outbound_message(message),
                     Some(Err(error)) => OutboundMessage::Error(error.to_string()),
                     None => OutboundMessage::Close(None),
                 };
-                let terminal = matches!(message, OutboundMessage::Close(_) | OutboundMessage::Error(_));
-                if let Ok(value) = serde_json::to_value(message) {
-                    let _ = on_message.send(value);
+                if !deliver_inbound_message(managed_authority.as_ref(), &on_message, message) {
+                    break;
                 }
-                if terminal { break; }
             }
         }
     }
     manager.remove(id).await;
+}
+
+fn deliver_inbound_message(
+    managed_authority: Option<&ManagedConnectionAuthority>,
+    on_message: &Channel<serde_json::Value>,
+    message: OutboundMessage,
+) -> bool {
+    // A managed authority transition cannot change the generation between this
+    // validation and the renderer enqueue. Native Buzz passes `None` and keeps
+    // its existing lock-free behavior.
+    let _transition = managed_authority.map(|authority| {
+        authority
+            .transition
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    });
+    if managed_authority.is_some_and(|authority| !authority.is_current()) {
+        if let Ok(value) = serde_json::to_value(OutboundMessage::Close(None)) {
+            let _ = on_message.send(value);
+        }
+        return false;
+    }
+
+    let terminal = matches!(
+        message,
+        OutboundMessage::Close(_) | OutboundMessage::Error(_)
+    );
+    if let Ok(value) = serde_json::to_value(message) {
+        let _ = on_message.send(value);
+    }
+    !terminal
 }
 
 fn outbound_message(message: Message) -> OutboundMessage {
@@ -669,6 +691,7 @@ mod tests {
         let authority = ManagedConnectionAuthority {
             generation: generation.clone(),
             expected_generation: 7,
+            transition: Arc::new(std::sync::Mutex::new(())),
         };
         let handle = Arc::new(ConnectionHandle {
             #[cfg(feature = "evaos-teams-managed")]
@@ -714,6 +737,48 @@ mod tests {
             !terminal_messages[0].contains("sentinel-cross-tenant-event"),
             "stale managed content must not reach the renderer"
         );
+    }
+
+    #[test]
+    fn entitlement_transition_serializes_validation_and_renderer_delivery() {
+        let generation = Arc::new(AtomicU64::new(11));
+        let transition = Arc::new(std::sync::Mutex::new(()));
+        let authority = ManagedConnectionAuthority {
+            generation: generation.clone(),
+            expected_generation: 11,
+            transition: transition.clone(),
+        };
+        let delivered = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let delivered_for_channel = delivered.clone();
+        let channel = Channel::new(move |body: InvokeResponseBody| {
+            if let InvokeResponseBody::Json(json) = body {
+                delivered_for_channel.lock().unwrap().push(json);
+            }
+            Ok(())
+        });
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let barrier_for_delivery = barrier.clone();
+        let guard = transition.lock().unwrap();
+        let delivery = std::thread::spawn(move || {
+            barrier_for_delivery.wait();
+            deliver_inbound_message(
+                Some(&authority),
+                &channel,
+                OutboundMessage::Text("sentinel-cross-authority-content".to_string()),
+            )
+        });
+
+        barrier.wait();
+        generation.fetch_add(1, Ordering::AcqRel);
+        drop(guard);
+
+        assert!(!delivery.join().unwrap());
+        let delivered = delivered.lock().unwrap();
+        assert_eq!(delivered.len(), 1);
+        let terminal: serde_json::Value =
+            serde_json::from_str(&delivered[0]).expect("terminal callback must be JSON");
+        assert_eq!(terminal["type"], "Close");
+        assert!(!delivered[0].contains("sentinel-cross-authority-content"));
     }
 
     #[tokio::test]

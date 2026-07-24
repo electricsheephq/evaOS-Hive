@@ -110,7 +110,7 @@ pub struct AppState {
     pub evaos_teams_expires_at: AtomicI64,
     /// Serializes managed entitlement install, refresh, expiry, and revoke.
     #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
-    pub evaos_teams_access_transition: Mutex<()>,
+    pub evaos_teams_access_transition: Arc<Mutex<()>>,
     #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
     pub evaos_teams_access_generation: Arc<AtomicU64>,
     /// Cached ACP session config from running agents, keyed by canonical
@@ -243,7 +243,7 @@ pub fn build_app_state() -> AppState {
         } else {
             i64::MAX
         }),
-        evaos_teams_access_transition: Mutex::new(()),
+        evaos_teams_access_transition: Arc::new(Mutex::new(())),
         evaos_teams_access_generation: Arc::new(AtomicU64::new(0)),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),

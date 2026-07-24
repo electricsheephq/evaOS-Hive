@@ -110,6 +110,11 @@ assert.match(
   nativeWebsocket,
   /serde_json::to_value\(OutboundMessage::Close\(None\)\)/,
 );
+assert.match(nativeWebsocket, /fn deliver_inbound_message/);
+assert.match(
+  nativeWebsocket,
+  /transition\s*\.lock\(\)[\s\S]*authority\.is_current\(\)[\s\S]*on_message\.send\(value\)/,
+);
 assert.match(
   read("desktop/src-tauri/src/app_state/signing.rs"),
   /fetch_add\(1, Ordering::AcqRel\)[\s\S]*evaos_teams_authorized\.store\(false, Ordering::Release\)/,
