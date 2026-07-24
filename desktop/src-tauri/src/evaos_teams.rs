@@ -30,12 +30,14 @@ mod logout;
 use api::{post_json, ApiFailure};
 #[cfg(feature = "evaos-teams-managed")]
 use credentials::managed_credential_entries;
+#[cfg(test)]
+use login_callback::callback_device_code;
 #[cfg(feature = "evaos-teams-managed")]
 use login_callback::clear_pending_login;
 #[cfg(feature = "evaos-teams-managed")]
 pub(crate) use login_callback::handle_login_deep_link;
-#[cfg(test)]
-use login_callback::{callback_device_code, managed_login_callback_url};
+#[cfg(all(test, feature = "evaos-teams-managed"))]
+use login_callback::managed_login_callback_url;
 use login_callback::{login_callback, LoginCallback};
 #[cfg(feature = "evaos-teams-managed")]
 use logout::{begin_managed_logout, retry_pending_logout};
@@ -617,7 +619,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&state, &app_state);
-        return Ok(EvaosTeamsAuthStatus::unmanaged());
+        Ok(EvaosTeamsAuthStatus::unmanaged())
     }
 
     #[cfg(feature = "evaos-teams-managed")]
@@ -741,7 +743,7 @@ pub(crate) async fn start_evaos_teams_login(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&app, &state, &app_state);
-        return Err("evaOS Teams managed login is not enabled in this build".to_string());
+        Err("evaOS Teams managed login is not enabled in this build".to_string())
     }
 
     #[cfg(feature = "evaos-teams-managed")]
@@ -922,7 +924,7 @@ pub(crate) async fn logout_evaos_teams(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&state, &app_state);
-        return Err("evaOS Teams managed login is not enabled in this build".to_string());
+        Err("evaOS Teams managed login is not enabled in this build".to_string())
     }
 
     #[cfg(feature = "evaos-teams-managed")]
