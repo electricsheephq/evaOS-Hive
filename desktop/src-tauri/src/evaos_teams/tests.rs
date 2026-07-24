@@ -169,6 +169,31 @@ fn entitlement_rejects_wrong_key_expiry_and_relay_injection() {
 }
 
 #[test]
+fn verification_binds_the_local_key_but_refresh_requires_the_server_key() {
+    let public_key = Keys::generate().public_key().to_hex();
+    let verified = EvaosTeamsEntitlement {
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: None,
+        role: "member".to_string(),
+        access_revision: 7,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        refresh_after_seconds: 300,
+    };
+    let bound =
+        bind_verified_entitlement(verified, "https://relay.example.com", &public_key).unwrap();
+    assert_eq!(bound.public_key.as_deref(), Some(public_key.as_str()));
+    assert!(validate_entitlement(
+        &EvaosTeamsEntitlement {
+            public_key: None,
+            ..bound
+        },
+        &public_key,
+    )
+    .is_err());
+}
+
+#[test]
 fn managed_keychain_service_is_distinct_from_native_buzz() {
     assert_eq!(KEYRING_SERVICE, "evaos-teams-desktop");
     assert_ne!(KEYRING_SERVICE, "buzz-desktop");

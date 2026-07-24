@@ -342,6 +342,19 @@ fn validate_entitlement(
     relay_websocket_url(&entitlement.relay_host)
 }
 
+fn bind_verified_entitlement(
+    mut entitlement: EvaosTeamsEntitlement,
+    expected_relay: &str,
+    public_key: &str,
+) -> Result<EvaosTeamsEntitlement, String> {
+    if entitlement.relay_host != expected_relay || entitlement.public_key.is_some() {
+        return Err("Managed key verification changed the server-selected scope".to_string());
+    }
+    entitlement.public_key = Some(public_key.to_string());
+    validate_entitlement(&entitlement, public_key)?;
+    Ok(entitlement)
+}
+
 fn validate_challenge(
     response: &ChallengeResponse,
     expected_public_key: &str,
@@ -797,11 +810,13 @@ async fn bind_identity(
     )
     .await
     .map_err(|error| format!("Managed key challenge was rejected: {error}"))?;
-    if verified.status != "active" || verified.entitlement.relay_host != challenge.relay_host {
-        return Err("Managed key verification changed the server-selected scope".to_string());
+    if verified.status != "active" {
+        return Err("Managed key verification did not activate access".to_string());
     }
-    validate_entitlement(&verified.entitlement, &public_key)?;
-    Ok(verified.entitlement)
+    // The verification response intentionally omits public_key; the key is
+    // already bound by the exact signed challenge above. Install the locally
+    // derived public key so every later entitlement validation stays strict.
+    bind_verified_entitlement(verified.entitlement, &challenge.relay_host, &public_key)
 }
 
 /// Start an account-selecting browser login and complete device-code claim and
