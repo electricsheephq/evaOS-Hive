@@ -67,7 +67,14 @@ const settingsNavGroups: Array<{
   },
   {
     label: "App",
-    sections: ["agents", "compute", "experimental", "mobile", "updates"],
+    sections: [
+      "agents",
+      "compute",
+      "experimental",
+      "mobile",
+      "updates",
+      "about",
+    ],
   },
 ];
 
@@ -136,12 +143,19 @@ export function SettingsView({
         [
           "agents",
           "channel-templates",
+          "compute",
+          "experimental",
           "hosted-communities",
           "community-members",
           "moderation",
           "custom-emoji",
+          "local-archive",
+          "mobile",
         ].includes(s.value)
       ) {
+        return false;
+      }
+      if (!authority.managed && s.value === "about") {
         return false;
       }
       // Feature gate check. Manifest is preview-only — if the gate id is in

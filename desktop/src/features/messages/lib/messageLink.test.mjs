@@ -7,6 +7,10 @@ import {
   parseMessageLink,
   resolveMessageLinkRenderTarget,
 } from "./messageLink.ts";
+import {
+  installDesktopProductPolicy,
+  resetDesktopProductPolicyForTests,
+} from "@/shared/product/productIdentity";
 
 const CHANNEL = "f570339f-8f8a-4e08-a779-8d954aa44109";
 const MESSAGE =
@@ -104,16 +108,43 @@ test("parseMessageLink accepts legacy buzz://message links", () => {
   });
 });
 
-test("isMessageLink matches buzz://message and legacy buzz://message", () => {
+test("managed product builds and parses evaos-teams://message links", () => {
+  try {
+    installDesktopProductPolicy({
+      managed: true,
+      productName: "evaOS Teams",
+      version: "0.4.23-es.1",
+      bundleIdentifier: "com.electricsheephq.evaos.teams",
+      deepLinkScheme: "evaos-teams",
+      artifactName: "evaOS-Teams-0.4.23-es.1-arm64.dmg",
+      updateChannel: "managed-beta",
+      updaterEnabled: false,
+      upstreamHostedServicesEnabled: false,
+      originAttribution:
+        "Built from Buzz by Block, used under the Apache License 2.0.",
+    });
+    const url = buildMessageLink({
+      channelId: CHANNEL,
+      messageId: MESSAGE,
+    });
+    assert.equal(url, `evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`);
+    assert.equal(parseMessageLink(url).ok, true);
+    assert.equal(isMessageLink(url), true);
+  } finally {
+    resetDesktopProductPolicyForTests();
+  }
+});
+
+test("isMessageLink matches both product message schemes", () => {
   assert.equal(
-    isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
+    isMessageLink(`evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`),
     true,
   );
   assert.equal(
     isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
     true,
   );
-  assert.equal(isMessageLink("buzz://connect?relay=wss://x"), false);
+  assert.equal(isMessageLink("evaos-teams://connect?relay=wss://x"), false);
   assert.equal(isMessageLink("buzz://connect?relay=wss://x"), false);
   assert.equal(isMessageLink("https://example.com"), false);
   assert.equal(isMessageLink(undefined), false);

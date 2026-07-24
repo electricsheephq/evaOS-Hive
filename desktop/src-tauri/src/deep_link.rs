@@ -291,7 +291,7 @@ fn parse_nostr_bind_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, Str
     })
 }
 
-/// Handle an incoming `buzz://` deep link URL.
+/// Handle an incoming product deep link URL.
 ///
 /// Currently supports:
 /// - `buzz://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
@@ -304,15 +304,13 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
     };
 
-    if url.scheme() == "evaos-teams" {
-        #[cfg(feature = "evaos-teams-managed")]
-        if crate::evaos_teams::handle_login_deep_link(app, &url) {
-            activate_main_window(app);
-        }
+    #[cfg(feature = "evaos-teams-managed")]
+    if url.scheme() == "evaos-teams" && crate::evaos_teams::handle_login_deep_link(app, &url) {
+        activate_main_window(app);
         return;
     }
 
-    if url.scheme() != "buzz" {
+    if !deep_link_scheme_allowed(url.scheme(), cfg!(feature = "evaos-teams-managed")) {
         eprintln!("buzz-desktop: ignoring unsupported deep link scheme");
         return;
     }
@@ -403,14 +401,22 @@ fn managed_deep_link_allowed(action: Option<&str>) -> bool {
     matches!(action, Some("message"))
 }
 
+fn deep_link_scheme_allowed(scheme: &str, managed: bool) -> bool {
+    if managed {
+        scheme == "evaos-teams"
+    } else {
+        scheme == "buzz"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use url::Url;
 
     use super::{
-        managed_deep_link_allowed, parse_add_community_deep_link, parse_join_deep_link,
-        parse_message_deep_link, parse_nostr_bind_deep_link, PendingCommunityDeepLink,
-        PendingCommunityDeepLinks,
+        deep_link_scheme_allowed, managed_deep_link_allowed, parse_add_community_deep_link,
+        parse_join_deep_link, parse_message_deep_link, parse_nostr_bind_deep_link,
+        PendingCommunityDeepLink, PendingCommunityDeepLinks,
     };
 
     #[test]
@@ -419,6 +425,20 @@ mod tests {
         for action in ["connect", "join", "add-community", "nostr-bind"] {
             assert!(!managed_deep_link_allowed(Some(action)), "{action}");
         }
+    }
+
+    #[test]
+    fn product_variant_accepts_only_its_registered_scheme() {
+        assert!(deep_link_scheme_allowed("buzz", false));
+        assert!(!deep_link_scheme_allowed("evaos-teams", false));
+        assert!(deep_link_scheme_allowed("evaos-teams", true));
+        assert!(!deep_link_scheme_allowed("buzz", true));
+    }
+
+    #[test]
+    fn managed_message_links_parse_through_evaos_teams_scheme() {
+        let url = Url::parse("evaos-teams://message?channel=abc&id=xyz").unwrap();
+        assert!(parse_message_deep_link(&url).is_some());
     }
 
     fn pending(id: &str, relay_url: &str, code: Option<&str>) -> PendingCommunityDeepLink {

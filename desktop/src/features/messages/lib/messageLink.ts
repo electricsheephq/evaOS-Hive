@@ -4,8 +4,10 @@
  * Format: `buzz://message?channel=<uuid>&id=<eventId>[&thread=<rootId>]`
  */
 
-const MESSAGE_LINK_SCHEME = "buzz:";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
+
 const MESSAGE_LINK_HOST = "message";
+const MESSAGE_LINK_SCHEMES = new Set(["buzz:", "evaos-teams:"]);
 
 export type MessageLinkInput = {
   channelId: string;
@@ -52,7 +54,7 @@ export function buildMessageLink(input: MessageLinkInput): string {
   if (input.threadRootId) {
     params.set("thread", input.threadRootId);
   }
-  return `${MESSAGE_LINK_SCHEME}//${MESSAGE_LINK_HOST}?${params.toString()}`;
+  return `${desktopProductPolicy().deepLinkScheme}://${MESSAGE_LINK_HOST}?${params.toString()}`;
 }
 
 /**
@@ -67,7 +69,7 @@ export function parseMessageLink(url: string): MessageLinkParseResult {
     return { ok: false, reason: "invalid-url" };
   }
 
-  if (parsed.protocol !== MESSAGE_LINK_SCHEME) {
+  if (!MESSAGE_LINK_SCHEMES.has(parsed.protocol)) {
     return { ok: false, reason: "wrong-scheme" };
   }
   // `new URL("buzz://message?…")` puts "message" in `hostname`.
@@ -100,7 +102,9 @@ export function parseMessageLink(url: string): MessageLinkParseResult {
  */
 export function isMessageLink(href: string | undefined | null): boolean {
   if (!href) return false;
-  return href.startsWith("buzz://message?") || href === "buzz://message";
+  return ["buzz://message", "evaos-teams://message"].some(
+    (prefix) => href === prefix || href.startsWith(`${prefix}?`),
+  );
 }
 
 type MessageLinkRenderInput = {

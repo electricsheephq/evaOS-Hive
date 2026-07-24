@@ -4,6 +4,7 @@ import { useHomeFeedQuery } from "@/features/home/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel, FeedItem, HomeFeedResponse } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   getDesktopNotificationPermissionState,
   requestDesktopNotificationAccess,
@@ -237,7 +238,7 @@ export function useNotificationSettings(pubkey?: string) {
         }));
         setErrorMessage(
           nextPermission === "denied"
-            ? "Desktop notifications are blocked for Buzz. Enable them in system settings to turn alerts on."
+            ? `Desktop notifications are blocked for ${desktopProductPolicy().productName}. Enable them in system settings to turn alerts on.`
             : "Desktop notifications are unavailable in this environment.",
         );
         return false;

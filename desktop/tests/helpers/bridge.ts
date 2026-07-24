@@ -127,6 +127,10 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /** Run the renderer under the managed evaOS Teams product/auth contract. */
+  evaosTeamsManaged?: boolean;
+  /** Managed auth state returned by the mock. Defaults to active. */
+  evaosTeamsPhase?: "active" | "signed_out" | "keychain_locked";
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */

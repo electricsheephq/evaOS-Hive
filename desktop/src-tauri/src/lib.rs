@@ -22,6 +22,8 @@ mod native_websocket;
 mod nostr_bind;
 pub mod nostr_convert;
 mod prevent_sleep;
+mod product_contract;
+mod product_policy;
 mod ptt_shortcut;
 mod relay;
 mod relay_admission;
@@ -56,6 +58,7 @@ use managed_agents::{
 };
 #[cfg(not(feature = "mesh-llm"))]
 use mesh_llm_stubs::*;
+use product_policy::get_desktop_product_policy;
 #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
 use shutdown::{hard_exit_after_mesh_shutdown, relaunch_after_mesh_shutdown};
 use shutdown::{is_restart_request, shut_down_app};
@@ -173,9 +176,9 @@ pub fn run() {
             }
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
-                if arg.starts_with("buzz://")
-                    || (cfg!(feature = "evaos-teams-managed")
-                        && arg.starts_with("evaos-teams://"))
+                let managed = cfg!(feature = "evaos-teams-managed");
+                if (managed && arg.starts_with("evaos-teams://"))
+                    || (!managed && arg.starts_with("buzz://"))
                 {
                     handle_deep_link_url(app, arg);
                 }
@@ -337,14 +340,14 @@ pub fn run() {
     });
 
     // Register the updater only in configured release builds; omit it locally.
-    #[cfg(buzz_updater_enabled)]
+    #[cfg(all(buzz_updater_enabled, not(feature = "evaos-teams-managed")))]
     let builder = if cfg!(debug_assertions) {
         builder
     } else {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
 
-    #[cfg(not(buzz_updater_enabled))]
+    #[cfg(any(not(buzz_updater_enabled), feature = "evaos-teams-managed"))]
     let builder = builder;
 
     let app = builder
@@ -663,6 +666,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_desktop_product_policy,
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             start_builderlab_login,

@@ -3,6 +3,7 @@ import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import {
@@ -165,8 +166,9 @@ export function SendFeedbackDialog({
             className="pt-2 text-sm text-muted-foreground"
             data-testid="feedback-privacy-disclosure"
           >
-            Feedback is sent privately to this Buzz deployment and is not posted
-            to a channel. Attachments are uploaded before you send.
+            Feedback is sent privately to this{" "}
+            {desktopProductPolicy().productName} deployment and is not posted to
+            a channel. Attachments are uploaded before you send.
           </p>
         </DialogHeader>
 

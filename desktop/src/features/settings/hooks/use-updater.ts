@@ -1,13 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { isAutoUpdateSupported } from "@/shared/api/tauri";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 export type UpdateStatus =
   | { state: "idle" }
   | { state: "checking" }
   | { state: "up-to-date" }
   | { state: "unavailable" }
+  | { state: "managed"; message: string }
   | { state: "available"; version: string }
   | { state: "downloading" }
   | { state: "installing" }
@@ -47,13 +48,22 @@ function canRunBackgroundCheck(status: UpdateStatus): boolean {
   return !BACKGROUND_BLOCKED_STATES.has(status.state);
 }
 
-function initialUpdateStatus(): UpdateStatus {
-  return { state: "idle" };
+function initialUpdateStatus(managed: boolean): UpdateStatus {
+  return managed
+    ? {
+        state: "managed",
+        message:
+          "Updates are managed by Electric Sheep and are checked when a new canary is assigned.",
+      }
+    : { state: "idle" };
 }
 
 export function useUpdater() {
-  const [status, setStatusState] = useState<UpdateStatus>(initialUpdateStatus);
-  const statusRef = useRef<UpdateStatus>(initialUpdateStatus());
+  const managed = desktopProductPolicy().managed;
+  const [status, setStatusState] = useState<UpdateStatus>(() =>
+    initialUpdateStatus(managed),
+  );
+  const statusRef = useRef<UpdateStatus>(initialUpdateStatus(managed));
   const updateRef = useRef<Update | null>(null);
   const checkInFlightRef = useRef(false);
   const downloadInFlightRef = useRef(false);
@@ -77,7 +87,7 @@ export function useUpdater() {
   }, []);
 
   const downloadUpdate = useCallback(async () => {
-    if (downloadInFlightRef.current) {
+    if (managed || downloadInFlightRef.current) {
       return;
     }
 
@@ -96,10 +106,10 @@ export function useUpdater() {
     } finally {
       downloadInFlightRef.current = false;
     }
-  }, [setStatus]);
+  }, [managed, setStatus]);
 
   const installAndRelaunch = useCallback(async () => {
-    if (installInFlightRef.current) {
+    if (managed || installInFlightRef.current) {
       return;
     }
 
@@ -113,16 +123,20 @@ export function useUpdater() {
       setStatus({ state: "installing" });
       await update.install();
       updateRef.current = null;
+      const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (err) {
       setStatus({ state: "error", message: toErrorMessage(err) });
     } finally {
       installInFlightRef.current = false;
     }
-  }, [setStatus]);
+  }, [managed, setStatus]);
 
   const runUpdateCheck = useCallback(
     async ({ background }: { background: boolean }) => {
+      if (managed) {
+        return;
+      }
       if (checkInFlightRef.current) {
         if (!background) {
           manualResultRequestedRef.current = true;
@@ -145,6 +159,7 @@ export function useUpdater() {
           setStatus({ state: "checking" });
         }
 
+        const { check } = await import("@tauri-apps/plugin-updater");
         const update = await check({
           headers: { "Cache-Control": "no-cache" },
         });
@@ -198,7 +213,7 @@ export function useUpdater() {
         checkInFlightRef.current = false;
       }
     },
-    [closeUpdate, downloadUpdate, setStatus],
+    [closeUpdate, downloadUpdate, managed, setStatus],
   );
 
   const checkForUpdate = useCallback(async () => {
@@ -210,6 +225,9 @@ export function useUpdater() {
   }, [runUpdateCheck]);
 
   useEffect(() => {
+    if (managed) {
+      return;
+    }
     void checkForUpdateInBackground();
 
     const intervalId = window.setInterval(() => {
@@ -220,7 +238,7 @@ export function useUpdater() {
       window.clearInterval(intervalId);
       closeUpdate();
     };
-  }, [checkForUpdateInBackground, closeUpdate]);
+  }, [checkForUpdateInBackground, closeUpdate, managed]);
 
   return {
     status,

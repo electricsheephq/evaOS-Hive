@@ -1,4 +1,3 @@
-import { isTauri } from "@tauri-apps/api/core";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import {
@@ -15,15 +14,16 @@ import {
   nativeEvaosTeamsAuthority,
 } from "@/features/evaosTeams/authority";
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
+import { ProductMark } from "@/shared/product/ProductMark";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { removeChannelSnapshotForRelay } from "@/features/channels/channelSnapshot";
 import { removeMessageSnapshotsForRelay } from "@/features/messages/lib/messageSnapshot";
 import { clearSavedCommunitySnapshot } from "@/features/agents/activeAgentTurnsStore";
 
 export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
-  const tauri = isTauri();
+  const managedProduct = desktopProductPolicy().managed;
   const [status, setStatus] = useState<EvaosTeamsAuthStatus | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,9 +48,9 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!tauri) return;
+    if (!managedProduct) return;
     void refresh();
-  }, [refresh, tauri]);
+  }, [managedProduct, refresh]);
 
   useEffect(() => {
     if (
@@ -93,7 +93,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     }
   }
 
-  if (!tauri || (status && !status.managed)) {
+  if (!managedProduct || (status && !status.managed)) {
     return (
       <EvaosTeamsAuthorityProvider authority={nativeEvaosTeamsAuthority}>
         {children}
@@ -124,7 +124,10 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
       <StartupWindowDragRegion />
       <ThemeGrainientBackground />
       <section className="relative z-10 w-full max-w-md rounded-2xl border border-border/70 bg-background/90 p-7 shadow-2xl backdrop-blur-xl">
-        <BuzzMark className="mb-6 h-11 w-auto text-foreground" />
+        <ProductMark
+          className="mb-6 h-11 w-auto text-foreground"
+          imageClassName="mb-6 h-14 w-14 rounded-[22%]"
+        />
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
           evaOS Teams
         </p>

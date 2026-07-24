@@ -133,6 +133,10 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /** Run the renderer under the managed evaOS Teams product/auth contract. */
+    evaosTeamsManaged?: boolean;
+    /** Managed auth state returned by the mock. Defaults to active. */
+    evaosTeamsPhase?: "active" | "signed_out" | "keychain_locked";
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -9125,7 +9129,67 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_desktop_product_policy":
+        return activeConfig?.mock?.evaosTeamsManaged
+          ? {
+              managed: true,
+              productName: "evaOS Teams",
+              version: "0.4.23-es.1",
+              bundleIdentifier: "com.electricsheephq.evaos.teams",
+              deepLinkScheme: "evaos-teams",
+              artifactName: "evaOS-Teams-0.4.23-es.1-arm64.dmg",
+              updateChannel: "managed-beta",
+              updaterEnabled: false,
+              upstreamHostedServicesEnabled: false,
+              originAttribution:
+                "Built from Buzz by Block, used under the Apache License 2.0.",
+            }
+          : {
+              managed: false,
+              productName: "Buzz",
+              version: "0.4.23",
+              bundleIdentifier: "xyz.block.buzz.app",
+              deepLinkScheme: "buzz",
+              artifactName: "",
+              updateChannel: "upstream",
+              updaterEnabled: false,
+              upstreamHostedServicesEnabled: true,
+              originAttribution:
+                "Buzz by Block, licensed under the Apache License 2.0.",
+            };
       case "get_evaos_teams_auth_status":
+        if (activeConfig?.mock?.evaosTeamsManaged) {
+          const phase = activeConfig.mock.evaosTeamsPhase ?? "active";
+          if (phase !== "active") {
+            return {
+              managed: true,
+              phase,
+              authenticated: false,
+              keychainAvailable: phase !== "keychain_locked",
+              message:
+                phase === "keychain_locked"
+                  ? "evaOS Teams cannot read its managed identity."
+                  : undefined,
+            };
+          }
+          return {
+            managed: true,
+            phase: "active",
+            authenticated: true,
+            keychainAvailable: true,
+            entitlement: {
+              communityId: "e2e-default-community",
+              relayHost: "https://localhost:3000",
+              publicKey: identity?.pubkey ?? "deadbeef".repeat(8),
+              role: "employee",
+              assignmentStatus: "assigned",
+              reconciliationStatus: "current",
+              accessRevision: 1,
+              expiresAt: "2099-01-01T00:00:00Z",
+              refreshAfterSeconds: 3600,
+            },
+          };
+        }
         return {
           managed: false,
           phase: "native",
