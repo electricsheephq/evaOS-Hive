@@ -62,6 +62,7 @@ for (const [source, forbidden, description] of [
   ],
   [acp, /target: "acp::wire"[^;]*\{trimmed\}/s, "raw inbound ACP wire logging"],
   [acp, /"line": trimmed/, "raw ACP parse-error observation"],
+  [acp, /initialize response: \{result\}/, "raw ACP initialize logging"],
   [pool, /session_prompt error: \{e\}/, "raw ACP error logging"],
   [relay, /raw: \{text\}/, "raw relay frame logging"],
   [relay, /relay NOTICE: \{message\}/, "raw relay NOTICE logging"],
@@ -72,6 +73,7 @@ for (const [source, forbidden, description] of [
 }
 assert.match(acp, /pub\(crate\) fn log_class/);
 assert.match(acp, /fn wire_log_metadata/);
+assert.match(acp, /fn initialize_log_metadata/);
 assert.match(relay, /fn relay_reply_class/);
 assert.match(relay, /fn log_class\(&self\)/);
 assert.match(workspaceCommands, /validate_managed_workspace_icon_request/);
@@ -103,6 +105,14 @@ assert.match(nativeWebsocket, /struct ManagedConnectionAuthority/);
 assert.match(
   nativeWebsocket,
   /is_some_and\(\|authority\| !authority\.is_current\(\)\)/,
+);
+assert.match(
+  nativeWebsocket,
+  /serde_json::to_value\(OutboundMessage::Close\(None\)\)/,
+);
+assert.match(
+  read("desktop/src-tauri/src/app_state/signing.rs"),
+  /fetch_add\(1, Ordering::AcqRel\)[\s\S]*evaos_teams_authorized\.store\(false, Ordering::Release\)/,
 );
 assert.match(productContract, /EVAOS_TEAMS_CSP/);
 assert.match(productContract, /"csp": EVAOS_TEAMS_CSP/);

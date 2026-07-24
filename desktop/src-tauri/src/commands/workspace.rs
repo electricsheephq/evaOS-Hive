@@ -159,7 +159,7 @@ pub async fn validate_repos_dir(dir: String) -> Result<(), String> {
     #[cfg(feature = "evaos-teams-managed")]
     {
         let _ = dir;
-        return Err("Managed workspaces cannot override the repositories directory".to_string());
+        Err("Managed workspaces cannot override the repositories directory".to_string())
     }
     #[cfg(not(feature = "evaos-teams-managed"))]
     tokio::task::spawn_blocking(move || {

@@ -81,6 +81,17 @@ blockers. Each has one terminal disposition in the revised candidate:
    removing the loopback wildcard and retaining only the `buzz-media:` asset
    protocol.
 
+The delta-only review of
+`6242044bbeecf5809e5663ecf44f5cc12f521720..2b00d9568e661cf0e3c6beddd5ac482fd005b7cd`
+found two additional fix-lane blockers:
+
+1. Raw ACP initialize-result logging — **fixed now** with content-free
+   capability/auth-method/byte counts and a sentinel/static regression.
+2. Refresh-driven socket invalidation and transition ordering — **fixed now**
+   by preserving the generation for materially identical unexpired authority,
+   incrementing it before any changed authority state, and emitting a
+   content-free terminal callback when a socket becomes stale.
+
 ## Exact next gate
 
 The source candidate may advance only after focused tests, canonical CI, and an

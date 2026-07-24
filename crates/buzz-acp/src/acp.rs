@@ -189,6 +189,22 @@ fn log_wire_message(direction: &'static str, message: &serde_json::Value, byte_c
     );
 }
 
+fn initialize_log_metadata(result: &serde_json::Value) -> (usize, usize, usize) {
+    let capability_count = result
+        .get("agentCapabilities")
+        .and_then(serde_json::Value::as_object)
+        .map_or(0, serde_json::Map::len);
+    let auth_method_count = result
+        .get("authMethods")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    (
+        capability_count,
+        auth_method_count,
+        result.to_string().len(),
+    )
+}
+
 /// ACP client that owns an agent subprocess and communicates over its stdio.
 ///
 /// One `AcpClient` per agent process. Multiple sessions can be created on the
@@ -594,7 +610,14 @@ impl AcpClient {
         // on ACP v2 ahead of the upstream ACP RFD. Revisit when that RFD merges.
         let params = build_initialize_params();
         let result = self.send_request("initialize", params).await?;
-        tracing::debug!(target: "acp::init", "initialize response: {result}");
+        let (capability_count, auth_method_count, byte_count) = initialize_log_metadata(&result);
+        tracing::debug!(
+            target: "acp::init",
+            capability_count,
+            auth_method_count,
+            byte_count,
+            "ACP initialization complete"
+        );
         Ok(result)
     }
 
@@ -3625,6 +3648,27 @@ mod tests {
         let rendered = format!("{method_class}:{numeric_id:?}:{byte_count}");
         assert_eq!(method_class, "other_method");
         assert_eq!(numeric_id, None);
+        assert!(!rendered.contains("sentinel"));
+    }
+
+    #[test]
+    fn initialize_log_metadata_never_copies_auth_or_provider_content() {
+        let result = serde_json::json!({
+            "agentCapabilities": {
+                "loadSession": true,
+                "promptCapabilities": {"image": true}
+            },
+            "authMethods": [{
+                "id": "sentinel-terminal-setup",
+                "name": "sentinel-provider-credential"
+            }],
+            "provider": "sentinel-provider",
+            "detail": "sentinel-secret"
+        });
+        let (capability_count, auth_method_count, byte_count) = initialize_log_metadata(&result);
+        let rendered = format!("{capability_count}:{auth_method_count}:{byte_count}");
+        assert_eq!(capability_count, 2);
+        assert_eq!(auth_method_count, 1);
         assert!(!rendered.contains("sentinel"));
     }
 

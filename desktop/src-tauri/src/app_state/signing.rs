@@ -97,6 +97,49 @@ impl AppState {
     /// expiry task. The transition lock and generation token make refresh and
     /// expiry mutually exclusive; the timer is independent of huddle sockets.
     #[cfg(feature = "evaos-teams-managed")]
+    fn install_evaos_teams_access_state(
+        &self,
+        keys: Keys,
+        relay: String,
+        expires_at: i64,
+        now: i64,
+    ) -> Result<u64, String> {
+        let _transition = self
+            .evaos_teams_access_transition
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut current_keys = self.keys.lock().map_err(|error| error.to_string())?;
+        let mut current_relay = self
+            .relay_url_override
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let same_authority = self.evaos_teams_authorized.load(Ordering::Acquire)
+            && self.evaos_teams_expires_at.load(Ordering::Acquire) > now
+            && current_keys.public_key() == keys.public_key()
+            && current_relay.as_deref() == Some(relay.as_str());
+
+        let generation = if same_authority {
+            self.evaos_teams_access_generation.load(Ordering::Acquire)
+        } else {
+            // Invalidate existing sockets before changing any authority state.
+            // Their inbound loop observes this generation with Acquire ordering
+            // and emits a content-free terminal callback before renderer delivery.
+            let generation = self
+                .evaos_teams_access_generation
+                .fetch_add(1, Ordering::AcqRel)
+                .wrapping_add(1);
+            self.evaos_teams_authorized.store(false, Ordering::Release);
+            *current_keys = keys;
+            *current_relay = Some(relay);
+            generation
+        };
+        self.evaos_teams_expires_at
+            .store(expires_at, Ordering::Release);
+        self.evaos_teams_authorized.store(true, Ordering::Release);
+        Ok(generation)
+    }
+
+    #[cfg(feature = "evaos-teams-managed")]
     pub(crate) fn install_evaos_teams_access(
         &self,
         keys: Keys,
@@ -111,26 +154,12 @@ impl AppState {
             .map_err(|error| error.to_string())?
             .clone()
             .ok_or_else(|| "managed entitlement expiry task is unavailable".to_string())?;
-        let generation = {
-            let _transition = self
-                .evaos_teams_access_transition
-                .lock()
-                .map_err(|error| error.to_string())?;
-            self.evaos_teams_authorized.store(false, Ordering::Release);
-            *self.keys.lock().map_err(|error| error.to_string())? = keys;
-            *self
-                .relay_url_override
-                .lock()
-                .map_err(|error| error.to_string())? = Some(relay);
-            self.evaos_teams_expires_at
-                .store(expires_at, Ordering::Release);
-            let generation = self
-                .evaos_teams_access_generation
-                .fetch_add(1, Ordering::AcqRel)
-                .wrapping_add(1);
-            self.evaos_teams_authorized.store(true, Ordering::Release);
-            generation
-        };
+        let generation = self.install_evaos_teams_access_state(
+            keys,
+            relay,
+            expires_at,
+            chrono::Utc::now().timestamp(),
+        )?;
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -188,5 +217,61 @@ impl AppState {
             .lock()
             .map_err(|e| e.to_string())
             .map(|keys| keys.clone())
+    }
+}
+
+#[cfg(all(test, feature = "evaos-teams-managed"))]
+mod tests {
+    use super::*;
+    use crate::app_state::build_app_state;
+
+    #[test]
+    fn identical_refresh_preserves_generation_but_authority_change_invalidates_first() {
+        let state = build_app_state();
+        let keys = Keys::generate();
+        let now = 1_000;
+        let first_generation = state
+            .install_evaos_teams_access_state(
+                keys.clone(),
+                "wss://relay-a.example.com".to_string(),
+                now + 60,
+                now,
+            )
+            .unwrap();
+        assert_eq!(first_generation, 1);
+
+        let refresh_generation = state
+            .install_evaos_teams_access_state(
+                keys,
+                "wss://relay-a.example.com".to_string(),
+                now + 120,
+                now + 30,
+            )
+            .unwrap();
+        assert_eq!(refresh_generation, first_generation);
+        assert_eq!(
+            state.evaos_teams_access_generation.load(Ordering::Acquire),
+            first_generation
+        );
+        assert!(state.evaos_teams_authorized.load(Ordering::Acquire));
+
+        let switched_generation = state
+            .install_evaos_teams_access_state(
+                Keys::generate(),
+                "wss://relay-b.example.com".to_string(),
+                now + 180,
+                now + 40,
+            )
+            .unwrap();
+        assert_eq!(switched_generation, first_generation + 1);
+        assert_eq!(
+            state.evaos_teams_access_generation.load(Ordering::Acquire),
+            switched_generation
+        );
+        assert!(state.evaos_teams_authorized.load(Ordering::Acquire));
+        assert_eq!(
+            state.relay_url_override.lock().unwrap().as_deref(),
+            Some("wss://relay-b.example.com")
+        );
     }
 }

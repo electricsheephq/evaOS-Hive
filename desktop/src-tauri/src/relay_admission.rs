@@ -89,6 +89,7 @@ pub async fn wait_for_rate_limit() {
 /// Called by `apply_workspace` to ensure a 429 from community A does not stall
 /// requests to community B. Mirrors `resetRateLimitGate()` in
 /// `useCommunityInit.ts`.
+#[cfg_attr(feature = "evaos-teams-managed", allow(dead_code))]
 pub fn reset_gate_for_workspace_change() {
     *GATE_EXPIRY.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }

@@ -415,6 +415,9 @@ async fn run_connection<S>(
                     .as_ref()
                     .is_some_and(|authority| !authority.is_current())
                 {
+                    if let Ok(value) = serde_json::to_value(OutboundMessage::Close(None)) {
+                        let _ = on_message.send(value);
+                    }
                     break;
                 }
                 let message = match incoming {
@@ -654,10 +657,12 @@ mod tests {
             WebSocketStream::from_raw_socket(server_io, Role::Server, None),
         );
         let (sender, receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
-        let delivered = Arc::new(AtomicBool::new(false));
-        let delivered_for_channel = delivered.clone();
-        let channel = Channel::new(move |_: InvokeResponseBody| {
-            delivered_for_channel.store(true, Ordering::SeqCst);
+        let terminal_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let terminal_messages_for_channel = terminal_messages.clone();
+        let channel = Channel::new(move |body: InvokeResponseBody| {
+            if let InvokeResponseBody::Json(json) = body {
+                terminal_messages_for_channel.lock().unwrap().push(json);
+            }
             Ok(())
         });
         let generation = Arc::new(AtomicU64::new(7));
@@ -696,8 +701,17 @@ mod tests {
         })
         .await
         .expect("stale managed socket must close after entitlement transition");
+        let terminal_messages = terminal_messages.lock().unwrap();
+        assert_eq!(
+            terminal_messages.len(),
+            1,
+            "stale managed socket must emit one terminal callback"
+        );
+        let terminal: serde_json::Value =
+            serde_json::from_str(&terminal_messages[0]).expect("terminal callback must be JSON");
+        assert_eq!(terminal["type"], "Close");
         assert!(
-            !delivered.load(Ordering::SeqCst),
+            !terminal_messages[0].contains("sentinel-cross-tenant-event"),
             "stale managed content must not reach the renderer"
         );
     }
