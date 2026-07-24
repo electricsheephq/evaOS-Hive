@@ -24,6 +24,7 @@ mod legacy_storage;
 mod link_preview;
 pub(crate) mod managed_authority;
 pub(crate) mod media;
+mod media_animated;
 mod media_download;
 mod media_gif;
 mod media_transcode;
