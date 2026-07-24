@@ -38,7 +38,12 @@ fn configure_managed_deep_link_scheme() {
             }
         }),
     );
-    std::env::set_var("TAURI_CONFIG", config.to_string());
+    let config = config.to_string();
+    std::env::set_var("TAURI_CONFIG", &config);
+    // `tauri_build` reads the build-script process environment, while
+    // `tauri::generate_context!()` expands later in rustc. Propagate the same
+    // merged overlay to rustc so runtime context and bundle registration agree.
+    println!("cargo:rustc-env=TAURI_CONFIG={config}");
 }
 
 fn main() {
