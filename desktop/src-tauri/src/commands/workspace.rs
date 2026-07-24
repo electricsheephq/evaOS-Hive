@@ -249,12 +249,14 @@ pub async fn apply_workspace(
         };
 
         // ── Apply all state changes (nothing below can fail) ──────────────────
+        #[cfg(not(feature = "evaos-teams-managed"))]
         {
             let mut override_guard = state.relay_url_override.lock().map_err(|e| e.to_string())?;
             *override_guard = Some(relay_url);
         }
         // Reset the Rust-side admission gate when switching workspace/community,
         // matching `resetRateLimitGate()` on the TS side (useCommunityInit.ts:38).
+        #[cfg(not(feature = "evaos-teams-managed"))]
         crate::relay_admission::reset_gate_for_workspace_change();
 
         if let Some(keys) = parsed_keys {

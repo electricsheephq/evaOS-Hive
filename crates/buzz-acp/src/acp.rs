@@ -150,6 +150,45 @@ fn build_initialize_params() -> serde_json::Value {
     })
 }
 
+/// Content-free metadata for ACP wire diagnostics.
+///
+/// Method names and string IDs are agent-controlled, so only known method
+/// classes and numeric IDs are exposed. Payloads remain available to the
+/// in-process observer but never enter service logs.
+fn wire_log_metadata(
+    message: &serde_json::Value,
+    byte_count: usize,
+) -> (&'static str, Option<u64>, usize) {
+    let method_class = match message.get("method").and_then(|value| value.as_str()) {
+        Some("initialize") => "initialize",
+        Some("session/new") => "session_new",
+        Some("session/load") => "session_load",
+        Some("session/prompt") => "session_prompt",
+        Some("session/cancel") => "session_cancel",
+        Some("session/update") => "session_update",
+        Some("session/request_permission") => "session_request_permission",
+        Some("_goose/unstable/session/update") => "goose_session_update",
+        Some("_goose/unstable/session/steer") => "goose_session_steer",
+        Some(_) => "other_method",
+        None if message.get("id").is_some() => "response",
+        None => "other",
+    };
+    let numeric_id = message.get("id").and_then(|value| value.as_u64());
+    (method_class, numeric_id, byte_count)
+}
+
+fn log_wire_message(direction: &'static str, message: &serde_json::Value, byte_count: usize) {
+    let (method_class, numeric_id, byte_count) = wire_log_metadata(message, byte_count);
+    tracing::debug!(
+        target: "acp::wire",
+        direction,
+        method_class,
+        numeric_id,
+        byte_count,
+        "ACP wire message"
+    );
+}
+
 /// ACP client that owns an agent subprocess and communicates over its stdio.
 ///
 /// One `AcpClient` per agent process. Multiple sessions can be created on the
@@ -733,7 +772,7 @@ impl AcpClient {
             "params": params,
         });
 
-        tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&msg).unwrap_or_default());
+        log_wire_message("outbound", &msg, msg.to_string().len());
         if let Err(e) = self.write_ndjson(&msg).await {
             self.last_prompt_id = None;
             self.current_hard_deadline = None;
@@ -1024,7 +1063,7 @@ impl AcpClient {
             "params": params,
         });
 
-        tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&msg).unwrap_or_default());
+        log_wire_message("outbound", &msg, msg.to_string().len());
 
         // Wrap write + read in a single timeout so a hung agent can't block forever.
         // We cannot use an async block that borrows `self` mutably across two awaits
@@ -1089,7 +1128,7 @@ impl AcpClient {
             "params": params,
         });
 
-        tracing::debug!(target: "acp::wire", "→ (notification) {}", &serde_json::to_string(&msg).unwrap_or_default());
+        log_wire_message("outbound", &msg, msg.to_string().len());
         self.write_ndjson(&msg).await?;
         Ok(())
     }
@@ -1130,26 +1169,26 @@ impl AcpClient {
                 continue;
             }
 
-            // Only log and reset idle after we have a valid non-empty line.
-            tracing::debug!(target: "acp::wire", "← {trimmed}");
-
             let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
                 Err(e) => {
                     self.observe(
                         "acp_parse_error",
                         serde_json::json!({
-                            "line": trimmed,
-                            "error": e.to_string(),
+                            "byte_count": trimmed.len(),
+                            "error_class": format!("{:?}", e.classify()),
                         }),
                     );
                     tracing::warn!(
                         target: "acp::wire",
-                        "failed to parse line as JSON: {e} — skipping"
+                        byte_count = trimmed.len(),
+                        error_class = ?e.classify(),
+                        "failed to parse ACP JSON; skipping"
                     );
                     continue;
                 }
             };
+            log_wire_message("inbound", &msg, trimmed.len());
             self.observe("acp_read", msg.clone());
 
             // Check if this is a response to our expected request (has matching id
@@ -1190,7 +1229,10 @@ impl AcpClient {
                             // agent process is dead and continuing would hang.
                             self.write_ndjson(&err_resp).await?;
                         }
-                        tracing::debug!(target: "acp::wire", "ignoring unknown method: {other}");
+                        tracing::debug!(
+                            target: "acp::wire",
+                            "ignoring unknown ACP method"
+                        );
                     }
                 }
             }
@@ -1346,18 +1388,15 @@ impl AcpClient {
                                 "method": "_goose/unstable/session/steer",
                                 "params": params,
                             });
-                            tracing::debug!(
-                                target: "acp::wire",
-                                "→ {}",
-                                serde_json::to_string(&msg).unwrap_or_default()
-                            );
+                            log_wire_message("outbound", &msg, msg.to_string().len());
                             match self.write_ndjson(&msg).await {
                                 Ok(()) => {
                                     pending_steer = Some((id, req.ack_tx));
                                 }
                                 Err(e) => {
                                     tracing::warn!(
-                                        "goose-native steer write failed: {e} — releasing withheld event"
+                                        error_class = e.log_class(),
+                                        "goose-native steer write failed; releasing withheld event"
                                     );
                                     let _ = req.ack_tx.send(crate::pool::SteerAck::Err(
                                         crate::pool::SteerError::Transport(e.to_string()),
@@ -1425,25 +1464,26 @@ impl AcpClient {
                         continue;
                     }
 
-                    tracing::debug!(target: "acp::wire", "← {trimmed}");
-
                     let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                         Ok(v) => v,
                         Err(e) => {
                             self.observe(
                                 "acp_parse_error",
                                 serde_json::json!({
-                                    "line": trimmed,
-                                    "error": e.to_string(),
+                                    "byte_count": trimmed.len(),
+                                    "error_class": format!("{:?}", e.classify()),
                                 }),
                             );
                             tracing::warn!(
                                 target: "acp::wire",
-                                "failed to parse line as JSON: {e} — skipping"
+                                byte_count = trimmed.len(),
+                                error_class = ?e.classify(),
+                                "failed to parse ACP JSON; skipping"
                             );
                             continue;
                         }
                     };
+                    log_wire_message("inbound", &msg, trimmed.len());
                     self.observe("acp_read", msg.clone());
 
                     let activity_now = Instant::now();
@@ -1537,7 +1577,10 @@ impl AcpClient {
                                     // agent process is dead and continuing would hang.
                                     self.write_ndjson(&err_resp).await?;
                                 }
-                                tracing::debug!(target: "acp::wire", "ignoring unknown method: {other}");
+                                tracing::debug!(
+                                    target: "acp::wire",
+                                    "ignoring unknown ACP method"
+                                );
                             }
                         }
                     }
@@ -3538,6 +3581,51 @@ mod tests {
         assert_eq!(protocol.log_class(), "protocol");
         assert!(!provider.log_class().contains("credential"));
         assert!(!protocol.log_class().contains("tool result"));
+    }
+
+    #[test]
+    fn wire_log_metadata_never_copies_prompts_tool_results_or_credentials() {
+        let outbound = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "session/new",
+            "params": {
+                "systemPrompt": "sentinel-system-prompt",
+                "mcpServers": [{
+                    "name": "sentinel-server",
+                    "command": "sentinel-command",
+                    "args": ["sentinel-tool-result"],
+                    "env": [{"name": "TOKEN", "value": "sentinel-provider-credential"}]
+                }]
+            }
+        });
+        let (method_class, numeric_id, byte_count) =
+            wire_log_metadata(&outbound, outbound.to_string().len());
+        let rendered = format!("{method_class}:{numeric_id:?}:{byte_count}");
+        assert_eq!(method_class, "session_new");
+        assert_eq!(numeric_id, Some(42));
+        for secret in [
+            "sentinel-system-prompt",
+            "sentinel-tool-result",
+            "sentinel-provider-credential",
+            "sentinel-server",
+            "sentinel-command",
+        ] {
+            assert!(!rendered.contains(secret));
+        }
+
+        let inbound = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "sentinel-secret-string-id",
+            "method": "sentinel-secret-method",
+            "params": {"content": "sentinel-tool-result"}
+        });
+        let (method_class, numeric_id, byte_count) =
+            wire_log_metadata(&inbound, inbound.to_string().len());
+        let rendered = format!("{method_class}:{numeric_id:?}:{byte_count}");
+        assert_eq!(method_class, "other_method");
+        assert_eq!(numeric_id, None);
+        assert!(!rendered.contains("sentinel"));
     }
 
     // ── build_codex_config_env ────────────────────────────────────────────────

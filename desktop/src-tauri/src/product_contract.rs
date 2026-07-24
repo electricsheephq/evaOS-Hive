@@ -6,7 +6,7 @@ pub(crate) const EVAOS_TEAMS_BUNDLE_IDENTIFIER: &str = "com.electricsheephq.evao
 pub(crate) const EVAOS_TEAMS_DEEP_LINK_SCHEME: &str = "evaos-teams";
 pub(crate) const EVAOS_TEAMS_ARTIFACT_NAME: &str = "evaOS-Teams-0.4.23-es.1-arm64.dmg";
 pub(crate) const EVAOS_TEAMS_UPDATE_CHANNEL: &str = "managed-beta";
-pub(crate) const EVAOS_TEAMS_CSP: &str = "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost http://127.0.0.1:* buzz-media: blob: data:; media-src 'self' asset: http://asset.localhost http://127.0.0.1:* buzz-media: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-src 'none'";
+pub(crate) const EVAOS_TEAMS_CSP: &str = "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost buzz-media: blob: data:; media-src 'self' asset: http://asset.localhost buzz-media: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-src 'none'";
 
 #[allow(dead_code)]
 pub(crate) fn managed_tauri_overlay() -> Value {
@@ -78,6 +78,9 @@ mod tests {
         assert_eq!(overlay["version"], EVAOS_TEAMS_VERSION);
         assert_eq!(overlay["identifier"], EVAOS_TEAMS_BUNDLE_IDENTIFIER);
         assert_eq!(overlay["app"]["security"]["csp"], EVAOS_TEAMS_CSP);
+        assert!(!EVAOS_TEAMS_CSP.contains("http://127.0.0.1"));
+        assert!(!EVAOS_TEAMS_CSP.contains("http://localhost"));
+        assert!(EVAOS_TEAMS_CSP.contains("buzz-media:"));
         assert!(!EVAOS_TEAMS_CSP.contains("https:"));
         assert!(!EVAOS_TEAMS_CSP.contains("wss:"));
         assert_eq!(

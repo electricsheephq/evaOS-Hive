@@ -112,7 +112,7 @@ pub struct AppState {
     #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
     pub evaos_teams_access_transition: Mutex<()>,
     #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
-    pub evaos_teams_access_generation: AtomicU64,
+    pub evaos_teams_access_generation: Arc<AtomicU64>,
     /// Cached ACP session config from running agents, keyed by canonical
     /// `(agent pubkey, relay URL)` runtime identity.
     /// Populated when the harness emits `session_config_captured` observer events.
@@ -244,7 +244,7 @@ pub fn build_app_state() -> AppState {
             i64::MAX
         }),
         evaos_teams_access_transition: Mutex::new(()),
-        evaos_teams_access_generation: AtomicU64::new(0),
+        evaos_teams_access_generation: Arc::new(AtomicU64::new(0)),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]

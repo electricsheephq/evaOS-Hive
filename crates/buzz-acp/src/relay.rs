@@ -454,6 +454,21 @@ impl From<nostr::event::builder::Error> for RelayError {
     }
 }
 
+impl RelayError {
+    fn log_class(&self) -> &'static str {
+        match self {
+            Self::WebSocket(_) => "websocket",
+            Self::Json(_) => "json",
+            Self::AuthFailed(message) => relay_reply_class(message),
+            Self::NoAuthChallenge => "no_auth_challenge",
+            Self::ConnectionClosed => "connection_closed",
+            Self::Timeout => "timeout",
+            Self::Http(_) => "http",
+            Self::UnexpectedMessage(_) => "unexpected_message",
+        }
+    }
+}
+
 /// A parsed NIP-01 relay message.
 #[derive(Debug, Clone)]
 enum RelayMessage {
@@ -2335,7 +2350,10 @@ async fn handle_ws_message(
                     if let Err(e) =
                         send_auth_response(ws, &challenge, relay_url, keys, auth_tag).await
                     {
-                        warn!("failed to respond to mid-session AUTH challenge: {e} — triggering reconnect");
+                        warn!(
+                            error_class = e.log_class(),
+                            "failed to respond to mid-session AUTH challenge; triggering reconnect"
+                        );
                         return false;
                     }
                 }
@@ -2610,7 +2628,7 @@ async fn send_publish_event_frame(ws: &mut WsStream, event: &Event) -> bool {
     if let Ok(text) = serde_json::to_string(&msg) {
         if let Err(e) = ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await
         {
-            warn!("failed to publish event: {e}");
+            warn!(error_class = e.log_class(), "failed to publish event");
             return false;
         }
     }
@@ -2960,10 +2978,11 @@ async fn try_autonomous_reconnect(
             Err(e) if is_dns_error(&e) && dns_retry_count < MAX_DNS_FLAT_RETRIES => {
                 dns_retry_count += 1;
                 warn!(
-                    "autonomous reconnect DNS failure ({}/{}), flat retry in {:.1}s: {e}",
-                    dns_retry_count,
-                    MAX_DNS_FLAT_RETRIES,
-                    DNS_RETRY_INTERVAL.as_secs_f64()
+                    attempt = dns_retry_count,
+                    max_attempts = MAX_DNS_FLAT_RETRIES,
+                    retry_seconds = DNS_RETRY_INTERVAL.as_secs_f64(),
+                    error_class = e.log_class(),
+                    "autonomous reconnect DNS failure; retrying without consuming ladder rung"
                 );
                 if !dns_flat_sleep(cmd_rx, state, DNS_RETRY_INTERVAL).await {
                     return ReconnectOutcome::Shutdown;
@@ -2971,7 +2990,11 @@ async fn try_autonomous_reconnect(
                 continue; // retry WITHOUT incrementing attempt
             }
             Err(e) => {
-                warn!("autonomous reconnect attempt {} failed: {e}", attempt + 1);
+                warn!(
+                    attempt = attempt + 1,
+                    error_class = e.log_class(),
+                    "autonomous reconnect attempt failed"
+                );
             }
         }
 
@@ -3100,14 +3123,17 @@ async fn wait_for_reconnect(
             // This loop is unbounded (unlike the 10-retry cap in `try_autonomous_reconnect`)
             // so a reconnecting agent keeps trying across extended DNS brownouts.
             Err(e) if is_dns_error(&e) => {
-                warn!("relay reconnect DNS failure (not consuming ladder rung): {e}");
+                warn!(
+                    error_class = e.log_class(),
+                    "relay reconnect DNS failure (not consuming ladder rung)"
+                );
                 if !dns_flat_sleep(cmd_rx, state, DNS_RETRY_INTERVAL).await {
                     return ReconnectOutcome::Shutdown;
                 }
                 continue; // retry without incrementing attempt
             }
             Err(e) => {
-                warn!("relay reconnect failed: {e}");
+                warn!(error_class = e.log_class(), "relay reconnect failed");
             }
         }
 
@@ -3827,11 +3853,18 @@ where
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) if is_terminal_connect_error(&e) => {
-                warn!("initial relay connect failed with terminal error: {e}");
+                warn!(
+                    error_class = e.log_class(),
+                    "initial relay connect failed with terminal error"
+                );
                 return Err(e);
             }
             Err(e) => {
-                warn!("initial relay connect attempt {attempt} failed: {e}");
+                warn!(
+                    attempt,
+                    error_class = e.log_class(),
+                    "initial relay connect attempt failed"
+                );
                 last_err = Some(e);
             }
         }
@@ -4294,6 +4327,10 @@ mod tests {
             "other"
         );
         assert!(!relay_reply_class("secret-bearing arbitrary relay reply").contains("secret"));
+        let auth_error =
+            RelayError::AuthFailed("sentinel-provider-credential from relay".to_string());
+        assert_eq!(auth_error.log_class(), "other");
+        assert!(!auth_error.log_class().contains("sentinel"));
     }
 
     #[test]

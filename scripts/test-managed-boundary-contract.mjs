@@ -55,6 +55,13 @@ for (const [source, forbidden, description] of [
   [acp, /target: "acp::stream", "\{text\}"/, "agent message body logging"],
   [acp, /target: "acp::thought", "\{text\}"/, "agent thought logging"],
   [acp, /tool_call: \{title\}/, "tool title logging"],
+  [
+    acp,
+    /target: "acp::wire"[^;]*to_string\(&msg\)/s,
+    "raw outbound ACP wire logging",
+  ],
+  [acp, /target: "acp::wire"[^;]*\{trimmed\}/s, "raw inbound ACP wire logging"],
+  [acp, /"line": trimmed/, "raw ACP parse-error observation"],
   [pool, /session_prompt error: \{e\}/, "raw ACP error logging"],
   [relay, /raw: \{text\}/, "raw relay frame logging"],
   [relay, /relay NOTICE: \{message\}/, "raw relay NOTICE logging"],
@@ -64,7 +71,9 @@ for (const [source, forbidden, description] of [
   assert.doesNotMatch(source, forbidden, description);
 }
 assert.match(acp, /pub\(crate\) fn log_class/);
+assert.match(acp, /fn wire_log_metadata/);
 assert.match(relay, /fn relay_reply_class/);
+assert.match(relay, /fn log_class\(&self\)/);
 assert.match(workspaceCommands, /validate_managed_workspace_icon_request/);
 assert.match(workspaceCommands, /&state\.media_fetch_client/);
 assert.match(
@@ -74,6 +83,10 @@ assert.match(
 assert.match(
   workspaceCommands,
   /#\[cfg\(not\(feature = "evaos-teams-managed"\)\)\]\s*\{\s*if let Some\(nest\)/,
+);
+assert.match(
+  workspaceCommands,
+  /#\[cfg\(not\(feature = "evaos-teams-managed"\)\)\]\s*\{\s*let mut override_guard = state\.relay_url_override/s,
 );
 
 assert.match(nativeWebsocket, /validate_managed_websocket_request/);
@@ -86,6 +99,11 @@ assert.match(
   nativeWebsocket,
   /let connection_url = manager\.connection_url\(id\)\.await\?/,
 );
+assert.match(nativeWebsocket, /struct ManagedConnectionAuthority/);
+assert.match(
+  nativeWebsocket,
+  /is_some_and\(\|authority\| !authority\.is_current\(\)\)/,
+);
 assert.match(productContract, /EVAOS_TEAMS_CSP/);
 assert.match(productContract, /"csp": EVAOS_TEAMS_CSP/);
 const managedCsp = managedTauriConfig.app?.security?.csp;
@@ -93,7 +111,14 @@ assert.equal(typeof managedCsp, "string");
 assert.match(managedCsp, /default-src 'self'/);
 assert.match(managedCsp, /connect-src ipc: http:\/\/ipc\.localhost/);
 assert.doesNotMatch(managedCsp, /connect-src[^;]*(?:\*|https:|wss:|ws:)/);
-assert.match(managedCsp, /img-src[^;]*http:\/\/127\.0\.0\.1:\*/);
+assert.doesNotMatch(
+  managedCsp,
+  /img-src[^;]*http:\/\/(?:127\.0\.0\.1|localhost)(?=[:/])/,
+);
+assert.doesNotMatch(
+  managedCsp,
+  /media-src[^;]*http:\/\/(?:127\.0\.0\.1|localhost)(?=[:/])/,
+);
 assert.match(managedCsp, /media-src[^;]*buzz-media:/);
 
 for (const host of [
