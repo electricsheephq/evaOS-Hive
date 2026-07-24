@@ -164,12 +164,20 @@ impl AppState {
         #[cfg(feature = "evaos-teams-managed")]
         loop {
             let now = chrono::Utc::now().timestamp();
-            let generation = self.evaos_teams_access_generation.load(Ordering::Acquire);
-            let expires_at = self.evaos_teams_expires_at.load(Ordering::Acquire);
-            if self.evaos_teams_authorized.load(Ordering::Acquire) && expires_at > now {
+            let invalid_snapshot = {
+                let _transition = self
+                    .evaos_teams_access_transition
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let generation = self.evaos_teams_access_generation.load(Ordering::Acquire);
+                let expires_at = self.evaos_teams_expires_at.load(Ordering::Acquire);
+                (!self.evaos_teams_authorized.load(Ordering::Acquire) || expires_at <= now)
+                    .then_some((generation, expires_at))
+            };
+            let Some(expected) = invalid_snapshot else {
                 break;
-            }
-            if self.disable_evaos_teams_access_if_current(Some((generation, expires_at))) {
+            };
+            if self.disable_evaos_teams_access_if_current(Some(expected)) {
                 return Err(
                     "evaOS Teams access is not currently authorized; sign in or refresh access"
                         .to_string(),
