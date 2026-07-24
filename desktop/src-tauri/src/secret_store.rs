@@ -212,7 +212,6 @@ impl Drop for BlobLockGuard {
 }
 
 // ── End interprocess advisory lock ────────────────────────────────────────
-
 /// An OS keyring, addressed by service name. All secrets are stored in a
 /// single JSON blob entry (one OS prompt per process lifetime).
 pub struct SecretStore {
@@ -220,7 +219,8 @@ pub struct SecretStore {
     /// In-memory cache of the deserialized blob. `None` means "not yet loaded".
     cache: Mutex<Option<HashMap<String, String>>>,
 }
-
+#[cfg(feature = "evaos-teams-managed")]
+mod managed;
 impl SecretStore {
     /// Keyring-backed store under `service`. The active platform backend
     /// (apple-native / windows-native / sync-secret-service) is chosen at

@@ -748,6 +748,9 @@ mod flush_barrier {
         .unwrap();
         let state = build_app_state();
         *state.keys.lock().unwrap() = keys;
+        state
+            .evaos_teams_authorized
+            .store(true, std::sync::atomic::Ordering::Release);
 
         let fresh = resign_with_fresh_timestamp(&stale, &state).unwrap();
 
@@ -806,6 +809,9 @@ mod flush_barrier {
         }
 
         let state = build_app_state();
+        state
+            .evaos_teams_authorized
+            .store(true, std::sync::atomic::Ordering::Release);
         *state.relay_url_override.lock().unwrap() = Some(spawn_stub_relay().await);
 
         let flushed = flush_pending_events(&db_path, &state).await.expect("flush");

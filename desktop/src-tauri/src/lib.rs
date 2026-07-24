@@ -4,6 +4,7 @@ mod archive;
 mod builderlab;
 mod commands;
 mod deep_link;
+mod evaos_teams;
 mod event_sync;
 mod events;
 mod huddle;
@@ -36,6 +37,7 @@ use deep_link::{
     acknowledge_pending_community_deep_link, handle_deep_link_url,
     take_pending_community_deep_link, PendingCommunityDeepLinks,
 };
+use evaos_teams::*;
 use huddle::audio_output::{
     get_audio_output_device, list_audio_output_devices, set_audio_output_device,
 };
@@ -355,9 +357,21 @@ pub fn run() {
         .manage(PendingCommunityDeepLinks::default())
         .manage(BuilderlabSession::default())
         .manage(BuilderlabLogin::default())
+        .manage(EvaosTeamsState::default())
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            // Managed Teams owns a separate Keychain identity and performs no
+            // native Buzz migration, plaintext fallback, or owner-keyed boot
+            // side effect before the broker has refreshed an entitlement.
+            if cfg!(feature = "evaos-teams-managed") {
+                let state = app_handle.state::<AppState>();
+                if let Ok(mut guard) = state.app_handle.lock() {
+                    *guard = Some(app_handle.clone());
+                }
+                return Ok(());
+            }
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
             // Must run before migrations and identity resolution so the wipe
@@ -651,6 +665,9 @@ pub fn run() {
             cancel_builderlab_login,
             get_builderlab_auth,
             clear_builderlab_auth,
+            get_evaos_teams_auth_status,
+            start_evaos_teams_login,
+            logout_evaos_teams,
             get_builderlab_nostr_identity,
             bind_builderlab_nostr_identity,
             delete_builderlab_nostr_identity,
