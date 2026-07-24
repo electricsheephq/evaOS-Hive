@@ -10,6 +10,11 @@ impl AppState {
     /// long-lived huddle cannot outlive the authorization that started it.
     #[cfg(feature = "evaos-teams-managed")]
     pub(crate) fn disable_evaos_teams_access(&self) {
+        self.disable_evaos_teams_access_if_current(None);
+    }
+
+    #[cfg(feature = "evaos-teams-managed")]
+    fn disable_evaos_teams_access_if_current(&self, expected: Option<(u64, i64)>) -> bool {
         let app = self
             .app_handle
             .lock()
@@ -20,6 +25,14 @@ impl AppState {
                 .evaos_teams_access_transition
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
+            if let Some((generation, expires_at)) = expected {
+                let still_current = self.evaos_teams_access_generation.load(Ordering::Acquire)
+                    == generation
+                    && self.evaos_teams_expires_at.load(Ordering::Acquire) == expires_at;
+                if !still_current {
+                    return false;
+                }
+            }
             self.evaos_teams_access_generation
                 .fetch_add(1, Ordering::AcqRel);
             self.evaos_teams_authorized.store(false, Ordering::Release);
@@ -40,26 +53,44 @@ impl AppState {
             })
         };
         drop(old_pipelines);
-        let tracked_runtimes = self
+        let _runtime_transition = self
             .managed_agent_runtime_transition
             .lock()
-            .ok()
-            .and_then(|_transition| {
-                self.managed_agent_processes
-                    .lock()
-                    .ok()
-                    .map(|mut runtimes| runtimes.drain().collect::<Vec<_>>())
-            })
-            .unwrap_or_default();
-        for (key, mut runtime) in tracked_runtimes {
-            let _ = crate::managed_agents::terminate_process(runtime.child.id());
-            let _ = runtime.child.try_wait();
-            self.clear_agent_session_cache(&key);
-            if let Some(app) = app.as_ref() {
-                crate::managed_agents::remove_agent_runtime_receipt(app, &key);
+            .unwrap_or_else(|error| error.into_inner());
+        let mut runtimes = self
+            .managed_agent_processes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let runtime_keys = runtimes.keys().cloned().collect::<Vec<_>>();
+        for key in runtime_keys {
+            let Some(mut runtime) = runtimes.remove(&key) else {
+                continue;
+            };
+            let stop_result = if crate::managed_agents::process_is_running(runtime.child.id()) {
+                crate::managed_agents::terminate_process(runtime.child.id())
+            } else {
+                Ok(())
+            }
+            .and_then(|()| runtime.child.wait().map_err(|error| error.to_string()));
+            match stop_result {
+                Ok(_) => {
+                    self.clear_agent_session_cache(&key);
+                    if let Some(app) = app.as_ref() {
+                        crate::managed_agents::remove_agent_runtime_receipt(app, &key);
+                    }
+                }
+                Err(error) => {
+                    eprintln!(
+                        "evaos-teams: failed to stop revoked native agent runtime {}: {error}",
+                        key.pubkey
+                    );
+                    runtimes.insert(key, runtime);
+                }
             }
         }
+        drop(runtimes);
         self.emit_huddle_state_changed();
+        true
     }
 
     /// Install a validated managed capability and arm an entitlement-owned
@@ -111,18 +142,7 @@ impl AppState {
                     continue;
                 }
                 let state = app.state::<AppState>();
-                let _transition = state
-                    .evaos_teams_access_transition
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                let still_current = state.evaos_teams_access_generation.load(Ordering::Acquire)
-                    == generation
-                    && state.evaos_teams_expires_at.load(Ordering::Acquire) == expires_at;
-                if !still_current {
-                    break;
-                }
-                drop(_transition);
-                state.disable_evaos_teams_access();
+                state.disable_evaos_teams_access_if_current(Some((generation, expires_at)));
                 break;
             }
         });
@@ -142,12 +162,14 @@ impl AppState {
                 .to_string());
         }
         #[cfg(feature = "evaos-teams-managed")]
-        {
+        loop {
             let now = chrono::Utc::now().timestamp();
-            if !self.evaos_teams_authorized.load(Ordering::Acquire)
-                || self.evaos_teams_expires_at.load(Ordering::Acquire) <= now
-            {
-                self.disable_evaos_teams_access();
+            let generation = self.evaos_teams_access_generation.load(Ordering::Acquire);
+            let expires_at = self.evaos_teams_expires_at.load(Ordering::Acquire);
+            if self.evaos_teams_authorized.load(Ordering::Acquire) && expires_at > now {
+                break;
+            }
+            if self.disable_evaos_teams_access_if_current(Some((generation, expires_at))) {
                 return Err(
                     "evaOS Teams access is not currently authorized; sign in or refresh access"
                         .to_string(),

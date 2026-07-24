@@ -641,6 +641,7 @@ pub async fn has_managed_agent_channel_message_marker(
     marker_scope: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    super::managed_authority::require_native_agent_authority()?;
     uuid::Uuid::parse_str(&channel_id)
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
     let marker = marker.trim();
@@ -725,6 +726,7 @@ pub async fn send_managed_agent_channel_message(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<SendChannelMessageResponse, String> {
+    super::managed_authority::require_native_agent_authority()?;
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
     let trimmed = content.trim();
