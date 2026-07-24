@@ -20,6 +20,7 @@ const contract = JSON.parse(
 
 test("managed package config matches the exact source contract", () => {
   assert.equal(tauriConfig.productName, contract.productName);
+  assert.equal(tauriConfig.mainBinaryName, contract.productName);
   assert.equal(tauriConfig.version, contract.version);
   assert.equal(tauriConfig.identifier, contract.bundleIdentifier);
   assert.deepEqual(tauriConfig.plugins["deep-link"].desktop.schemes, [

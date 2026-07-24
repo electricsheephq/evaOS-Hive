@@ -8,13 +8,23 @@ const FORBIDDEN_HOSTS = [
   "github.com",
 ];
 
+function isForbiddenHost(hostname: string) {
+  return FORBIDDEN_HOSTS.some(
+    (host) => hostname === host || hostname.endsWith(`.${host}`),
+  );
+}
+
 test("managed active UI uses evaOS identity and update path stays local", async ({
   page,
 }) => {
+  expect(isForbiddenHost("tenant.communities.buzz.xyz")).toBe(true);
+  expect(isForbiddenHost("api.github.com")).toBe(true);
+  expect(isForbiddenHost("github.example")).toBe(false);
+
   const forbiddenRequests: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (FORBIDDEN_HOSTS.includes(url.hostname)) {
+    if (isForbiddenHost(url.hostname)) {
       forbiddenRequests.push(request.url());
     }
   });
@@ -116,7 +126,7 @@ for (const fixture of [
     const forbiddenRequests: string[] = [];
     page.on("request", (request) => {
       const url = new URL(request.url());
-      if (FORBIDDEN_HOSTS.includes(url.hostname)) {
+      if (isForbiddenHost(url.hostname)) {
         forbiddenRequests.push(request.url());
       }
     });

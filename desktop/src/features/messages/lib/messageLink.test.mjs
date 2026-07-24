@@ -98,7 +98,7 @@ test("parseMessageLink rejects malformed URL strings", () => {
   assert.equal(r.ok === false && r.reason, "invalid-url");
 });
 
-test("parseMessageLink accepts legacy buzz://message links", () => {
+test("native product accepts buzz://message and rejects managed scheme", () => {
   const r = parseMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`);
   assert.equal(r.ok, true);
   assert.deepEqual(r.ok && r.value, {
@@ -106,9 +106,14 @@ test("parseMessageLink accepts legacy buzz://message links", () => {
     messageId: MESSAGE,
     threadRootId: null,
   });
+  assert.equal(
+    parseMessageLink(`evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`)
+      .ok,
+    false,
+  );
 });
 
-test("managed product builds and parses evaos-teams://message links", () => {
+test("managed product accepts evaos-teams://message and rejects native scheme", () => {
   try {
     installDesktopProductPolicy({
       managed: true,
@@ -130,15 +135,23 @@ test("managed product builds and parses evaos-teams://message links", () => {
     assert.equal(url, `evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`);
     assert.equal(parseMessageLink(url).ok, true);
     assert.equal(isMessageLink(url), true);
+    assert.equal(
+      parseMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`).ok,
+      false,
+    );
+    assert.equal(
+      isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
+      false,
+    );
   } finally {
     resetDesktopProductPolicyForTests();
   }
 });
 
-test("isMessageLink matches both product message schemes", () => {
+test("isMessageLink matches only the active native product scheme", () => {
   assert.equal(
     isMessageLink(`evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`),
-    true,
+    false,
   );
   assert.equal(
     isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),

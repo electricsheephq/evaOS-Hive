@@ -7,7 +7,6 @@
 import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 const MESSAGE_LINK_HOST = "message";
-const MESSAGE_LINK_SCHEMES = new Set(["buzz:", "evaos-teams:"]);
 
 export type MessageLinkInput = {
   channelId: string;
@@ -69,7 +68,7 @@ export function parseMessageLink(url: string): MessageLinkParseResult {
     return { ok: false, reason: "invalid-url" };
   }
 
-  if (!MESSAGE_LINK_SCHEMES.has(parsed.protocol)) {
+  if (parsed.protocol !== `${desktopProductPolicy().deepLinkScheme}:`) {
     return { ok: false, reason: "wrong-scheme" };
   }
   // `new URL("buzz://message?…")` puts "message" in `hostname`.
@@ -102,9 +101,8 @@ export function parseMessageLink(url: string): MessageLinkParseResult {
  */
 export function isMessageLink(href: string | undefined | null): boolean {
   if (!href) return false;
-  return ["buzz://message", "evaos-teams://message"].some(
-    (prefix) => href === prefix || href.startsWith(`${prefix}?`),
-  );
+  const prefix = `${desktopProductPolicy().deepLinkScheme}://message`;
+  return href === prefix || href.startsWith(`${prefix}?`);
 }
 
 type MessageLinkRenderInput = {

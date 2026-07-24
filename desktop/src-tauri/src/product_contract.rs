@@ -11,6 +11,7 @@ pub(crate) const EVAOS_TEAMS_UPDATE_CHANNEL: &str = "managed-beta";
 pub(crate) fn managed_tauri_overlay() -> Value {
     json!({
         "productName": EVAOS_TEAMS_PRODUCT_NAME,
+        "mainBinaryName": EVAOS_TEAMS_PRODUCT_NAME,
         "version": EVAOS_TEAMS_VERSION,
         "identifier": EVAOS_TEAMS_BUNDLE_IDENTIFIER,
         "plugins": {
@@ -67,6 +68,7 @@ mod tests {
     fn managed_overlay_pins_package_identity_and_disables_updater() {
         let overlay = managed_tauri_overlay();
         assert_eq!(overlay["productName"], EVAOS_TEAMS_PRODUCT_NAME);
+        assert_eq!(overlay["mainBinaryName"], EVAOS_TEAMS_PRODUCT_NAME);
         assert_eq!(overlay["version"], EVAOS_TEAMS_VERSION);
         assert_eq!(overlay["identifier"], EVAOS_TEAMS_BUNDLE_IDENTIFIER);
         assert_eq!(
