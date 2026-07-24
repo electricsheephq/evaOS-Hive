@@ -886,7 +886,8 @@ mod tests {
             context_limit_env_var: None,
             required_normalized_fields: &[],
             login_hint: None,
-            auth_probe_args: None,
+            readiness_probe_suffix: None,
+            auth_probe: crate::managed_agents::discovery::RuntimeAuthProbe::NotApplicable,
         }
     }
 
@@ -1080,7 +1081,8 @@ mod tests {
             context_limit_env_var: None,
             required_normalized_fields: &[],
             login_hint: None,
-            auth_probe_args: None,
+            readiness_probe_suffix: None,
+            auth_probe: crate::managed_agents::discovery::RuntimeAuthProbe::NotApplicable,
         }
     }
 

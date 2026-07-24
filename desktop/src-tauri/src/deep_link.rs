@@ -291,28 +291,40 @@ fn parse_nostr_bind_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, Str
     })
 }
 
-/// Handle an incoming `buzz://` deep link URL.
+/// Handle an incoming product deep link URL.
 ///
 /// Currently supports:
 /// - `buzz://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
 pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     let url = match Url::parse(url_str) {
         Ok(u) => u,
-        Err(e) => {
-            eprintln!("buzz-desktop: invalid deep link URL {url_str:?}: {e}");
+        Err(_) => {
+            eprintln!("buzz-desktop: invalid deep link URL");
             return;
         }
     };
 
-    if url.scheme() != "buzz" {
-        eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
+    #[cfg(feature = "evaos-teams-managed")]
+    if url.scheme() == "evaos-teams" && crate::evaos_teams::handle_login_deep_link(app, &url) {
+        activate_main_window(app);
+        return;
+    }
+
+    if !deep_link_scheme_allowed(url.scheme(), cfg!(feature = "evaos-teams-managed")) {
+        eprintln!("buzz-desktop: ignoring unsupported deep link scheme");
+        return;
+    }
+
+    #[cfg(feature = "evaos-teams-managed")]
+    if !managed_deep_link_allowed(url.host_str()) {
+        eprintln!("buzz-desktop: managed build rejected an authority-mutating deep link");
         return;
     }
 
     match url.host_str() {
         Some("connect") => {
             let Some(relay_url) = parse_websocket_relay_param(&url) else {
-                eprintln!("buzz-desktop: connect deep link missing/invalid relay: {url_str}");
+                eprintln!("buzz-desktop: connect deep link missing/invalid relay");
                 return;
             };
             activate_main_window(app);
@@ -324,7 +336,7 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
             // the relay's /invite/<code> landing page. The frontend claims the
             // invite against the relay's HTTP API, then adds the workspace.
             let Some(payload) = parse_join_deep_link(&url) else {
-                eprintln!("buzz-desktop: join deep link missing/invalid relay or code: {url_str}");
+                eprintln!("buzz-desktop: join deep link missing/invalid relay or code");
                 return;
             };
             activate_main_window(app);
@@ -336,7 +348,7 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
         Some("add-community") => {
             let Some(payload) = parse_add_community_deep_link(&url) else {
-                eprintln!("buzz-desktop: add-community deep link missing/invalid relay: {url_str}");
+                eprintln!("buzz-desktop: add-community deep link missing/invalid relay");
                 return;
             };
             activate_main_window(app);
@@ -360,7 +372,7 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
             // structure on this side (serde JSON) and let the TS code own
             // any further normalisation.
             let Some(payload) = parse_message_deep_link(&url) else {
-                eprintln!("buzz-desktop: message deep link missing channel or id: {url_str}");
+                eprintln!("buzz-desktop: message deep link missing channel or id");
                 return;
             };
             activate_main_window(app);
@@ -372,15 +384,28 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
                 let _ = app.emit("deep-link-nostr-bind", payload);
             }
             Err(error) => {
-                eprintln!("buzz-desktop: rejecting nostr-bind deep link: {error}: {url_str}");
+                eprintln!("buzz-desktop: rejecting nostr-bind deep link: {error}");
             }
         },
         Some(action) => {
             eprintln!("buzz-desktop: unknown deep link action: {action}");
         }
         None => {
-            eprintln!("buzz-desktop: deep link missing action: {url_str}");
+            eprintln!("buzz-desktop: deep link missing action");
         }
+    }
+}
+
+#[cfg(any(test, feature = "evaos-teams-managed"))]
+fn managed_deep_link_allowed(action: Option<&str>) -> bool {
+    matches!(action, Some("message"))
+}
+
+fn deep_link_scheme_allowed(scheme: &str, managed: bool) -> bool {
+    if managed {
+        scheme == "evaos-teams"
+    } else {
+        scheme == "buzz"
     }
 }
 
@@ -389,9 +414,32 @@ mod tests {
     use url::Url;
 
     use super::{
-        parse_add_community_deep_link, parse_join_deep_link, parse_message_deep_link,
-        parse_nostr_bind_deep_link, PendingCommunityDeepLink, PendingCommunityDeepLinks,
+        deep_link_scheme_allowed, managed_deep_link_allowed, parse_add_community_deep_link,
+        parse_join_deep_link, parse_message_deep_link, parse_nostr_bind_deep_link,
+        PendingCommunityDeepLink, PendingCommunityDeepLinks,
     };
+
+    #[test]
+    fn managed_deep_links_allow_messages_but_not_authority_changes() {
+        assert!(managed_deep_link_allowed(Some("message")));
+        for action in ["connect", "join", "add-community", "nostr-bind"] {
+            assert!(!managed_deep_link_allowed(Some(action)), "{action}");
+        }
+    }
+
+    #[test]
+    fn product_variant_accepts_only_its_registered_scheme() {
+        assert!(deep_link_scheme_allowed("buzz", false));
+        assert!(!deep_link_scheme_allowed("evaos-teams", false));
+        assert!(deep_link_scheme_allowed("evaos-teams", true));
+        assert!(!deep_link_scheme_allowed("buzz", true));
+    }
+
+    #[test]
+    fn managed_message_links_parse_through_evaos_teams_scheme() {
+        let url = Url::parse("evaos-teams://message?channel=abc&id=xyz").unwrap();
+        assert!(parse_message_deep_link(&url).is_some());
+    }
 
     fn pending(id: &str, relay_url: &str, code: Option<&str>) -> PendingCommunityDeepLink {
         PendingCommunityDeepLink {

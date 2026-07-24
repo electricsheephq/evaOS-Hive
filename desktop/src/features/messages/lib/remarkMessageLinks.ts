@@ -1,9 +1,9 @@
 /**
- * Remark plugin that detects bare `buzz://message?…` URLs in text nodes and
+ * Remark plugin that detects bare product `…://message?…` URLs in text nodes and
  * replaces each with a custom `message-link` HAST element. Legacy
- * `buzz://message?…` URLs are accepted during the rename. The `markdown.tsx`
- * components map renders that as an inline pill (channel name + click-to-open)
- * instead of the raw 100-char URL.
+ * schemes stay plain text so native and managed protocol behavior cannot
+ * bleed into one another. The `markdown.tsx` components map renders a match as
+ * an inline pill (channel name + click-to-open) instead of the raw URL.
  *
  * Why this plugin exists: `remark-gfm`'s autolinker only covers `http(s)://`
  * and `www.`. Custom schemes like `buzz://` only reach the `<a>` component
@@ -19,9 +19,14 @@
 // `markdown.tsx` and by `markdown.test.mjs` running under `node --test
 // --experimental-strip-types`. `tsconfig.json` enables `allowImportingTsExtensions`.
 import { createRemarkPrefixPlugin } from "../../../shared/lib/createRemarkPrefixPlugin.ts";
+import { desktopProductPolicy } from "../../../shared/product/productIdentity.ts";
 
-const MESSAGE_URL_PATTERN = /(?:buzz|buzz):\/\/message\?[^\s<>"')\]]+/g;
 const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?]+$/;
+
+function activeMessageUrlPattern() {
+  const scheme = desktopProductPolicy().deepLinkScheme;
+  return new RegExp(`${scheme}:\\/\\/message\\?[^\\s<>"')\\]]+`, "g");
+}
 
 function trimMessageLinkMatch(matchText: string) {
   let value = matchText.replace(TRAILING_PUNCTUATION_PATTERN, "");
@@ -38,7 +43,7 @@ function isUnmatchedClosing(value: string): boolean {
 }
 
 export default function remarkMessageLinks() {
-  return createRemarkPrefixPlugin(MESSAGE_URL_PATTERN, (matchText) => {
+  return createRemarkPrefixPlugin(activeMessageUrlPattern(), (matchText) => {
     const { value, trailing } = trimMessageLinkMatch(matchText);
 
     return {

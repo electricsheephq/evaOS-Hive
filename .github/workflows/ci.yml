@@ -61,6 +61,12 @@ jobs:
               - '.github/workflows/ci.yml'
       - name: Release workflow source contract
         run: scripts/test-release-ref-contract.sh
+      - name: Canary dependency contract
+        run: node scripts/test-canary-dependency-contract.mjs
+      - name: Managed boundary contract
+        run: node scripts/test-managed-boundary-contract.mjs
+      - name: evaOS Teams pre-sign contract
+        run: node scripts/test-evaos-teams-pre-sign-contract.mjs
 
   rust-lint:
     name: Rust Lint

@@ -40,7 +40,7 @@ pub(in crate::commands) fn retain_persona_pending(
         let d_tag = persona_d_tag(persona);
         let conn = open_retention_db(&managed_agents_base_dir(app)?.join("retention.db"))?;
         let (pubkey, event) = {
-            let keys = state.keys.lock().map_err(|e| e.to_string())?;
+            let keys = state.signing_keys()?;
             // Monotonic created_at: read the retained head for this coordinate
             // and bump past it (NIP-AP step 3) so a same-second edit supersedes.
             let prior =
@@ -102,7 +102,7 @@ pub(in crate::commands) fn tombstone_persona_pending(
 
     let result = (|| -> Result<(), String> {
         let (pubkey, event) = {
-            let keys = state.keys.lock().map_err(|e| e.to_string())?;
+            let keys = state.signing_keys()?;
             let pubkey = keys.public_key().to_hex();
             let event = build_persona_delete(d_tag, &pubkey)?
                 .sign_with_keys(&keys)

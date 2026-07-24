@@ -164,6 +164,7 @@ pub async fn start_huddle(
     channel_name: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<HuddleJoinInfo, String> {
+    crate::commands::managed_authority::require_native_huddle_authority()?;
     // Validate inputs at the Tauri boundary.
     if member_pubkeys.len() > MAX_HUDDLE_AGENTS {
         return Err(format!(
@@ -569,6 +570,7 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
 /// 4. Clear local huddle state.
 #[tauri::command]
 pub async fn end_huddle(force: Option<bool>, state: State<'_, AppState>) -> Result<(), String> {
+    crate::commands::managed_authority::require_native_huddle_authority()?;
     let (parent_channel_id, ephemeral_channel_id) = {
         let mut hs = state.huddle()?;
         if hs.phase == HuddlePhase::Idle {
@@ -927,6 +929,7 @@ pub async fn add_agent_to_huddle(
     agent_pubkey: String,
     state: State<'_, AppState>,
 ) -> Result<agents::AgentAddResult, String> {
+    crate::commands::managed_authority::require_native_huddle_authority()?;
     validate_pubkey_hex(&agent_pubkey)?;
 
     let (eph_id, parent_id) = {

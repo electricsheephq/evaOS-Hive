@@ -1,0 +1,36 @@
+{
+  "productName": "evaOS Teams",
+  "mainBinaryName": "evaOS Teams",
+  "version": "0.4.23-es.1",
+  "identifier": "com.electricsheephq.evaos.teams",
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost buzz-media: blob: data:; media-src 'self' asset: http://asset.localhost buzz-media: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["evaos-teams"]
+      }
+    }
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "targets": ["app", "dmg"],
+    "icon": ["evaos-teams/icon.png", "evaos-teams/icon.icns"],
+    "resources": {
+      "../../LICENSE": "licenses/Buzz-Apache-2.0.txt",
+      "evaos-teams/NOTICE.txt": "licenses/evaOS-Teams-NOTICE.txt"
+    },
+    "macOS": {
+      "infoPlist": "evaos-teams/Info.plist",
+      "dmg": {
+        "background": "evaos-teams/dmg-background.png"
+      }
+    }
+  }
+}

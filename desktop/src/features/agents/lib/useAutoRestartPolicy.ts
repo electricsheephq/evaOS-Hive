@@ -33,9 +33,11 @@ const POLICY_TICK_MS = 15_000;
  * on the backend store lock, so a cross-window double-fire is benign (and
  * further shrunk by the pre-fire summary re-fetch).
  */
-export function useAutoRestartPolicy() {
+export function useAutoRestartPolicy(enabled = true) {
   const queryClient = useQueryClient();
-  const agents: ManagedAgent[] | undefined = useManagedAgentsQuery().data;
+  const agents: ManagedAgent[] | undefined = useManagedAgentsQuery({
+    enabled,
+  }).data;
   const edgesRef = React.useRef(new Map<string, AutoRestartEdgeState>());
   const inFlightRef = React.useRef(new Set<string>());
   const [, setTick] = React.useState(0);
@@ -43,14 +45,15 @@ export function useAutoRestartPolicy() {
   // Re-evaluate on an interval so the quiescence clock advances even when
   // summaries and observer stores are quiet.
   React.useEffect(() => {
+    if (!enabled) return;
     const timer = setInterval(() => setTick((t) => t + 1), POLICY_TICK_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [enabled]);
 
   // No dependency array by design: the tick pattern re-runs this effect
   // every render so it reads live store state; all mutation is ref-local.
   React.useEffect(() => {
-    if (!agents) return;
+    if (!enabled || !agents) return;
     const now = Date.now();
     const edges = edgesRef.current;
 

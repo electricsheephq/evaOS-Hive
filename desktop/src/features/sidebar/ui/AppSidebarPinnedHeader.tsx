@@ -1,6 +1,7 @@
 import { Activity, Bot, FolderGit2, Inbox, Zap } from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { FeatureGate } from "@/shared/features";
 import type { Channel, SearchHit } from "@/shared/api/types";
 import {
@@ -58,6 +59,14 @@ export function AppSidebarPinnedHeader({
   searchFocusRequest,
   suggestionChannels,
 }: AppSidebarPinnedHeaderProps) {
+  const { policy } = useEvaosTeamsAuthority();
+  if (
+    !policy.canBrowsePeople &&
+    !policy.canBrowseAgents &&
+    !policy.canBrowsePrivateRooms
+  ) {
+    return null;
+  }
   return (
     <div
       className="mx-[3px] shrink-0 px-2 pb-2 pt-3"
@@ -70,10 +79,16 @@ export function AppSidebarPinnedHeader({
         focusRequest={searchFocusRequest}
         onOpenChannel={onSelectChannel}
         onOpenResult={onOpenSearchResult}
-        onOpenUser={(user) => onOpenDm({ pubkeys: [user.pubkey] })}
-        onBrowseChannels={onBrowseChannels}
-        onCreateAgent={onCreateAgent}
-        onCreateChannel={onCreateChannel}
+        onOpenUser={
+          policy.canStartDirectMessages
+            ? (user) => onOpenDm({ pubkeys: [user.pubkey] })
+            : undefined
+        }
+        onBrowseChannels={
+          policy.canManageMembership ? onBrowseChannels : undefined
+        }
+        onCreateAgent={policy.canManageAgents ? onCreateAgent : undefined}
+        onCreateChannel={policy.canManageChannels ? onCreateChannel : undefined}
         suggestionChannels={suggestionChannels}
       />
     </div>
@@ -89,6 +104,7 @@ export function AppSidebarPrimaryMenu({
   onSelectWorkflows,
   selectedView,
 }: AppSidebarPrimaryMenuProps) {
+  const { policy } = useEvaosTeamsAuthority();
   return (
     <SidebarHeader
       className="cursor-default select-none px-2 pb-0 pt-0"
@@ -143,18 +159,20 @@ export function AppSidebarPrimaryMenu({
             </SidebarMenuButton>
           </SidebarMenuItem>
         </FeatureGate>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            data-testid="open-agents-view"
-            isActive={selectedView === "agents"}
-            onClick={onSelectAgents}
-            tooltip="Agents"
-            type="button"
-          >
-            <Bot className="h-4 w-4" />
-            <SidebarMenuLabel>Agents</SidebarMenuLabel>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        {policy.canBrowseAgents ? (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-agents-view"
+              isActive={selectedView === "agents"}
+              onClick={onSelectAgents}
+              tooltip="Agents"
+              type="button"
+            >
+              <Bot className="h-4 w-4" />
+              <SidebarMenuLabel>Agents</SidebarMenuLabel>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : null}
         <FeatureGate feature="workflows">
           <SidebarMenuItem>
             <SidebarMenuButton

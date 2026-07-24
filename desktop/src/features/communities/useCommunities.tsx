@@ -20,6 +20,7 @@ import { removeSelfProfileCachesForRelay } from "@/features/profile/lib/selfProf
 import { removeChannelSnapshotForRelay } from "@/features/channels/channelSnapshot";
 import { removeMessageSnapshotsForRelay } from "@/features/messages/lib/messageSnapshot";
 import { clearSavedCommunitySnapshot } from "@/features/agents/activeAgentTurnsStore";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 export type UpdateCommunityResult =
   | { kind: "updated"; requiresReinit: boolean }
@@ -150,10 +151,14 @@ export function useCommunities(): UseCommunitiesReturn {
 }
 
 function useCommunitiesInternal(): UseCommunitiesReturn {
-  const [communities, setCommunitiesState] =
-    useState<Community[]>(loadCommunities);
-  const [activeId, setActiveId] = useState<string | null>(
-    loadActiveCommunityId,
+  const authority = useEvaosTeamsAuthority();
+  const managedCommunity = authority.community;
+  const managed = authority.managed;
+  const [communities, setCommunitiesState] = useState<Community[]>(() =>
+    managedCommunity ? [managedCommunity] : loadCommunities(),
+  );
+  const [activeId, setActiveId] = useState<string | null>(() =>
+    managedCommunity ? managedCommunity.id : loadActiveCommunityId(),
   );
   const [reinitKey, setReinitKey] = useState(0);
   const communitiesRef = useRef(communities);
@@ -164,42 +169,48 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
     [communities, activeId],
   );
 
-  const addCommunity = useCallback((community: Community): string => {
-    const existing = communitiesRef.current.find(
-      (w) => w.relayUrl === community.relayUrl,
-    );
-    const resolvedId = existing?.id ?? community.id;
-    setCommunitiesState((prev) => {
-      const dup = prev.find((w) => w.relayUrl === community.relayUrl);
-      let next: Community[];
-      if (dup) {
-        next = prev.map((w) =>
-          w.id === dup.id
-            ? {
-                ...w,
-                name: community.name || w.name,
-                token: community.token ?? w.token,
-                pubkey: community.pubkey ?? w.pubkey,
-              }
-            : w,
-        );
-      } else {
-        next = [...prev, community];
-      }
-      saveCommunities(next);
-      return next;
-    });
-    return resolvedId;
-  }, []);
+  const addCommunity = useCallback(
+    (community: Community): string => {
+      if (managedCommunity) return managedCommunity.id;
+      const existing = communitiesRef.current.find(
+        (w) => w.relayUrl === community.relayUrl,
+      );
+      const resolvedId = existing?.id ?? community.id;
+      setCommunitiesState((prev) => {
+        const dup = prev.find((w) => w.relayUrl === community.relayUrl);
+        let next: Community[];
+        if (dup) {
+          next = prev.map((w) =>
+            w.id === dup.id
+              ? {
+                  ...w,
+                  name: community.name || w.name,
+                  token: community.token ?? w.token,
+                  pubkey: community.pubkey ?? w.pubkey,
+                }
+              : w,
+          );
+        } else {
+          next = [...prev, community];
+        }
+        saveCommunities(next);
+        return next;
+      });
+      return resolvedId;
+    },
+    [managedCommunity],
+  );
 
   const clearCommunities = useCallback(() => {
+    if (managed) return;
     clearCommunityStorage();
     setCommunitiesState([]);
     setActiveId(null);
-  }, []);
+  }, [managed]);
 
   const removeCommunity = useCallback(
     (id: string) => {
+      if (managed) return;
       // GC self-profile caches for the removed community's relay. Mirror the
       // updater guard (length > 1) so we only GC when removal will actually
       // proceed. Runs outside the updater — updaters can execute twice under
@@ -231,16 +242,17 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
         return next;
       });
     },
-    [activeId, communities],
+    [activeId, communities, managed],
   );
 
   const switchCommunity = useCallback(
     (id: string) => {
+      if (managed) return;
       if (id === activeId) return;
       saveActiveCommunityId(id);
       setActiveId(id);
     },
-    [activeId],
+    [activeId, managed],
   );
 
   const reconnectCommunity = useCallback(() => {
@@ -254,6 +266,7 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
         Pick<Community, "name" | "relayUrl" | "token" | "pubkey" | "reposDir">
       >,
     ): UpdateCommunityResult => {
+      if (managed) return { kind: "unchanged" };
       const result = resolveCommunityUpdateResult(
         communitiesRef.current,
         activeId,
@@ -277,7 +290,7 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
 
       return result;
     },
-    [activeId],
+    [activeId, managed],
   );
 
   const reorderCommunities = useCallback((orderedIds: string[]) => {

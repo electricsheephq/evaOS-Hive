@@ -6,6 +6,7 @@ import {
 } from "@/features/agents/hooks";
 import { mergeKnownAgentPubkeys } from "@/features/agents/knownAgentPubkeys";
 import { useStableSet } from "@/shared/hooks/useStableReference";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 const EMPTY_KNOWN_AGENT_PUBKEYS: ReadonlySet<string> = new Set();
 
@@ -39,8 +40,13 @@ export function KnownAgentPubkeysProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const managedAgents = useManagedAgentsQuery().data;
-  const relayAgents = useRelayAgentsQuery().data;
+  const { policy } = useEvaosTeamsAuthority();
+  const managedAgents = useManagedAgentsQuery({
+    enabled: policy.canBrowseAgents,
+  }).data;
+  const relayAgents = useRelayAgentsQuery({
+    enabled: policy.canBrowseAgents,
+  }).data;
 
   const merged = React.useMemo(
     () => mergeKnownAgentPubkeys(managedAgents, relayAgents),

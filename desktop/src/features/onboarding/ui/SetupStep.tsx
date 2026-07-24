@@ -345,6 +345,19 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
     );
   }
 
+  if (runtime.availability === "dependency_missing") {
+    return (
+      <>
+        <p className="text-xs leading-4 text-white">
+          Runtime detected; ACP dependencies need setup.
+        </p>
+        <p className="mt-1 text-xs leading-4 text-white">
+          {runtime.installHint}
+        </p>
+      </>
+    );
+  }
+
   if (runtime.availability === "cli_missing") {
     return (
       <>
@@ -383,6 +396,9 @@ function runtimeDetailText(runtime: AcpRuntimeCatalogEntry): string {
   }
   if (runtime.availability === "adapter_outdated") {
     return "ACP adapter detected but outdated — reinstall required.";
+  }
+  if (runtime.availability === "dependency_missing") {
+    return "Runtime detected; ACP dependencies need setup.";
   }
   if (runtime.availability === "cli_missing") {
     return "ACP adapter detected; CLI missing.";

@@ -53,6 +53,7 @@ pub struct ConnectAcpRuntimeResult {
 
 #[tauri::command]
 pub async fn discover_acp_auth_methods(runtime_id: String) -> Result<AcpAuthMethodsResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || discover_acp_auth_methods_blocking(&runtime_id))
         .await
         .map_err(|error| format!("auth-method discovery task failed: {error}"))?
@@ -62,6 +63,7 @@ pub async fn discover_acp_auth_methods(runtime_id: String) -> Result<AcpAuthMeth
 pub async fn connect_acp_runtime(
     request: ConnectAcpRuntimeRequest,
 ) -> Result<ConnectAcpRuntimeResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || connect_acp_runtime_blocking(&request))
         .await
         .map_err(|error| format!("connect-account task failed: {error}"))?
@@ -552,6 +554,46 @@ mod tests {
             br#"{"methods":[]}
 "#
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auth_handshake_uses_command_specific_hermes_acp_args() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let acp_path = temp.path().join("buzz-acp");
+        fs::write(
+            &acp_path,
+            "#!/bin/sh\nprintf '%s' \"$BUZZ_ACP_AGENT_ARGS\"\n",
+        )
+        .expect("write fake buzz-acp");
+        fs::set_permissions(&acp_path, fs::Permissions::from_mode(0o755))
+            .expect("chmod fake buzz-acp");
+        let adapter_path = temp.path().join("adapter");
+
+        let hermes = run_buzz_acp_auth_command_with_paths(
+            &acp_path,
+            "hermes",
+            &adapter_path,
+            ["auth-methods", "--json"],
+            None,
+        )
+        .expect("run Hermes auth handshake");
+        assert!(hermes.status.success());
+        assert_eq!(hermes.stdout, b"acp");
+
+        let hermes_acp = run_buzz_acp_auth_command_with_paths(
+            &acp_path,
+            "hermes-acp",
+            &adapter_path,
+            ["auth-methods", "--json"],
+            None,
+        )
+        .expect("run hermes-acp auth handshake");
+        assert!(hermes_acp.status.success());
+        assert!(hermes_acp.stdout.is_empty());
     }
 
     #[test]

@@ -2,6 +2,8 @@
 pub mod auth;
 /// Subscription close (CLOSE) handler.
 pub mod close;
+/// Server-owned channel and DM collaboration authority gate.
+pub mod collaboration_policy;
 /// Command executor — transactional processing for command kinds.
 pub mod command_executor;
 /// Relay-operator community provisioning HTTP support.

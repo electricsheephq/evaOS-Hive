@@ -36,6 +36,7 @@ pub(super) use pending::tombstone_persona_pending;
 
 #[tauri::command]
 pub async fn list_personas(app: AppHandle) -> Result<Vec<AgentDefinition>, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -54,6 +55,7 @@ pub async fn create_persona(
     input: CreatePersonaRequest,
     app: AppHandle,
 ) -> Result<AgentDefinition, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -148,6 +150,7 @@ pub async fn update_persona(
     input: UpdatePersonaRequest,
     app: AppHandle,
 ) -> Result<UpdatePersonaResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
 
     /// Profile sync params collected under the store lock for async relay publish.
@@ -369,6 +372,7 @@ fn commit_cascade_agents(
 
 #[tauri::command]
 pub async fn delete_persona(id: String, app: AppHandle) -> Result<(), String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -540,6 +544,7 @@ pub async fn reconcile_inbound_persona_event(
     event_json: String,
     app: AppHandle,
 ) -> Result<(), String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || reconcile_inbound_persona_event_blocking(event_json, app))
         .await
         .map_err(|e| format!("spawn_blocking failed: {e}"))?
@@ -913,6 +918,7 @@ pub async fn set_persona_active(
     active: bool,
     app: AppHandle,
 ) -> Result<AgentDefinition, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();

@@ -79,6 +79,8 @@ type MockRelayAgentSeed = {
   respondToAllowlist?: string[];
   channelNames?: string[];
   channelIds?: string[];
+  /** Also seed this relay-owned agent as a bot member of the named channels. */
+  memberChannelNames?: string[];
   status?: "online" | "away" | "offline";
 };
 
@@ -127,6 +129,10 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /** Run the renderer under the managed evaOS Teams product/auth contract. */
+  evaosTeamsManaged?: boolean;
+  /** Managed auth state returned by the mock. Defaults to active. */
+  evaosTeamsPhase?: "active" | "signed_out" | "keychain_locked";
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */
@@ -261,6 +267,8 @@ type MockBridgeOptions = {
   openerError?: string;
   /** Delay binding signatures so specs can exercise request supersession. */
   nostrBindSignDelayMs?: number;
+  /** Reject successive mock WebSocket connect attempts, then resume. */
+  websocketConnectErrors?: string[];
   stallWebsocketSends?: boolean;
   userSearchDelayMs?: number;
   /**

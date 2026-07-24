@@ -44,6 +44,7 @@ import {
   getPersonaProviderOptions,
   getRuntimePersonaModelOptions,
   NO_RUNTIME_DROPDOWN_VALUE,
+  runtimeUnavailableMessage,
   runtimeSupportsLlmProviderSelection,
   type PersonaDropdownOption,
   PERSONA_FIELD_CONTROL_CLASS,
@@ -617,14 +618,8 @@ export function AgentDefinitionDialog({
   const runtimeWarning =
     selectedRuntime && selectedRuntime.availability !== "available" ? (
       <p className="text-xs text-warning">
-        {selectedRuntime.availability === "adapter_missing"
-          ? `${selectedRuntime.label} CLI is installed but the ACP adapter is missing.`
-          : selectedRuntime.availability === "adapter_outdated"
-            ? `${selectedRuntime.label} ACP adapter is outdated — reinstall to continue.`
-            : selectedRuntime.availability === "cli_missing"
-              ? `${selectedRuntime.label} ACP adapter is installed but the CLI is missing.`
-              : `${selectedRuntime.label} is not installed.`}{" "}
-        Visit Settings &gt; Agents to set it up.
+        {runtimeUnavailableMessage(selectedRuntime)} Visit Settings &gt; Agents
+        to set it up.
       </p>
     ) : null;
   const advancedFieldsTransition = shouldReduceMotion

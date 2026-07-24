@@ -5,44 +5,13 @@ use super::{
     apply_agent_command_update, classify_runtime, codex_adapter_availability,
     codex_adapter_is_outdated, create_time_agent_command_override, default_agent_command,
     effective_agent_command, find_nvm_default_bin, find_via_login_shell,
-    is_login_shell_path_uninit, is_safe_nvm_tag, managed_agent_avatar_url, normalize_agent_args,
-    parse_semver_tag, probe_codex_acp_major_version, record_agent_command,
-    refresh_login_shell_path, BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
-    GOOSE_AVATAR_URL,
+    is_login_shell_path_uninit, is_safe_nvm_tag, normalize_agent_args, parse_semver_tag,
+    probe_codex_acp_major_version, record_agent_command, refresh_login_shell_path,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
 
-#[test]
-fn resolves_known_avatar_for_bare_command() {
-    let avatar_url = managed_agent_avatar_url("goose").expect("goose avatar should resolve");
-
-    assert_eq!(avatar_url, GOOSE_AVATAR_URL);
-}
-
-#[test]
-fn resolves_known_avatar_for_command_paths_and_aliases() {
-    assert_eq!(
-        managed_agent_avatar_url("/usr/local/bin/codex-acp"),
-        Some(CODEX_AVATAR_URL.to_string())
-    );
-    assert_eq!(
-        managed_agent_avatar_url("Claude Code"),
-        Some(CLAUDE_CODE_AVATAR_URL.to_string())
-    );
-    assert_eq!(
-        managed_agent_avatar_url(r"C:\Tools\claude-agent-acp.exe"),
-        Some(CLAUDE_CODE_AVATAR_URL.to_string())
-    );
-    assert_eq!(
-        managed_agent_avatar_url("/usr/local/bin/claude-code-acp"),
-        Some(CLAUDE_CODE_AVATAR_URL.to_string())
-    );
-}
-
-#[test]
-fn returns_none_for_unknown_commands() {
-    assert!(managed_agent_avatar_url("custom-agent").is_none());
-}
+mod catalog;
+mod hermes;
 
 #[test]
 fn default_agent_command_resolves_bundled_buzz_agent() {
@@ -69,18 +38,6 @@ fn normalizes_claude_and_codex_args_to_empty() {
     assert_eq!(
         normalize_agent_args("codex-acp", vec!["acp".into()]),
         Vec::<String>::new()
-    );
-}
-
-#[test]
-fn resolves_buzz_agent_avatar() {
-    assert_eq!(
-        managed_agent_avatar_url("buzz-agent"),
-        Some(BUZZ_AGENT_AVATAR_URL.to_string())
-    );
-    assert_eq!(
-        managed_agent_avatar_url("/usr/local/bin/buzz-agent"),
-        Some(BUZZ_AGENT_AVATAR_URL.to_string())
     );
 }
 

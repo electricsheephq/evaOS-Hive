@@ -32,6 +32,14 @@ const STARTER_CHANNELS: &[StarterChannelSpec] = &[
     },
 ];
 
+fn require_native_community_authority() -> Result<(), String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        Err("Managed community authority is controlled by ElectricSheep".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn advance_directory_cursor(filter: &mut serde_json::Value, page: &[nostr::Event]) {
     let last = page
         .last()
@@ -144,7 +152,11 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
     // Step 3: fetch ALL open channel metadata so the channel browser can show
     // discoverable channels the user hasn't joined yet. The relay's access
     // control allows reading kind:39000 for open channels regardless of membership.
-    let open_meta_events = query_relay_all(&state, serde_json::json!({"kinds": [39000]})).await?;
+    let open_meta_events = if cfg!(feature = "evaos-teams-managed") {
+        Vec::new()
+    } else {
+        query_relay_all(&state, serde_json::json!({"kinds": [39000]})).await?
+    };
 
     #[cfg(debug_assertions)]
     let t_open_meta = _profile_start.elapsed();
@@ -397,6 +409,9 @@ pub async fn get_channel_members(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelMembersResponse, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed member discovery is controlled by ElectricSheep".to_string());
+    }
     let events = query_relay(
         &state,
         &[serde_json::json!({
@@ -552,6 +567,7 @@ pub async fn create_channel(
     ttl_seconds: Option<i32>,
     state: State<'_, AppState>,
 ) -> Result<ChannelInfo, String> {
+    require_native_community_authority()?;
     let channel_uuid = uuid::Uuid::new_v4();
 
     let vis = match visibility.as_str() {
@@ -612,6 +628,7 @@ pub async fn create_channel(
 pub async fn ensure_starter_channels(
     state: State<'_, AppState>,
 ) -> Result<Vec<ChannelInfo>, String> {
+    require_native_community_authority()?;
     let mut existing_channels = get_channels(state.clone()).await?;
     let relay_scope = relay_api_base_url_with_override(&state);
     let creator_keys = state.signing_keys()?;
@@ -702,6 +719,7 @@ pub async fn update_channel(
     input: UpdateChannelInput,
     state: State<'_, AppState>,
 ) -> Result<ChannelDetailInfo, String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&input.channel_id)?;
     let builder = events::build_update_channel(
         uuid,
@@ -735,6 +753,7 @@ pub async fn set_channel_topic(
     topic: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_set_topic(uuid, &topic)?;
     submit_event(builder, &state).await?;
@@ -747,6 +766,7 @@ pub async fn set_channel_purpose(
     purpose: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_set_purpose(uuid, &purpose)?;
     submit_event(builder, &state).await?;
@@ -755,6 +775,7 @@ pub async fn set_channel_purpose(
 
 #[tauri::command]
 pub async fn archive_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_archive(uuid)?;
     submit_event(builder, &state).await?;
@@ -766,6 +787,7 @@ pub async fn unarchive_channel(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_unarchive(uuid)?;
     submit_event(builder, &state).await?;
@@ -774,6 +796,7 @@ pub async fn unarchive_channel(
 
 #[tauri::command]
 pub async fn delete_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_delete_channel(uuid)?;
     submit_event(builder, &state).await?;
@@ -787,6 +810,7 @@ pub async fn add_channel_members(
     role: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let role_str = match role.as_deref() {
         Some("admin") => Some("admin"),
@@ -822,6 +846,7 @@ pub async fn remove_channel_member(
     pubkey: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_remove_member(uuid, &pubkey)?;
     submit_event(builder, &state).await?;
@@ -835,6 +860,7 @@ pub async fn change_channel_member_role(
     role: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     // Only allow permission-tier roles for humans and bot/guest for bots.
     // Owner changes require a dedicated transfer-ownership flow.
@@ -850,6 +876,7 @@ pub async fn change_channel_member_role(
 
 #[tauri::command]
 pub async fn join_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_join(uuid)?;
     submit_event(builder, &state).await?;
@@ -858,6 +885,7 @@ pub async fn join_channel(channel_id: String, state: State<'_, AppState>) -> Res
 
 #[tauri::command]
 pub async fn leave_channel(channel_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    require_native_community_authority()?;
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_leave(uuid)?;
     submit_event(builder, &state).await?;

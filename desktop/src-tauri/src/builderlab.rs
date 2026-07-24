@@ -20,6 +20,8 @@ const BB_SESSION_CREDENTIAL_HEADER: &str = "X-BB-Session-Credential";
 // or challenge/verify fail with `invalid_origin`. It also seeds the challenge
 // body's `origin` field so both agree.
 const BUILDERLAB_ORIGIN: &str = "https://app.builderlab.xyz";
+const MANAGED_BUILDERLAB_UNAVAILABLE: &str =
+    "Builderlab hosted services are unavailable in evaOS Teams";
 const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -154,6 +156,18 @@ struct StoredSession {
     credential: String,
 }
 
+fn builderlab_available_for_variant(managed: bool) -> Result<(), &'static str> {
+    if managed {
+        Err(MANAGED_BUILDERLAB_UNAVAILABLE)
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_builderlab_available() -> Result<(), String> {
+    builderlab_available_for_variant(cfg!(feature = "evaos-teams-managed")).map_err(str::to_owned)
+}
+
 #[derive(Debug, Deserialize)]
 struct LoginExchangeResponse {
     session_credential: String,
@@ -254,6 +268,7 @@ pub(crate) async fn start_builderlab_login(
     session: tauri::State<'_, BuilderlabSession>,
     login: tauri::State<'_, BuilderlabLogin>,
 ) -> Result<BuilderlabAuthInfo, String> {
+    ensure_builderlab_available()?;
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|error| format!("could not start local authentication callback: {error}"))?;
@@ -369,6 +384,7 @@ pub(crate) async fn get_builderlab_auth(
     app_state: tauri::State<'_, crate::app_state::AppState>,
     session: tauri::State<'_, BuilderlabSession>,
 ) -> Result<Option<BuilderlabAuthInfo>, String> {
+    ensure_builderlab_available()?;
     let stored = session
         .0
         .lock()
@@ -428,6 +444,7 @@ async fn authenticated_json(
     path: &str,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    ensure_builderlab_available()?;
     let credential = session
         .0
         .lock()
@@ -483,6 +500,7 @@ pub(crate) async fn bind_builderlab_nostr_identity(
     app_state: tauri::State<'_, crate::app_state::AppState>,
     session: tauri::State<'_, BuilderlabSession>,
 ) -> Result<serde_json::Value, String> {
+    ensure_builderlab_available()?;
     let challenge_value = authenticated_json(
         &app_state.http_client,
         &session,
@@ -683,5 +701,14 @@ mod tests {
             Some("http://127.0.0.1:1234/callback/nonce")
         );
         assert!(!query.contains_key("screen_hint"));
+    }
+
+    #[test]
+    fn managed_variant_blocks_builderlab_before_any_io() {
+        assert_eq!(
+            builderlab_available_for_variant(true),
+            Err(MANAGED_BUILDERLAB_UNAVAILABLE)
+        );
+        assert_eq!(builderlab_available_for_variant(false), Ok(()));
     }
 }

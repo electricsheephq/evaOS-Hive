@@ -31,6 +31,7 @@ import {
 } from "@/shared/api/useRelayConnection";
 import { useActiveCommunityIcon } from "@/features/communities/useCommunityIcons";
 import { EditCommunityDialog } from "./EditCommunityDialog";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 const CONNECTION_STATE_LABEL: Record<ConnectionState, string> = {
   idle: "Not connected",
@@ -92,6 +93,7 @@ export function CommunitySwitcher({
   onUpdateCommunity,
   onRemoveCommunity,
 }: CommunitySwitcherProps) {
+  const authority = useEvaosTeamsAuthority();
   const [editingCommunity, setEditingCommunity] =
     React.useState<Community | null>(null);
   const [dropdownOpen, setDropdownOpen] = React.useState(false);
@@ -180,7 +182,18 @@ export function CommunitySwitcher({
       >
         {activeCommunity?.name ?? "No community"}
       </span>
-      {variant === "profile-menu" ? (
+      {authority.managed && authority.entitlement ? (
+        <span
+          className="shrink-0 text-2xs text-muted-foreground"
+          data-testid="managed-authority-status"
+          title="Server-derived managed authority"
+        >
+          {authority.entitlement.role} ·{" "}
+          {authority.entitlement.assignmentStatus} ·{" "}
+          {authority.entitlement.reconciliationStatus}
+        </span>
+      ) : null}
+      {authority.managed ? null : variant === "profile-menu" ? (
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
       ) : (
         <ChevronDown
@@ -193,6 +206,31 @@ export function CommunitySwitcher({
       )}
     </>
   );
+
+  if (authority.managed) {
+    const className =
+      variant === "profile-menu"
+        ? "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-popover-foreground"
+        : variant === "profile"
+          ? "flex min-w-0 max-w-full items-center gap-1.5 py-0.5 text-left text-xs text-sidebar-foreground/50"
+          : "flex h-auto w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm";
+    const content = (
+      <div
+        className={className}
+        data-testid="managed-community"
+        title="Managed community selected by ElectricSheep"
+      >
+        {triggerContent}
+      </div>
+    );
+    return variant === "sidebar" ? (
+      <SidebarMenu>
+        <SidebarMenuItem>{content}</SidebarMenuItem>
+      </SidebarMenu>
+    ) : (
+      content
+    );
+  }
 
   const profileMenuPopover =
     variant === "profile-menu" ? (

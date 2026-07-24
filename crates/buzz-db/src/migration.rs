@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 24);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -879,6 +879,15 @@ mod tests {
             .to_lowercase()
             .contains("for update"));
         assert!(ttl_shared.contains("NEW.kind <> 9007"));
+
+        // Community collaboration authority is additive so existing
+        // communities remain native and the initial-schema checksum is stable.
+        assert_eq!(migrations[24].version, 25);
+        let collaboration_policy = migrations[24].sql.as_str();
+        assert!(collaboration_policy.contains("ADD COLUMN collaboration_policy"));
+        assert!(collaboration_policy.contains("DEFAULT 'native'"));
+        assert!(collaboration_policy.contains("'control_plane'"));
+        assert!(!migrations[0].sql.as_str().contains("collaboration_policy"));
     }
 
     #[test]

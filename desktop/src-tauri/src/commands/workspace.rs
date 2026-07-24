@@ -1,14 +1,78 @@
 use nostr::Keys;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(not(feature = "evaos-teams-managed"))]
+use tauri::Emitter;
+use tauri::{AppHandle, Manager, State};
 
 use crate::app_state::AppState;
+use crate::managed_agents::restore_managed_agents_on_launch;
+#[cfg(not(feature = "evaos-teams-managed"))]
 use crate::managed_agents::{
-    effective_repos_dir, ensure_repos_symlink, nest_dir, restore_managed_agents_on_launch,
-    try_regenerate_nest, write_persisted_repos_dir,
+    effective_repos_dir, ensure_repos_symlink, nest_dir, try_regenerate_nest,
+    write_persisted_repos_dir,
 };
 use crate::relay;
+
+#[cfg(any(test, feature = "evaos-teams-managed"))]
+fn validate_managed_workspace_request(
+    authorized: bool,
+    allowed_relay: Option<&str>,
+    requested_relay: &str,
+    nsec: Option<&str>,
+    repos_dir: Option<&str>,
+    agent_managed_profiles: Option<bool>,
+) -> Result<(), String> {
+    if nsec.is_some_and(|value| !value.trim().is_empty()) {
+        return Err("Managed workspaces cannot import a private key".to_string());
+    }
+    if repos_dir.is_some_and(|value| !value.trim().is_empty()) {
+        return Err("Managed workspaces cannot override the repositories directory".to_string());
+    }
+    if agent_managed_profiles.unwrap_or(false) {
+        return Err("Managed workspaces cannot enable native agent profile management".to_string());
+    }
+    if !authorized {
+        return Err("Managed workspace access is not authorized".to_string());
+    }
+    let allowed_relay =
+        allowed_relay.ok_or_else(|| "Managed workspace relay is unavailable".to_string())?;
+    if requested_relay.trim_end_matches('/') != allowed_relay.trim_end_matches('/') {
+        return Err("Managed workspace relay must come from the active entitlement".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "evaos-teams-managed"))]
+fn validate_managed_workspace_icon_request(
+    authorized: bool,
+    allowed_relay: Option<&str>,
+    requested_relay: &str,
+) -> Result<(), String> {
+    if !authorized {
+        return Err("Managed workspace access is not authorized".to_string());
+    }
+    let allowed_relay =
+        allowed_relay.ok_or_else(|| "Managed workspace relay is unavailable".to_string())?;
+    if requested_relay.trim_end_matches('/') != allowed_relay.trim_end_matches('/') {
+        return Err(
+            "Managed workspace icon relay must come from the active entitlement".to_string(),
+        );
+    }
+
+    let http_url = relay::relay_http_base_url(requested_relay);
+    let parsed = reqwest::Url::parse(&http_url)
+        .map_err(|_| "Managed workspace icon relay is invalid".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(
+            "Managed workspace icon relay must be a credential-free HTTP origin".to_string(),
+        );
+    }
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct RelayInfoIcon {
@@ -27,9 +91,28 @@ pub async fn fetch_workspace_icon(
     relay_url: String,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        // Recheck expiry before allowing any native fetch on behalf of the
+        // managed renderer.
+        state.signing_keys()?;
+        let allowed_relay = state
+            .relay_url_override
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clone();
+        validate_managed_workspace_icon_request(true, allowed_relay.as_deref(), &relay_url)?;
+    }
+
     let http_url = relay::relay_http_base_url(&relay_url);
-    let Ok(response) = state
-        .http_client
+    let client = if cfg!(feature = "evaos-teams-managed") {
+        // The managed command accepts only the active entitlement relay and
+        // must not let that origin redirect the native client to another host.
+        &state.media_fetch_client
+    } else {
+        &state.http_client
+    };
+    let Ok(response) = client
         .get(&http_url)
         .header("Accept", "application/nostr+json")
         .send()
@@ -73,6 +156,12 @@ pub fn get_active_workspace(state: State<'_, AppState>) -> Result<ActiveWorkspac
 /// and is valid. `Err` carries the human-readable reason for inline display.
 #[tauri::command]
 pub async fn validate_repos_dir(dir: String) -> Result<(), String> {
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        let _ = dir;
+        Err("Managed workspaces cannot override the repositories directory".to_string())
+    }
+    #[cfg(not(feature = "evaos-teams-managed"))]
     tokio::task::spawn_blocking(move || {
         let trimmed = dir.trim();
         if trimmed.is_empty() {
@@ -111,6 +200,25 @@ pub async fn apply_workspace(
         let state = app.state::<AppState>();
 
         // ── Validate before mutating ──────────────────────────────────────────
+        #[cfg(feature = "evaos-teams-managed")]
+        {
+            let authorized = state
+                .evaos_teams_authorized
+                .load(std::sync::atomic::Ordering::Acquire);
+            let allowed_relay = state
+                .relay_url_override
+                .lock()
+                .map_err(|error| error.to_string())?
+                .clone();
+            validate_managed_workspace_request(
+                authorized,
+                allowed_relay.as_deref(),
+                &relay_url,
+                nsec.as_deref(),
+                repos_dir.as_deref(),
+                agent_managed_profiles,
+            )?;
+        }
         let parsed_keys = match nsec.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(nsec_trimmed) => {
                 Some(Keys::parse(nsec_trimmed).map_err(|e| format!("invalid nsec: {e}"))?)
@@ -126,7 +234,9 @@ pub async fn apply_workspace(
         // validate (inside `effective_repos_dir`) drives both the emit and the
         // persisted value. `nest` is resolved softly: when absent there is nothing
         // to persist or symlink, and relay/keys must still apply unconditionally.
+        #[cfg(not(feature = "evaos-teams-managed"))]
         let nest = nest_dir();
+        #[cfg(not(feature = "evaos-teams-managed"))]
         let effective_repos_dir = match nest.as_deref() {
             Some(nest) => match effective_repos_dir(nest, repos_dir.as_deref()) {
                 Ok(value) => value,
@@ -139,12 +249,14 @@ pub async fn apply_workspace(
         };
 
         // ── Apply all state changes (nothing below can fail) ──────────────────
+        #[cfg(not(feature = "evaos-teams-managed"))]
         {
             let mut override_guard = state.relay_url_override.lock().map_err(|e| e.to_string())?;
             *override_guard = Some(relay_url);
         }
         // Reset the Rust-side admission gate when switching workspace/community,
         // matching `resetRateLimitGate()` on the TS side (useCommunityInit.ts:38).
+        #[cfg(not(feature = "evaos-teams-managed"))]
         crate::relay_admission::reset_gate_for_workspace_change();
 
         if let Some(keys) = parsed_keys {
@@ -155,6 +267,7 @@ pub async fn apply_workspace(
         // Keep the backend-side reconcile guard aligned with the frontend
         // experiment before launch-time restore can spawn any agents. Missing
         // means the stable behavior: desktop remains authoritative.
+        #[cfg(not(feature = "evaos-teams-managed"))]
         state
             .managed_agent_profile_reconcile_enabled
             .store(!agent_managed_profiles.unwrap_or(false), Ordering::Release);
@@ -169,17 +282,21 @@ pub async fn apply_workspace(
         // clean and agent restore proceeds. Failure of either must NOT fail the
         // command — relay/keys are already applied. Surface symlink errors via
         // `repos-dir-error`.
-        if let Some(nest) = nest.as_deref() {
-            if let Err(error) = write_persisted_repos_dir(nest, effective_repos_dir.as_deref()) {
-                eprintln!("buzz-desktop: persist repos dir failed: {error}");
+        #[cfg(not(feature = "evaos-teams-managed"))]
+        {
+            if let Some(nest) = nest.as_deref() {
+                if let Err(error) = write_persisted_repos_dir(nest, effective_repos_dir.as_deref())
+                {
+                    eprintln!("buzz-desktop: persist repos dir failed: {error}");
+                }
+                if let Err(error) = ensure_repos_symlink(nest, effective_repos_dir.as_deref()) {
+                    eprintln!("buzz-desktop: repos dir setup failed: {error}");
+                    let _ = app.emit("repos-dir-error", error);
+                }
             }
-            if let Err(error) = ensure_repos_symlink(nest, effective_repos_dir.as_deref()) {
-                eprintln!("buzz-desktop: repos dir setup failed: {error}");
-                let _ = app.emit("repos-dir-error", error);
-            }
-        }
 
-        try_regenerate_nest(&app);
+            try_regenerate_nest(&app);
+        }
 
         Ok::<(), String>(())
     })
@@ -187,9 +304,10 @@ pub async fn apply_workspace(
     .map_err(|e| format!("spawn_blocking failed: {e}"))??;
 
     let state = restore_app.state::<AppState>();
-    let restore_pending = state
-        .managed_agent_restore_pending
-        .swap(false, Ordering::AcqRel);
+    let restore_pending = !cfg!(feature = "evaos-teams-managed")
+        && state
+            .managed_agent_restore_pending
+            .swap(false, Ordering::AcqRel);
 
     // The coordinator starts before React applies the selected workspace, so
     // its startup publication may have used the fallback relay and placeholder
@@ -235,4 +353,99 @@ pub async fn apply_workspace(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod managed_tests {
+    use super::{validate_managed_workspace_icon_request, validate_managed_workspace_request};
+
+    #[test]
+    fn managed_workspace_rejects_private_key_and_relay_injection() {
+        assert!(validate_managed_workspace_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com",
+            Some("nsec1secret"),
+            None,
+            None,
+        )
+        .is_err());
+        assert!(validate_managed_workspace_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://attacker.example.com",
+            None,
+            None,
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn managed_workspace_accepts_only_the_authorized_relay_without_native_overrides() {
+        assert!(validate_managed_workspace_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com/",
+            None,
+            None,
+            Some(false),
+        )
+        .is_ok());
+        assert!(validate_managed_workspace_request(
+            false,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com",
+            None,
+            None,
+            None,
+        )
+        .is_err());
+        assert!(validate_managed_workspace_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com",
+            None,
+            Some("/tmp/attacker-repos"),
+            None,
+        )
+        .is_err());
+        assert!(validate_managed_workspace_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com",
+            None,
+            None,
+            Some(true),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn managed_workspace_icon_requires_current_authorized_credential_free_relay() {
+        assert!(validate_managed_workspace_icon_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com/",
+        )
+        .is_ok());
+        assert!(validate_managed_workspace_icon_request(
+            false,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com",
+        )
+        .is_err());
+        assert!(validate_managed_workspace_icon_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://attacker.example.com",
+        )
+        .is_err());
+        assert!(validate_managed_workspace_icon_request(
+            true,
+            Some("wss://user:password@relay.example.com"),
+            "wss://user:password@relay.example.com",
+        )
+        .is_err());
+    }
 }

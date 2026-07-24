@@ -96,6 +96,7 @@ type MockRelayAgentSeed = {
   respondToAllowlist?: string[];
   channelNames?: string[];
   channelIds?: string[];
+  memberChannelNames?: string[];
   status?: PresenceStatus;
 };
 
@@ -133,6 +134,10 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /** Run the renderer under the managed evaOS Teams product/auth contract. */
+    evaosTeamsManaged?: boolean;
+    /** Managed auth state returned by the mock. Defaults to active. */
+    evaosTeamsPhase?: "active" | "signed_out" | "keychain_locked";
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -250,6 +255,8 @@ type E2eConfig = {
     openerError?: string;
     /** Delay binding signatures so specs can exercise request supersession. */
     nostrBindSignDelayMs?: number;
+    /** Reject successive mock WebSocket connect attempts, then resume. */
+    websocketConnectErrors?: string[];
     stallWebsocketSends?: boolean;
     userSearchDelayMs?: number;
     // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
@@ -1036,6 +1043,7 @@ declare global {
     __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => ConnectionState;
     __BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
     __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
+    __BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_SET_MESH__?: (mesh: {
       admitted?: boolean;
       models?: Array<{ id: string; name: string | null }>;
@@ -2008,6 +2016,38 @@ function resetMockRelayAgents(config?: E2eConfig) {
       respond_to: seed.respondTo ?? "owner-only",
       respond_to_allowlist: seed.respondToAllowlist ?? [],
     });
+
+    if (!seed.memberChannelNames?.length) {
+      continue;
+    }
+    applyMockDisplayName(seed.pubkey, seed.name);
+    mockAgentPubkeys.add(seed.pubkey);
+    mockProfiles.set(seed.pubkey, {
+      pubkey: seed.pubkey,
+      display_name: seed.name,
+      avatar_url: null,
+      about: null,
+      nip05_handle: null,
+      owner_pubkey: null,
+      is_agent: true,
+      has_profile_event: true,
+    });
+    for (const channel of mockChannels) {
+      if (
+        !seed.memberChannelNames.includes(channel.name) ||
+        channel.members.some((member) => member.pubkey === seed.pubkey)
+      ) {
+        continue;
+      }
+      channel.members.push({
+        pubkey: seed.pubkey,
+        role: "bot",
+        is_agent: true,
+        joined_at: new Date().toISOString(),
+        display_name: seed.name,
+      });
+      syncMockChannel(channel);
+    }
   }
 }
 
@@ -3324,9 +3364,10 @@ function sendWsText(handler: WsHandler, payload: unknown[]) {
   });
 }
 
-function sendWsClose(handler: WsHandler) {
+function sendWsClose(handler: WsHandler, code?: number, reason?: string) {
   handler({
     type: "Close",
+    data: code === undefined ? undefined : { code, reason: reason ?? "" },
   });
 }
 
@@ -8498,6 +8539,11 @@ async function connectRealSocket(args: { url?: string; onMessage: unknown }) {
 }
 
 async function connectMockSocket(args: { onMessage: unknown }) {
+  const connectError = getConfig()?.mock?.websocketConnectErrors?.shift();
+  if (connectError) {
+    throw new Error(connectError);
+  }
+
   if (mockWebsocketSendMutexWedged) {
     return new Promise<number>(() => {});
   }
@@ -9078,6 +9124,14 @@ export function maybeInstallE2eTauriMocks() {
     for (const socketId of socketIds) disconnectMockSocket(socketId);
     return socketIds.length;
   };
+  window.__BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__ = () => {
+    const sockets = [...mockSockets.values()];
+    mockSockets.clear();
+    for (const socket of sockets) {
+      sendWsClose(socket.handler, 1012, "relay restarting");
+    }
+    return sockets.length;
+  };
   // Tests vary mesh admission and models to exercise provider discovery and
   // the managed-agent start preflight.
   window.__BUZZ_E2E_SET_MESH__ = (mesh) => {
@@ -9144,6 +9198,73 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_desktop_product_policy":
+        return activeConfig?.mock?.evaosTeamsManaged
+          ? {
+              managed: true,
+              productName: "evaOS Teams",
+              version: "0.4.23-es.1",
+              bundleIdentifier: "com.electricsheephq.evaos.teams",
+              deepLinkScheme: "evaos-teams",
+              artifactName: "evaOS-Teams-0.4.23-es.1-arm64.dmg",
+              updateChannel: "managed-beta",
+              updaterEnabled: false,
+              upstreamHostedServicesEnabled: false,
+              originAttribution:
+                "Built from Buzz by Block, used under the Apache License 2.0.",
+            }
+          : {
+              managed: false,
+              productName: "Buzz",
+              version: "0.4.23",
+              bundleIdentifier: "xyz.block.buzz.app",
+              deepLinkScheme: "buzz",
+              artifactName: "",
+              updateChannel: "upstream",
+              updaterEnabled: false,
+              upstreamHostedServicesEnabled: true,
+              originAttribution:
+                "Buzz by Block, licensed under the Apache License 2.0.",
+            };
+      case "get_evaos_teams_auth_status":
+        if (activeConfig?.mock?.evaosTeamsManaged) {
+          const phase = activeConfig.mock.evaosTeamsPhase ?? "active";
+          if (phase !== "active") {
+            return {
+              managed: true,
+              phase,
+              authenticated: false,
+              keychainAvailable: phase !== "keychain_locked",
+              message:
+                phase === "keychain_locked"
+                  ? "evaOS Teams cannot read its managed identity."
+                  : undefined,
+            };
+          }
+          return {
+            managed: true,
+            phase: "active",
+            authenticated: true,
+            keychainAvailable: true,
+            entitlement: {
+              communityId: "e2e-default-community",
+              relayHost: "https://localhost:3000",
+              publicKey: identity?.pubkey ?? "deadbeef".repeat(8),
+              role: "employee",
+              assignmentStatus: "assigned",
+              reconciliationStatus: "current",
+              accessRevision: 1,
+              expiresAt: "2099-01-01T00:00:00Z",
+              refreshAfterSeconds: 3600,
+            },
+          };
+        }
+        return {
+          managed: false,
+          phase: "native",
+          authenticated: false,
+          keychainAvailable: true,
+        };
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {

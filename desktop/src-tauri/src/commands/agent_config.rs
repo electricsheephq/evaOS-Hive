@@ -1,6 +1,11 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
+mod baked_env;
+#[cfg(test)]
+use baked_env::is_safe_to_reveal;
+pub use baked_env::*;
+
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -20,7 +25,6 @@ use crate::{
 };
 
 /// Subset of the goose file config exposed to the frontend for gate evaluation.
-///
 /// Only the fields the dialog gate needs — not the full `RuntimeConfigSurface`.
 /// The gate uses this to know which requirements are already satisfied in the
 /// harness config file, so it can show "Set in goose config" rather than
@@ -212,6 +216,7 @@ fn retag_persona_default(field: &mut Option<NormalizedField>) {
 pub async fn get_runtime_file_config(
     runtime_id: String,
 ) -> Result<Option<RuntimeFileConfigSubset>, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || match runtime_id.as_str() {
         "goose" => {
             let cfg = read_goose_file_config()?;
@@ -231,94 +236,6 @@ pub async fn get_runtime_file_config(
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))
-}
-
-/// Return the key names of all non-empty baked build env vars.
-///
-/// Internal (Block) builds bake provider credentials and other env pairs into
-/// the binary at compile time via `BUZZ_BUILD_AGENT_ENV`. The backend readiness
-/// gate already treats these keys as satisfying their requirements (Layer 1 of
-/// `resolve_effective_agent_env`). This command exposes the *key names only* —
-/// never the values — so the frontend dialogs can apply the same logic and avoid
-/// surfacing a spurious "Required" badge for keys that are covered by the baked
-/// env.
-///
-/// OSS builds have no baked env, so this returns an empty list — OSS behavior
-/// is unchanged.
-#[tauri::command]
-pub fn get_baked_build_env_keys() -> Vec<String> {
-    crate::managed_agents::baked_build_env()
-        .into_iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, _)| k)
-        .collect()
-}
-
-/// A single baked build env entry returned to the frontend.
-///
-/// Values are masked in Rust so unmasked secret values never cross the
-/// Tauri IPC boundary. The `masked` flag lets the frontend style masked
-/// rows distinctly.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct BakedEnvEntry {
-    pub key: String,
-    /// The display value — real value for non-secret keys, `••••••` for
-    /// secret keys whose names match the secret heuristic.
-    pub value: String,
-    /// `true` when the value was replaced by the mask placeholder.
-    pub masked: bool,
-}
-
-/// Returns `true` when a baked-env key is safe to display unmasked in the UI.
-///
-/// This uses an explicit allowlist of keys that are known safe (non-secret).
-/// Any key NOT in this set is masked — default-deny for a security surface.
-///
-/// Allowlist (case-insensitive):
-/// - `BUZZ_AGENT_PROVIDER`, `BUZZ_AGENT_MODEL` — agent runtime selection
-/// - `BUZZ_AGENT_THINKING_EFFORT` — non-secret enum (none/minimal/low/medium/high/xhigh/max)
-/// - `DATABRICKS_HOST`, `DATABRICKS_MODEL` — Block non-secret defaults
-fn is_safe_to_reveal(key: &str) -> bool {
-    const SAFE_KEYS: &[&str] = &[
-        "BUZZ_AGENT_PROVIDER",
-        "BUZZ_AGENT_MODEL",
-        "BUZZ_AGENT_THINKING_EFFORT",
-        "DATABRICKS_HOST",
-        "DATABRICKS_MODEL",
-    ];
-    let upper = key.to_ascii_uppercase();
-    SAFE_KEYS.iter().any(|safe| upper == *safe)
-}
-
-/// Expose the baked build env to the frontend with values shown, but any
-/// key not in the safe-to-reveal allowlist has its value replaced by `••••••`.
-///
-/// Provider and model arrive as `BUZZ_AGENT_PROVIDER` / `BUZZ_AGENT_MODEL`
-/// keys in `baked_build_env()` and are included in the returned list like any
-/// other key. Empty-value keys are filtered out (same as
-/// `get_baked_build_env_keys`).
-///
-/// OSS builds return an empty list — the baked-env section is hidden entirely
-/// in OSS installations.
-#[tauri::command]
-pub fn get_baked_build_env() -> Vec<BakedEnvEntry> {
-    crate::managed_agents::baked_build_env()
-        .into_iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(key, value)| {
-            let masked = !is_safe_to_reveal(&key);
-            let display_value = if masked {
-                "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}".to_string()
-            } else {
-                value
-            };
-            BakedEnvEntry {
-                key,
-                value: display_value,
-                masked,
-            }
-        })
-        .collect()
 }
 
 /// Re-tag a field's origin from `BuzzExplicit` to `GlobalDefault`, leaving any
@@ -342,6 +259,7 @@ pub async fn get_agent_config_surface(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeConfigSurface, String> {
+    super::managed_authority::require_native_agent_authority()?;
     let record = {
         let _store_guard = state
             .managed_agents_store_lock
@@ -399,6 +317,9 @@ pub fn put_agent_session_config(
     app: AppHandle,
     state: State<'_, AppState>,
 ) {
+    if super::managed_authority::require_native_agent_authority().is_err() {
+        return;
+    }
     let record_relay_url = {
         let _guard = match state.managed_agents_store_lock.lock() {
             Ok(g) => g,
@@ -599,7 +520,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::managed_agents::{BackendKind, RespondTo};
+    use crate::managed_agents::{BackendKind, RespondTo, RuntimeAuthProbe};
 
     fn goose_runtime() -> &'static KnownAcpRuntime {
         &KnownAcpRuntime {
@@ -631,7 +552,8 @@ mod tests {
             context_limit_env_var: Some("GOOSE_CONTEXT_LIMIT"),
             required_normalized_fields: &["model", "provider"],
             login_hint: None,
-            auth_probe_args: None,
+            readiness_probe_suffix: None,
+            auth_probe: RuntimeAuthProbe::NotApplicable,
         }
     }
 

@@ -8,6 +8,7 @@ import { getChannelDescription } from "@/features/channels/lib/channelDescriptio
 import { getDmParticipantPreview } from "@/features/channels/lib/dmParticipantDisplay";
 import { ChannelHeaderStatusBadge } from "@/features/channels/ui/ChannelHeaderStatusBadge";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   DEFAULT_HOVER_PROFILE_STATUS_GEOMETRY,
   ProfileAvatarWithStatus,
@@ -62,6 +63,7 @@ export function ChannelScreenHeader({
   onManageChannel,
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
+  const { policy } = useEvaosTeamsAuthority();
   const isGroupDm =
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
@@ -70,6 +72,7 @@ export function ChannelScreenHeader({
     !activeChannel.isMember &&
     activeChannel.visibility === "open" &&
     !activeChannel.archivedAt &&
+    policy.canManageMembership &&
     onJoinChannel;
 
   const actions = activeChannel ? (
@@ -89,8 +92,8 @@ export function ChannelScreenHeader({
         currentPubkey={currentPubkey}
         isAddBotOpen={isAddBotOpen}
         onAddBotOpenChange={onAddBotOpenChange}
-        onManageChannel={onManageChannel}
-        onToggleMembers={onToggleMembers}
+        onManageChannel={policy.canManageChannels ? onManageChannel : undefined}
+        onToggleMembers={policy.canViewMembers ? onToggleMembers : undefined}
         variant={actionsVariant}
       />
     )

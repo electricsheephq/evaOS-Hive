@@ -6,17 +6,33 @@ import {
   SettingsOptionRow,
 } from "./ui/SettingsOptionGroup";
 import { SettingsSectionHeader } from "./ui/SettingsSectionHeader";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 export function UpdateChecker() {
   const { status, checkForUpdate, installAndRelaunch } = useUpdaterContext();
+  const policy = desktopProductPolicy();
 
   return (
     <section className="min-w-0" data-testid="settings-updates">
       <SettingsSectionHeader
         title="Software Updates"
-        description="Keep Buzz up to date with the latest features and fixes."
+        description={`Keep ${policy.productName} up to date with the latest features and fixes.`}
       />
 
       <SettingsOptionGroup>
+        {status.state === "managed" && (
+          <SettingsOptionRow>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Managed updates</p>
+              <p className="text-sm font-normal text-muted-foreground">
+                {status.message}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Channel: {policy.updateChannel}. This app does not contact the
+                upstream update feed.
+              </p>
+            </div>
+          </SettingsOptionRow>
+        )}
         {status.state === "idle" && (
           <SettingsOptionRow>
             <div className="min-w-0">

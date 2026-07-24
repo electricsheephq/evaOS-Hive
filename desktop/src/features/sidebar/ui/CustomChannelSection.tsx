@@ -604,7 +604,7 @@ export function CustomChannelSection({
   onAssignChannel: (channelId: string, sectionId: string) => void;
   onUnassignChannel: (channelId: string) => void;
   onCreateSectionForChannel: (channelId: string) => void;
-  onCreateChannel: () => void;
+  onCreateChannel?: () => void;
   onRenameSection: () => void;
   onDeleteSection: () => void;
   onMoveSectionUp: () => void;
@@ -682,11 +682,13 @@ export function CustomChannelSection({
                     </button>
                   </SidebarGroupLabel>
                   <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
-                    <SectionQuickAction
-                      label={`Add channel to ${section.name}`}
-                      onClick={onCreateChannel}
-                      testId={`section-actions-${section.id}-quick-create`}
-                    />
+                    {onCreateChannel ? (
+                      <SectionQuickAction
+                        label={`Add channel to ${section.name}`}
+                        onClick={onCreateChannel}
+                        testId={`section-actions-${section.id}-quick-create`}
+                      />
+                    ) : null}
                     <SectionActionsMenu
                       sectionLabel={section.name}
                       testId={`section-actions-${section.id}`}

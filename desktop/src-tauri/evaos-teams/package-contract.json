@@ -1,0 +1,8 @@
+{
+  "productName": "evaOS Teams",
+  "version": "0.4.23-es.1",
+  "bundleIdentifier": "com.electricsheephq.evaos.teams",
+  "deepLinkScheme": "evaos-teams",
+  "artifactName": "evaOS-Teams-0.4.23-es.1-arm64.dmg",
+  "updateChannel": "managed-beta"
+}

@@ -36,6 +36,7 @@ import {
   readChannelSnapshot,
   writeChannelSnapshot,
 } from "@/features/channels/channelSnapshot";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 export const channelsQueryKey = ["channels"] as const;
 const channelDetailQueryKey = (channelId: string) =>
@@ -189,6 +190,7 @@ function setChannelArchivedState(
 
 export function useChannelsQuery(options?: { enabled?: boolean }) {
   const { activeCommunity } = useCommunities();
+  const authority = useEvaosTeamsAuthority();
   const relayUrl = activeCommunity?.relayUrl ?? null;
 
   return useQuery({
@@ -196,7 +198,7 @@ export function useChannelsQuery(options?: { enabled?: boolean }) {
     queryKey: channelsQueryKey,
     queryFn: async () => {
       const channels = sortChannels(await getChannels());
-      if (relayUrl) {
+      if (relayUrl && !authority.managed) {
         writeChannelSnapshot(relayUrl, channels);
       }
       return channels;
@@ -204,12 +206,13 @@ export function useChannelsQuery(options?: { enabled?: boolean }) {
     // Paint the sidebar instantly from the last-known list for this relay, then
     // revalidate. initialDataUpdatedAt:0 marks the seed as already-stale so the
     // background refetch still fires immediately.
-    initialData: relayUrl
-      ? () => {
-          const snapshot = readChannelSnapshot(relayUrl);
-          return snapshot ? sortChannels(snapshot) : undefined;
-        }
-      : undefined,
+    initialData:
+      relayUrl && !authority.managed
+        ? () => {
+            const snapshot = readChannelSnapshot(relayUrl);
+            return snapshot ? sortChannels(snapshot) : undefined;
+          }
+        : undefined,
     initialDataUpdatedAt: 0,
     staleTime: 60_000,
     refetchInterval: 60_000,
@@ -323,8 +326,9 @@ export function useChannelMembersQuery(
   channelId: string | null,
   enabled = true,
 ) {
+  const { policy } = useEvaosTeamsAuthority();
   return useQuery({
-    enabled: enabled && channelId !== null,
+    enabled: policy.canViewMembers && enabled && channelId !== null,
     queryKey: ["channels", channelId ?? "none", "members"],
     queryFn: async () => {
       if (!channelId) {

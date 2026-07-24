@@ -8,6 +8,7 @@ import type {
 } from "@/features/home/lib/inbox";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { formatInboxTypeLabel } from "@/features/home/lib/inbox";
 import {
   type InboxDisplayMessage,
@@ -130,6 +131,7 @@ export function InboxDetailPane({
 }: InboxDetailPaneProps) {
   const detailPaneRef = React.useRef<HTMLElement | null>(null);
   const { activeCommunity } = useCommunities();
+  const { policy } = useEvaosTeamsAuthority();
   // Refs for the shared anchored-scroll hook's container and content roots.
   const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -578,7 +580,7 @@ export function InboxDetailPane({
         </div>
       </div>
 
-      {channel ? (
+      {channel && policy.canViewMembers ? (
         <React.Suspense fallback={null}>
           <MembersSidebar
             channel={channel}

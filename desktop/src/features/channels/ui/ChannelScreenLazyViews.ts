@@ -1,8 +1,8 @@
 import * as React from "react";
 
 export const ChannelPane = React.lazy(async () => {
-  const module = await import("@/features/channels/ui/ChannelPane");
-  return { default: module.ChannelPane };
+  const module = await import("@/features/channels/ui/ManagedChannelPane");
+  return { default: module.ManagedChannelPane };
 });
 
 export const ForumView = React.lazy(async () => {

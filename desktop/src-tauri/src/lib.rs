@@ -4,6 +4,7 @@ mod archive;
 mod builderlab;
 mod commands;
 mod deep_link;
+mod evaos_teams;
 mod event_sync;
 mod events;
 mod huddle;
@@ -21,6 +22,8 @@ mod native_websocket;
 mod nostr_bind;
 pub mod nostr_convert;
 mod prevent_sleep;
+mod product_contract;
+mod product_policy;
 mod ptt_shortcut;
 mod relay;
 mod relay_admission;
@@ -36,6 +39,7 @@ use deep_link::{
     acknowledge_pending_community_deep_link, handle_deep_link_url,
     take_pending_community_deep_link, PendingCommunityDeepLinks,
 };
+use evaos_teams::*;
 use huddle::audio_output::{
     get_audio_output_device, list_audio_output_devices, set_audio_output_device,
 };
@@ -54,6 +58,7 @@ use managed_agents::{
 };
 #[cfg(not(feature = "mesh-llm"))]
 use mesh_llm_stubs::*;
+use product_policy::get_desktop_product_policy;
 #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
 use shutdown::{hard_exit_after_mesh_shutdown, relaunch_after_mesh_shutdown};
 use shutdown::{is_restart_request, shut_down_app};
@@ -171,7 +176,10 @@ pub fn run() {
             }
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
-                if arg.starts_with("buzz://") {
+                let managed = cfg!(feature = "evaos-teams-managed");
+                if (managed && arg.starts_with("evaos-teams://"))
+                    || (!managed && arg.starts_with("buzz://"))
+                {
                     handle_deep_link_url(app, arg);
                 }
             }
@@ -332,14 +340,14 @@ pub fn run() {
     });
 
     // Register the updater only in configured release builds; omit it locally.
-    #[cfg(buzz_updater_enabled)]
+    #[cfg(all(buzz_updater_enabled, not(feature = "evaos-teams-managed")))]
     let builder = if cfg!(debug_assertions) {
         builder
     } else {
         builder.plugin(tauri_plugin_updater::Builder::new().build())
     };
 
-    #[cfg(not(buzz_updater_enabled))]
+    #[cfg(any(not(buzz_updater_enabled), feature = "evaos-teams-managed"))]
     let builder = builder;
 
     let app = builder
@@ -355,9 +363,36 @@ pub fn run() {
         .manage(PendingCommunityDeepLinks::default())
         .manage(BuilderlabSession::default())
         .manage(BuilderlabLogin::default())
+        .manage(EvaosTeamsState::default())
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            // Register runtime/cold-start deep links before the managed setup
+            // boundary. Managed mode returns early to avoid all native
+            // migration and owner-key side effects, but still needs its
+            // device-login custom-scheme fallback.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let dl_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        handle_deep_link_url(&dl_handle, url.as_str());
+                    }
+                });
+            }
+
+            // Managed Teams owns a separate Keychain identity and performs no
+            // native Buzz migration, plaintext fallback, or owner-keyed boot
+            // side effect before the broker has refreshed an entitlement.
+            if cfg!(feature = "evaos-teams-managed") {
+                let state = app_handle.state::<AppState>();
+                if let Ok(mut guard) = state.app_handle.lock() {
+                    *guard = Some(app_handle.clone());
+                }
+                return Ok(());
+            }
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
             // Must run before migrations and identity resolution so the wipe
@@ -537,7 +572,7 @@ pub fn run() {
             // identity resolution above, so JSON/SQLite/signing work must not
             // hold the boot path hostage. Skipped in recovery mode — the owner
             // key is ephemeral.
-            if !recovery_mode {
+            if !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
                 event_sync::spawn_event_sync(app_handle.clone(), owner_keys);
             }
 
@@ -546,27 +581,13 @@ pub fn run() {
                 mgr.start_tts_download(state.http_client.clone());
             }
 
-            // Handle deep link URLs received while the app is running (macOS)
-            // and on cold start. The single-instance plugin handles forwarding
-            // from duplicate launches on Windows/Linux.
-            #[cfg(desktop)]
-            {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                let dl_handle = app.handle().clone();
-                app.deep_link().on_open_url(move |event| {
-                    for url in event.urls() {
-                        handle_deep_link_url(&dl_handle, url.as_str());
-                    }
-                });
-            }
-
             // Defer launch-time agent restoration until `apply_workspace` has
             // installed the active workspace relay and identity. Starting here
             // would race React initialization and send agents whose saved record
             // has no relay override to the localhost fallback. Preserve the
             // boot-time repos and identity recovery safety gates by only marking
             // restoration pending when both allow it.
-            if restore_agents && !recovery_mode {
+            if restore_agents && !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
                 state
                     .managed_agent_restore_pending
                     .store(true, Ordering::Release);
@@ -618,7 +639,7 @@ pub fn run() {
             // the next sweep.
             // Skipped in recovery mode — flushing under an ephemeral key would
             // publish events attributed to an identity the user doesn't own.
-            if !recovery_mode {
+            if !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
                 let flush_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     use std::time::Duration;
@@ -645,12 +666,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_desktop_product_policy,
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             start_builderlab_login,
             cancel_builderlab_login,
             get_builderlab_auth,
             clear_builderlab_auth,
+            get_evaos_teams_auth_status,
+            start_evaos_teams_login,
+            logout_evaos_teams,
             get_builderlab_nostr_identity,
             bind_builderlab_nostr_identity,
             delete_builderlab_nostr_identity,

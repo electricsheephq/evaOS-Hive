@@ -14,6 +14,7 @@ test("hides the card for states with nothing actionable to show", () => {
   assert.equal(shouldShowSidebarUpdateCard({ state: "checking" }), false);
   assert.equal(shouldShowSidebarUpdateCard({ state: "up-to-date" }), false);
   assert.equal(shouldShowSidebarUpdateCard({ state: "unavailable" }), false);
+  assert.equal(shouldShowSidebarUpdateCard({ state: "managed" }), false);
   assert.equal(shouldShowSidebarUpdateCard({ state: "available" }), false);
   assert.equal(shouldShowSidebarUpdateCard({ state: "downloading" }), false);
 });

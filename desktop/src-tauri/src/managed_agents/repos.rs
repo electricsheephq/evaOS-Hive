@@ -183,6 +183,7 @@ pub fn ensure_repos_setup_default(nest_root: &Path) -> Result<(), String> {
 /// One validate call drives both the persisted value and the error: a bad path
 /// is never persisted, so it can never silently skip agent restore on a later
 /// boot. Pure (no FS mutation, no emit) so the persist decision is unit-tested.
+#[cfg(any(test, not(feature = "evaos-teams-managed")))]
 pub fn effective_repos_dir(
     nest_root: &Path,
     candidate: Option<&str>,
@@ -216,6 +217,7 @@ fn read_persisted_repos_dir(nest_root: &Path) -> Option<String> {
 /// override by removing the file, so a later boot reverts `REPOS` to a real
 /// in-nest directory. Removing an absent file is not an error. Mirrors the
 /// `.nest-agents-version` dotfile pattern.
+#[cfg(any(test, not(feature = "evaos-teams-managed")))]
 pub fn write_persisted_repos_dir(nest_root: &Path, repos_dir: Option<&str>) -> Result<(), String> {
     let path = nest_root.join(REPOS_DIR_FILE);
     match repos_dir.map(str::trim).filter(|s| !s.is_empty()) {

@@ -1,23 +1,27 @@
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use crate::managed_agents::{
     buzz_managed_command_path, buzz_managed_node_bin_dir, buzz_managed_npm_bin_dir,
     AcpAvailabilityStatus, AcpRuntimeCatalogEntry, AuthStatus, CommandAvailabilityInfo,
 };
 
+mod probes;
 mod runtime_metadata;
 
-pub(crate) use runtime_metadata::KnownAcpRuntime;
+#[cfg(test)]
+use probes::run_probe;
+use probes::{auth_status_without_probe, availability_after_readiness_probe, probe_auth_status};
+pub(crate) use runtime_metadata::{KnownAcpRuntime, RuntimeAuthProbe};
 
 const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
 const BUZZ_AGENT_AVATAR_URL: &str =
     "https://raw.githubusercontent.com/block/buzz/refs/heads/main/crates/buzz-agent/buzz-agent.png";
+const HERMES_AVATAR_URL: &str =
+    "https://raw.githubusercontent.com/NousResearch/hermes-agent/refs/heads/main/apps/desktop/public/hermes.png";
 
 fn common_binary_paths() -> &'static [PathBuf] {
     static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
@@ -92,7 +96,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: Some("GOOSE_CONTEXT_LIMIT"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
-        auth_probe_args: None,
+        readiness_probe_suffix: None,
+        auth_probe: RuntimeAuthProbe::NotApplicable,
     },
     KnownAcpRuntime {
         id: "claude",
@@ -123,7 +128,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run the Claude CLI to complete authentication."),
-        auth_probe_args: Some(&["claude", "auth", "status"]),
+        readiness_probe_suffix: None,
+        auth_probe: RuntimeAuthProbe::Cli(&["claude", "auth", "status"]),
     },
     KnownAcpRuntime {
         id: "codex",
@@ -154,8 +160,47 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run `codex login` to authenticate."),
+        readiness_probe_suffix: None,
         // Verified: `codex login status` exits 0 when logged in, non-zero otherwise.
-        auth_probe_args: Some(&["codex", "login", "status"]),
+        auth_probe: RuntimeAuthProbe::Cli(&["codex", "login", "status"]),
+    },
+    KnownAcpRuntime {
+        id: "hermes",
+        label: "Hermes Agent",
+        commands: &["hermes", "hermes-acp"],
+        aliases: &[],
+        avatar_url: HERMES_AVATAR_URL,
+        mcp_command: None,
+        mcp_hooks: false,
+        underlying_cli: None,
+        cli_install_commands: &[
+            "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+        ],
+        cli_install_commands_windows: &[
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"iex (irm https://hermes-agent.nousresearch.com/install.ps1)\"",
+        ],
+        adapter_install_commands: &[],
+        install_instructions_url: "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+        cli_install_hint: "Install Hermes Agent with the official installer.",
+        adapter_install_hint: "",
+        skill_dir: Some(".hermes/skills"),
+        supports_acp_model_switching: false,
+        model_env_var: None,
+        provider_env_var: None,
+        provider_locked: true,
+        default_env: &[],
+        config_file_path: Some("~/.hermes/config.yaml"),
+        config_file_format: Some("yaml"),
+        supports_acp_native_config: false,
+        thinking_env_var: None,
+        max_tokens_env_var: None,
+        context_limit_env_var: None,
+        required_normalized_fields: &[],
+        login_hint: None,
+        // Appended after the command-specific ACP args: `hermes acp --check`
+        // or `hermes-acp --check`. This validates only dependency readiness.
+        readiness_probe_suffix: Some(&["--check"]),
+        auth_probe: RuntimeAuthProbe::AcpHandshake,
     },
     KnownAcpRuntime {
         id: "buzz-agent",
@@ -186,7 +231,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: Some("BUZZ_AGENT_MAX_CONTEXT_TOKENS"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
-        auth_probe_args: None,
+        readiness_probe_suffix: None,
+        auth_probe: RuntimeAuthProbe::NotApplicable,
     },
 ];
 
@@ -342,9 +388,9 @@ pub use overrides::{apply_agent_command_update, create_time_agent_command_overri
 
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
-        "goose" => Some(vec!["acp".to_string()]),
+        "goose" | "hermes" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" | "buzz-agent" => Some(Vec::new()),
+        | "claudecode" | "hermes-acp" | "buzz-agent" => Some(Vec::new()),
         _ => None,
     }
 }
@@ -896,102 +942,11 @@ pub(crate) fn is_npm_global_install(cmd: &str) -> bool {
         || t.starts_with("npm uninstall -g ")
 }
 
-/// Run a CLI auth probe with a 10-second process-level timeout.
-///
-/// Spawns the probe CLI as a child process. Stdout and stderr are drained on
-/// background threads to prevent pipe-buffer deadlock. On timeout the child is
-/// killed and `Unknown` is returned; no orphaned threads or processes are left
-/// behind. Returns `Unknown` on timeout.
-fn probe_auth_status(binary_path: &Path, probe_args: &[&str]) -> AuthStatus {
-    use crate::managed_agents::readiness::cli_probe;
-
-    let augmented_path = cli_probe::augmented_path();
-
-    let mut command = std::process::Command::new(binary_path);
-    command.args(&probe_args[1..]);
-    if let Some(ref path) = augmented_path {
-        command.env("PATH", path);
-    }
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let mut child = match command.spawn() {
-        Ok(c) => c,
-        Err(_) => return AuthStatus::Unknown,
-    };
-
-    // Drain stdout/stderr on background threads to prevent pipe-buffer deadlock.
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-
-    let stdout_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stdout_pipe {
-            let _ = pipe.read_to_end(&mut buf);
-        }
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let _ = pipe.read_to_end(&mut buf);
-        }
-        buf
-    });
-
-    // Save PID for kill-on-timeout before moving child into the wait thread.
-    let child_pid = child.id();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let wait_thread = std::thread::spawn(move || {
-        let _ = tx.send(child.wait());
-    });
-
-    // 10-second timeout for auth probes.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let exit_status = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(child_pid as i32, libc::SIGTERM);
-            }
-            #[cfg(not(unix))]
-            let _ = child_pid;
-            drop(rx);
-            let _ = wait_thread.join();
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
-            return AuthStatus::Unknown;
-        }
-        match rx.recv_timeout(Duration::from_millis(100).min(remaining)) {
-            Ok(Ok(status)) => break status,
-            Ok(Err(_)) => {
-                let _ = wait_thread.join();
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                return AuthStatus::Unknown;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                return AuthStatus::Unknown;
-            }
-        }
-    };
-
-    let _ = wait_thread.join();
-    let _ = stdout_thread.join();
-    let stderr_bytes = stderr_thread.join().unwrap_or_default();
-
-    match cli_probe::classify_probe_output(&stderr_bytes, exit_status.success()) {
-        cli_probe::ProbeOutcome::LoggedIn => AuthStatus::LoggedIn,
-        cli_probe::ProbeOutcome::LoggedOut => AuthStatus::LoggedOut,
-        cli_probe::ProbeOutcome::ConfigInvalid { stderr_excerpt } => AuthStatus::ConfigInvalid {
-            diagnostic: stderr_excerpt,
-        },
-    }
+fn runtime_readiness_probe_args(command: &str, probe_suffix: &[&str]) -> Vec<String> {
+    let mut args = vec![command.to_string()];
+    args.extend(normalize_agent_args(command, Vec::new()));
+    args.extend(probe_suffix.iter().map(|arg| (*arg).to_string()));
+    args
 }
 
 pub fn command_availability(command: &str) -> CommandAvailabilityInfo {
@@ -1182,6 +1137,27 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
                 }
             }
 
+            // Runtime dependency checks are distinct from authentication.
+            // Append the readiness suffix after command-specific ACP args so
+            // `hermes` runs `acp --check` while `hermes-acp` runs `--check`.
+            if availability == AcpAvailabilityStatus::Available {
+                if let (Some(probe_suffix), Some(command_name)) =
+                    (runtime.readiness_probe_suffix, command.as_deref())
+                {
+                    let owned_probe_args = runtime_readiness_probe_args(command_name, probe_suffix);
+                    let probe_arg_refs = owned_probe_args
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>();
+                    let probe_binary = binary_path.as_deref().map(Path::new);
+                    availability = availability_after_readiness_probe(
+                        availability,
+                        probe_binary,
+                        &probe_arg_refs,
+                    );
+                }
+            }
+
             // Warm the adapter-availability cache for the badge fallback.
             // The cache is scoped to the codex runtime; other runtimes leave it
             // unchanged. Invalidated by `clear_resolve_cache`.
@@ -1209,6 +1185,7 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
                 AcpAvailabilityStatus::CliMissing => cli_hint.to_string(),
                 AcpAvailabilityStatus::AdapterMissing => adapter_hint.to_string(),
                 AcpAvailabilityStatus::AdapterOutdated => adapter_hint.to_string(),
+                AcpAvailabilityStatus::DependencyMissing => cli_hint.to_string(),
                 AcpAvailabilityStatus::NotInstalled => {
                     if !cli_hint.is_empty() && !adapter_hint.is_empty() {
                         format!("{cli_hint} {adapter_hint}")
@@ -1267,7 +1244,9 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
             if partial.entry.availability != AcpAvailabilityStatus::Available {
                 return None;
             }
-            let probe_args = partial.runtime.auth_probe_args?;
+            let RuntimeAuthProbe::Cli(probe_args) = partial.runtime.auth_probe else {
+                return None;
+            };
             // Need the resolved binary path for the CLI (e.g. the actual `claude` binary).
             let binary_path = resolve_command(probe_args[0])?;
             let probe_args_owned: Vec<String> = probe_args.iter().map(|s| s.to_string()).collect();
@@ -1296,14 +1275,8 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
     // Fill NotApplicable / Unknown for non-probed entries.
     for partial in &mut partials {
         if partial.entry.auth_status == AuthStatus::Unknown {
-            partial.entry.auth_status = if partial.entry.availability
-                == AcpAvailabilityStatus::Available
-                && partial.runtime.auth_probe_args.is_none()
-            {
-                AuthStatus::NotApplicable
-            } else {
-                AuthStatus::Unknown
-            };
+            partial.entry.auth_status =
+                auth_status_without_probe(&partial.entry.availability, &partial.runtime.auth_probe);
         }
     }
 

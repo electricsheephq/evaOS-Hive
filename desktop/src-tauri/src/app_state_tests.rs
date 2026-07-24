@@ -918,6 +918,7 @@ fn reachable_but_empty_with_marker_and_no_file_returns_lost_ephemeral_not_persis
 // ── signing_keys() gate tests ─────────────────────────────────────────────
 
 #[test]
+#[cfg(not(feature = "evaos-teams-managed"))]
 fn signing_keys_returns_ok_when_normal() {
     // When neither identity_lost nor keyring_locked is set, signing_keys()
     // must return the live keys and allow signing.

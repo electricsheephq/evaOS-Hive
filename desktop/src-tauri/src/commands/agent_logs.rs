@@ -14,6 +14,7 @@ pub async fn get_managed_agent_log(
     line_count: Option<u32>,
     app: AppHandle,
 ) -> Result<ManagedAgentLogResponse, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let _store_guard = state

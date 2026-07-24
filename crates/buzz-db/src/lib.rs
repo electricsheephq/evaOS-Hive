@@ -58,6 +58,7 @@ pub use event::{EventQuery, ReactionEventInsertOutcome};
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgConnection, PgPoolOptions};
 use sqlx::{Connection, PgPool, QueryBuilder, Row};
+use std::str::FromStr;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -170,6 +171,12 @@ pub async fn insert_mentions(
 #[derive(Clone, Debug)]
 pub struct Db {
     pub(crate) pool: PgPool,
+    /// Small dedicated pool for collaboration advisory-lock guards.
+    ///
+    /// A guard lives across a request that also needs the writer pool. Keeping
+    /// these connections separate prevents controlled-write concurrency from
+    /// consuming every writer connection and deadlocking on a second acquire.
+    pub(crate) authority_pool: PgPool,
     /// Maximum connections configured for this pool (from [`DbConfig::max_connections`]).
     pub(crate) max_connections: u32,
     /// Optional read-replica pool (from [`DbConfig::read_database_url`]).
@@ -266,6 +273,61 @@ pub struct CommunityRecord {
     pub host: String,
 }
 
+/// Server-owned collaboration policy for channel and DM authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollaborationPolicy {
+    /// Preserve the upstream NIP-29 and DM authorization behavior.
+    Native,
+    /// Restrict channel/DM creation, lifecycle, and membership mutations to
+    /// the community's current relay owner.
+    ControlPlane,
+}
+
+impl CollaborationPolicy {
+    /// Stable database/API representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::ControlPlane => "control_plane",
+        }
+    }
+}
+
+impl FromStr for CollaborationPolicy {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "native" => Ok(Self::Native),
+            "control_plane" => Ok(Self::ControlPlane),
+            _ => Err("expected native or control_plane"),
+        }
+    }
+}
+
+/// Current authority for policy-controlled collaboration mutations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommunityCollaborationAuthority {
+    /// Configured server-owned policy.
+    pub policy: CollaborationPolicy,
+    /// Sole current relay owner. Missing when the owner invariant is broken.
+    pub owner_pubkey: Option<String>,
+}
+
+/// Shared transaction lock that keeps collaboration policy/owner state stable
+/// until a controlled mutation finishes.
+pub struct CommunityCollaborationGuard {
+    authority: CommunityCollaborationAuthority,
+    _transaction: sqlx::Transaction<'static, sqlx::Postgres>,
+}
+
+impl CommunityCollaborationGuard {
+    /// Policy and sole-owner snapshot protected by this guard.
+    pub fn authority(&self) -> &CommunityCollaborationAuthority {
+        &self.authority
+    }
+}
+
 /// Community row returned by idempotent community ensure/create operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnsuredCommunityRecord {
@@ -359,12 +421,21 @@ impl Db {
     /// proof hold for every insert path that goes through this pool.
     pub async fn new(config: &DbConfig) -> Result<Self> {
         let pool = Self::connect_pool(config, &config.database_url, true).await?;
+        let authority_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .min_connections(0)
+            .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
+            .max_lifetime(Duration::from_secs(config.max_lifetime_secs))
+            .idle_timeout(Duration::from_secs(config.idle_timeout_secs))
+            .connect(&config.database_url)
+            .await?;
         let read_pool = match &config.read_database_url {
             Some(url) => Some(Self::connect_pool(config, url, false).await?),
             None => None,
         };
         Ok(Self {
             pool,
+            authority_pool,
             max_connections: config.max_connections,
             read_pool,
             fence: std::sync::Arc::new(replica_fence::ReplicaFence::new()),
@@ -403,6 +474,7 @@ impl Db {
     pub fn from_pool(pool: PgPool) -> Self {
         Self {
             max_connections: pool.options().get_max_connections(),
+            authority_pool: pool.clone(),
             pool,
             read_pool: None,
             fence: std::sync::Arc::new(replica_fence::ReplicaFence::new()),
@@ -419,6 +491,7 @@ impl Db {
     pub fn from_pools(pool: PgPool, read_pool: PgPool) -> Self {
         Self {
             max_connections: pool.options().get_max_connections(),
+            authority_pool: pool.clone(),
             pool,
             read_pool: Some(read_pool),
             fence: std::sync::Arc::new(replica_fence::ReplicaFence::new()),
@@ -692,6 +765,92 @@ impl Db {
         Ok(active)
     }
 
+    /// Reads the current policy and sole relay owner for an active community.
+    ///
+    /// The exact server-resolved community id is the only lookup key. If a
+    /// control-plane community has no sole owner, callers must fail closed.
+    pub async fn get_community_collaboration_authority(
+        &self,
+        community_id: CommunityId,
+    ) -> Result<Option<CommunityCollaborationAuthority>> {
+        let row = sqlx::query(
+            r#"
+            SELECT c.collaboration_policy,
+                   CASE WHEN count(rm.pubkey) = 1 THEN min(rm.pubkey) END AS owner_pubkey
+            FROM communities c
+            LEFT JOIN relay_members rm
+              ON rm.community_id = c.id
+             AND rm.role = 'owner'
+            WHERE c.id = $1
+              AND c.archived_at IS NULL
+            GROUP BY c.id, c.collaboration_policy
+            "#,
+        )
+        .bind(community_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| {
+            let policy: String = row.try_get("collaboration_policy")?;
+            let policy = policy.parse().map_err(|_| {
+                DbError::InvalidData(format!("unknown community collaboration policy: {policy}"))
+            })?;
+            Ok(CommunityCollaborationAuthority {
+                policy,
+                owner_pubkey: row.try_get("owner_pubkey")?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Locks collaboration authority against policy or owner rotation.
+    ///
+    /// The returned guard holds a shared transaction advisory lock. Owner and
+    /// policy mutations take the matching exclusive lock, so callers may use
+    /// the protected snapshot through the end of their controlled mutation.
+    pub async fn lock_community_collaboration_policy(
+        &self,
+        community_id: CommunityId,
+    ) -> Result<CommunityCollaborationGuard> {
+        let mut tx = self.authority_pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock_shared($1)")
+            .bind(relay_members::collaboration_authority_lock_key(
+                community_id,
+            ))
+            .execute(&mut *tx)
+            .await?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT c.collaboration_policy,
+                   CASE WHEN count(rm.pubkey) = 1 THEN min(rm.pubkey) END AS owner_pubkey
+            FROM communities c
+            LEFT JOIN relay_members rm
+              ON rm.community_id = c.id
+             AND rm.role = 'owner'
+            WHERE c.id = $1
+              AND c.archived_at IS NULL
+            GROUP BY c.id, c.collaboration_policy
+            "#,
+        )
+        .bind(community_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("active community {community_id}")))?;
+
+        let policy: String = row.try_get("collaboration_policy")?;
+        let policy = policy.parse().map_err(|_| {
+            DbError::InvalidData(format!("unknown community collaboration policy: {policy}"))
+        })?;
+        Ok(CommunityCollaborationGuard {
+            authority: CommunityCollaborationAuthority {
+                policy,
+                owner_pubkey: row.try_get("owner_pubkey")?,
+            },
+            _transaction: tx,
+        })
+    }
+
     /// Returns a community by host regardless of lifecycle state. Operator-plane only.
     pub async fn lookup_community_by_host_for_management(
         &self,
@@ -854,6 +1013,91 @@ impl Db {
         })
     }
 
+    /// Atomically ensures a community, its sole owner, and collaboration policy.
+    ///
+    /// This deployment-root convergence path does not apply the end-user
+    /// per-owner community limit, matching [`Db::bootstrap_owner`].
+    pub async fn ensure_community_with_owner_and_policy(
+        &self,
+        normalized_host: &str,
+        owner_pubkey: &str,
+        collaboration_policy: CollaborationPolicy,
+    ) -> Result<EnsuredCommunityRecord> {
+        let owner_pubkey = owner_pubkey.to_ascii_lowercase();
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO communities (host, collaboration_policy)
+            VALUES ($1, $2)
+            ON CONFLICT (lower(host)) DO NOTHING
+            RETURNING id, host
+            "#,
+        )
+        .bind(normalized_host)
+        .bind(collaboration_policy.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let (id, host, created) = match inserted {
+            Some(row) => (row.try_get("id")?, row.try_get("host")?, true),
+            None => {
+                let row = sqlx::query(
+                    "SELECT id, host FROM communities \
+                     WHERE lower(host) = lower($1) AND archived_at IS NULL",
+                )
+                .bind(normalized_host)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| DbError::NotFound(format!("active host {normalized_host}")))?;
+                (row.try_get("id")?, row.try_get("host")?, false)
+            }
+        };
+
+        let community_id = CommunityId::from_uuid(id);
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(relay_members::collaboration_authority_lock_key(
+                community_id,
+            ))
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
+             VALUES ($1, $2, 'owner', NULL) \
+             ON CONFLICT (community_id, pubkey) DO UPDATE SET role = 'owner', updated_at = now()",
+        )
+        .bind(id)
+        .bind(&owner_pubkey)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE relay_members SET role = 'admin', updated_at = now() \
+             WHERE community_id = $1 AND role = 'owner' AND pubkey <> $2",
+        )
+        .bind(id)
+        .bind(&owner_pubkey)
+        .execute(&mut *tx)
+        .await?;
+        let policy_update = sqlx::query(
+            "UPDATE communities SET collaboration_policy = $2 \
+             WHERE id = $1 AND archived_at IS NULL",
+        )
+        .bind(id)
+        .bind(collaboration_policy.as_str())
+        .execute(&mut *tx)
+        .await?;
+        if policy_update.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Err(DbError::NotFound(format!("active host {normalized_host}")));
+        }
+
+        tx.commit().await?;
+        Ok(EnsuredCommunityRecord {
+            id: community_id,
+            host,
+            created,
+        })
+    }
+
     /// Atomically creates a community and its initial owner.
     ///
     /// Holds a per-owner advisory lock while enforcing the ownership limit.
@@ -863,6 +1107,21 @@ impl Db {
         &self,
         normalized_host: &str,
         owner_pubkey: &str,
+    ) -> Result<CreateCommunityWithOwnerResult> {
+        self.create_community_with_owner_and_policy(
+            normalized_host,
+            owner_pubkey,
+            CollaborationPolicy::Native,
+        )
+        .await
+    }
+
+    /// Atomically creates a community, its initial owner, and collaboration policy.
+    pub async fn create_community_with_owner_and_policy(
+        &self,
+        normalized_host: &str,
+        owner_pubkey: &str,
+        collaboration_policy: CollaborationPolicy,
     ) -> Result<CreateCommunityWithOwnerResult> {
         let owner_pubkey = owner_pubkey.to_ascii_lowercase();
         let mut tx = self.pool.begin().await?;
@@ -876,13 +1135,14 @@ impl Db {
 
         let row = sqlx::query(
             r#"
-            INSERT INTO communities (host)
-            VALUES ($1)
+            INSERT INTO communities (host, collaboration_policy)
+            VALUES ($1, $2)
             ON CONFLICT (lower(host)) DO NOTHING
             RETURNING id, host
             "#,
         )
         .bind(normalized_host)
+        .bind(collaboration_policy.as_str())
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -920,11 +1180,13 @@ impl Db {
                 WHERE lower(c.host) = lower($1)
                   AND lower(rm.pubkey) = lower($2)
                   AND rm.role = 'owner'
+                  AND c.collaboration_policy = $3
                   AND c.archived_at IS NULL
                 "#,
             )
             .bind(normalized_host)
             .bind(&owner_pubkey)
+            .bind(collaboration_policy.as_str())
             .fetch_optional(&mut *tx)
             .await?;
             let Some(existing) = existing else {
@@ -1535,6 +1797,26 @@ impl Db {
         .await
     }
 
+    /// Adds a channel member under a held, verified control-identity guard.
+    pub async fn add_member_as_control_identity(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+        role: channel::MemberRole,
+        control_pubkey: &[u8],
+    ) -> Result<channel::MemberRecord> {
+        channel::add_member_as_control_identity(
+            &self.pool,
+            community_id,
+            channel_id,
+            pubkey,
+            role,
+            control_pubkey,
+        )
+        .await
+    }
+
     /// Removes a member from a channel.
     pub async fn remove_member(
         &self,
@@ -1544,6 +1826,24 @@ impl Db {
         actor_pubkey: &[u8],
     ) -> Result<()> {
         channel::remove_member(&self.pool, community_id, channel_id, pubkey, actor_pubkey).await
+    }
+
+    /// Removes a channel member under a held, verified control-identity guard.
+    pub async fn remove_member_as_control_identity(
+        &self,
+        community_id: CommunityId,
+        channel_id: Uuid,
+        pubkey: &[u8],
+        control_pubkey: &[u8],
+    ) -> Result<()> {
+        channel::remove_member_as_control_identity(
+            &self.pool,
+            community_id,
+            channel_id,
+            pubkey,
+            control_pubkey,
+        )
+        .await
     }
 
     /// Returns `true` if the pubkey is an active member.
@@ -2999,6 +3299,22 @@ impl Db {
     /// Ensures the owner pubkey exists with role `"owner"` in `community`. Called at startup.
     pub async fn bootstrap_owner(&self, community: CommunityId, owner_pubkey: &str) -> Result<()> {
         relay_members::bootstrap_owner(&self.pool, community, owner_pubkey).await
+    }
+
+    /// Atomically bootstraps the owner and sets the collaboration policy.
+    pub async fn bootstrap_owner_with_collaboration_policy(
+        &self,
+        community: CommunityId,
+        owner_pubkey: &str,
+        collaboration_policy: CollaborationPolicy,
+    ) -> Result<()> {
+        relay_members::bootstrap_owner_with_collaboration_policy(
+            &self.pool,
+            community,
+            owner_pubkey,
+            collaboration_policy,
+        )
+        .await
     }
 
     /// Atomically transfers ownership of `community` to `new_owner_pubkey`,
@@ -4779,6 +5095,170 @@ mod tests {
         assert_eq!(
             post_rotation_retry,
             CreateCommunityWithOwnerResult::HostExists
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn collaboration_authority_tracks_policy_owner_rotation_and_community() {
+        let db = setup_db().await;
+        let native_host = format!("native-policy-{}.example", Uuid::new_v4().simple());
+        let controlled_host = format!("controlled-policy-{}.example", Uuid::new_v4().simple());
+        let native_owner = "1111111111111111111111111111111111111111111111111111111111111111";
+        let old_owner = "2222222222222222222222222222222222222222222222222222222222222222";
+        let new_owner = "3333333333333333333333333333333333333333333333333333333333333333";
+
+        let CreateCommunityWithOwnerResult::Created(native) = db
+            .create_community_with_owner(&native_host, native_owner)
+            .await
+            .expect("create native community")
+        else {
+            panic!("expected native community");
+        };
+        assert_eq!(
+            db.get_community_collaboration_authority(native.id)
+                .await
+                .expect("native authority")
+                .expect("native community"),
+            CommunityCollaborationAuthority {
+                policy: CollaborationPolicy::Native,
+                owner_pubkey: Some(native_owner.to_string()),
+            }
+        );
+        assert_eq!(
+            db.create_community_with_owner_and_policy(
+                &native_host,
+                native_owner,
+                CollaborationPolicy::ControlPlane,
+            )
+            .await
+            .expect("policy-changing create retry"),
+            CreateCommunityWithOwnerResult::HostExists,
+            "idempotent create retries cannot change server-owned policy"
+        );
+
+        let CreateCommunityWithOwnerResult::Created(controlled) = db
+            .create_community_with_owner_and_policy(
+                &controlled_host,
+                old_owner,
+                CollaborationPolicy::ControlPlane,
+            )
+            .await
+            .expect("create controlled community")
+        else {
+            panic!("expected controlled community");
+        };
+        assert_eq!(
+            db.get_community_collaboration_authority(controlled.id)
+                .await
+                .expect("controlled authority")
+                .expect("controlled community"),
+            CommunityCollaborationAuthority {
+                policy: CollaborationPolicy::ControlPlane,
+                owner_pubkey: Some(old_owner.to_string()),
+            }
+        );
+
+        let old_owner_bytes = hex::decode(old_owner).unwrap();
+        let new_owner_bytes = hex::decode(new_owner).unwrap();
+        let target_bytes =
+            hex::decode("5555555555555555555555555555555555555555555555555555555555555555")
+                .unwrap();
+        let channel = db
+            .create_channel(
+                controlled.id,
+                "managed-private",
+                channel::ChannelType::Stream,
+                channel::ChannelVisibility::Private,
+                None,
+                &old_owner_bytes,
+                None,
+            )
+            .await
+            .expect("create managed private channel");
+
+        let guard = db
+            .lock_community_collaboration_policy(controlled.id)
+            .await
+            .expect("lock old authority");
+        let transfer = db.transfer_ownership(controlled.id, new_owner, old_owner);
+        tokio::pin!(transfer);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut transfer)
+                .await
+                .is_err(),
+            "owner transfer must wait for an in-flight controlled mutation"
+        );
+        drop(guard);
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), transfer)
+                .await
+                .expect("owner transfer unblocked")
+                .expect("rotate controlled owner"),
+            relay_members::TransferResult::Transferred { .. }
+        ));
+        assert_eq!(
+            db.get_community_collaboration_authority(controlled.id)
+                .await
+                .expect("rotated authority")
+                .expect("controlled community")
+                .owner_pubkey
+                .as_deref(),
+            Some(new_owner)
+        );
+
+        let guard = db
+            .lock_community_collaboration_policy(controlled.id)
+            .await
+            .expect("lock rotated authority");
+        assert_eq!(guard.authority().owner_pubkey.as_deref(), Some(new_owner));
+        db.add_member_as_control_identity(
+            controlled.id,
+            channel.id,
+            &target_bytes,
+            channel::MemberRole::Admin,
+            &new_owner_bytes,
+        )
+        .await
+        .expect("rotated owner grants elevated role without channel membership");
+        db.remove_member_as_control_identity(
+            controlled.id,
+            channel.id,
+            &old_owner_bytes,
+            &new_owner_bytes,
+        )
+        .await
+        .expect("rotated owner removes prior last channel owner");
+        drop(guard);
+
+        assert_eq!(
+            db.get_community_collaboration_authority(native.id)
+                .await
+                .expect("cross-community authority")
+                .expect("native community")
+                .owner_pubkey
+                .as_deref(),
+            Some(native_owner),
+            "rotation must remain scoped to the exact community id"
+        );
+
+        sqlx::query(
+            "INSERT INTO relay_members (community_id, pubkey, role, added_by) \
+             VALUES ($1, $2, 'owner', NULL)",
+        )
+        .bind(controlled.id.as_uuid())
+        .bind("4444444444444444444444444444444444444444444444444444444444444444")
+        .execute(&db.pool)
+        .await
+        .expect("break sole-owner invariant");
+        assert_eq!(
+            db.get_community_collaboration_authority(controlled.id)
+                .await
+                .expect("ambiguous authority")
+                .expect("controlled community")
+                .owner_pubkey,
+            None,
+            "multiple owners must fail closed at the authorization seam"
         );
     }
 

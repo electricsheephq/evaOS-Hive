@@ -56,6 +56,9 @@ pub fn get_default_relay_url() -> String {
 
 #[tauri::command]
 pub fn is_shared_identity() -> bool {
+    if cfg!(feature = "evaos-teams-managed") {
+        return false;
+    }
     std::env::var("BUZZ_SHARE_IDENTITY")
         .map(|v| v == "1")
         .unwrap_or(false)
@@ -161,6 +164,9 @@ pub fn build_observer_control_event(
 
 #[tauri::command]
 pub fn get_nsec(state: State<'_, AppState>) -> Result<String, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed identity export is disabled".to_string());
+    }
     let keys = state.signing_keys()?;
     keys.secret_key()
         .to_bech32()
@@ -172,6 +178,9 @@ pub async fn import_identity(
     nsec: String,
     app_handle: tauri::AppHandle,
 ) -> Result<IdentityInfo, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed identity import is disabled".to_string());
+    }
     tokio::task::spawn_blocking(move || {
         let trimmed = nsec.trim();
         let keys = Keys::parse(trimmed).map_err(|e| format!("Invalid private key: {e}"))?;
@@ -247,6 +256,9 @@ pub async fn import_identity(
 pub async fn persist_current_identity(
     app_handle: tauri::AppHandle,
 ) -> Result<IdentityInfo, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed identity persistence is broker-controlled".to_string());
+    }
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
 
@@ -313,6 +325,9 @@ pub async fn persist_current_identity(
 /// would be confusing.
 #[tauri::command]
 pub async fn sign_out(app: tauri::AppHandle) -> Result<(), String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Use managed evaOS Teams logout".to_string());
+    }
     if is_shared_identity() {
         return Err(
             "Sign out isn't available while BUZZ_SHARE_IDENTITY provides your identity. Unset BUZZ_SHARE_IDENTITY and BUZZ_PRIVATE_KEY, then relaunch to sign out."
@@ -386,6 +401,9 @@ pub async fn sign_nostr_identity_binding(
     expires_at: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed identity binding is broker-controlled".to_string());
+    }
     nostr_bind::validate_signing_request(
         &challenge_id,
         &nonce,
@@ -394,11 +412,7 @@ pub async fn sign_nostr_identity_binding(
         &expires_at,
     )?;
 
-    let keys = state
-        .keys
-        .lock()
-        .map_err(|error| error.to_string())?
-        .clone();
+    let keys = state.signing_keys()?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let event = build_nostr_identity_binding_event(

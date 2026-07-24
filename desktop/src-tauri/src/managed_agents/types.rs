@@ -539,6 +539,8 @@ pub enum AcpAvailabilityStatus {
     AdapterMissing,
     /// Adapter binary is present but is from the deprecated package (< 1.0). Reinstall required.
     AdapterOutdated,
+    /// Runtime binary is present but its dependency readiness probe failed.
+    DependencyMissing,
     CliMissing,
     NotInstalled,
 }
@@ -559,8 +561,12 @@ pub enum AuthStatus {
         /// Trimmed excerpt of the stderr message.
         diagnostic: String,
     },
-    /// This runtime does not have a login step (e.g. goose, buzz-agent).
+    /// No command-level authentication probe applies. Authentication may be
+    /// handled by the ACP initialize/auth-method handshake at launch.
     NotApplicable,
+    /// Provider authentication/setup is unverified until the bounded ACP
+    /// initialize/auth-method handshake runs.
+    CheckedOnLaunch,
     /// Probe was not attempted (runtime unavailable or probe timed out).
     Unknown,
 }

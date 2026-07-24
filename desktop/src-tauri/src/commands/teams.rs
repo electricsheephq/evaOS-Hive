@@ -50,7 +50,7 @@ pub(super) fn retain_team_pending(app: &AppHandle, state: &AppState, team: &Team
     let result = (|| -> Result<(), String> {
         let conn = open_retention_db(&managed_agents_base_dir(app)?.join("retention.db"))?;
         let (pubkey, event) = {
-            let keys = state.keys.lock().map_err(|e| e.to_string())?;
+            let keys = state.signing_keys()?;
             let pubkey = keys.public_key().to_hex();
             // Monotonic created_at: bump past the retained head (NIP-AP step 3).
             let prior =
@@ -104,7 +104,7 @@ fn tombstone_team_pending(app: &AppHandle, state: &AppState, d_tag: &str) {
 
     let result = (|| -> Result<(), String> {
         let (pubkey, event) = {
-            let keys = state.keys.lock().map_err(|e| e.to_string())?;
+            let keys = state.signing_keys()?;
             let pubkey = keys.public_key().to_hex();
             let event = build_team_delete(d_tag, &pubkey)?
                 .sign_with_keys(&keys)
@@ -135,6 +135,7 @@ fn tombstone_team_pending(app: &AppHandle, state: &AppState, d_tag: &str) {
 
 #[tauri::command]
 pub async fn list_teams(app: AppHandle) -> Result<Vec<TeamRecord>, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -150,6 +151,7 @@ pub async fn list_teams(app: AppHandle) -> Result<Vec<TeamRecord>, String> {
 
 #[tauri::command]
 pub async fn create_team(input: CreateTeamRequest, app: AppHandle) -> Result<TeamRecord, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -191,6 +193,7 @@ pub async fn create_team(input: CreateTeamRequest, app: AppHandle) -> Result<Tea
 
 #[tauri::command]
 pub async fn update_team(input: UpdateTeamRequest, app: AppHandle) -> Result<TeamRecord, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -230,6 +233,7 @@ pub async fn update_team(input: UpdateTeamRequest, app: AppHandle) -> Result<Tea
 
 #[tauri::command]
 pub async fn delete_team(id: String, app: AppHandle) -> Result<(), String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
