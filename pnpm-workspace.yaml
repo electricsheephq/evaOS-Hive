@@ -12,6 +12,12 @@ overrides:
   # <body> when the dialog closed, freezing the app (#1482, reminder dialog).
   # Removable once every @radix-ui dep converges on one version naturally.
   "@radix-ui/react-dismissable-layer": 1.1.15
+  # Security floors for transitive parser/build dependencies used by the
+  # desktop workspace. Keep these explicit so a lockfile refresh cannot
+  # reintroduce the affected versions.
+  "@babel/core": 7.29.6
+  "linkify-it": 5.0.2
+  "markdown-it": 14.2.0
 patchedDependencies:
   isomorphic-git: patches/isomorphic-git.patch
   virtua@0.49.3: patches/virtua@0.49.3.patch
