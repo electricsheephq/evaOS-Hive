@@ -2,19 +2,6 @@ name: evaOS Teams Pre-sign
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/evaos-teams-pre-sign.yml"
-      - "scripts/evaos-teams-pre-sign-smoke.sh"
-      - "scripts/verify-evaos-teams-app-bundle.mjs"
-      - "scripts/test-evaos-teams-pre-sign-contract.mjs"
-      - "desktop/scripts/build-evaos-teams.mjs"
-      - "desktop/src-tauri/evaos-teams/**"
-      - "desktop/src-tauri/tauri.evaos-teams.conf.json"
-      - "desktop/src-tauri/**"
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "pnpm-lock.yaml"
   workflow_dispatch:
     inputs:
       expected_sha:
@@ -24,6 +11,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: evaos-teams-pre-sign-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   managed-pre-sign:

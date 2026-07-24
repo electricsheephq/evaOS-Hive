@@ -3,12 +3,15 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -85,15 +88,14 @@ function requireArm64(path, description) {
 }
 
 async function coldStart(mainBinary, aliveMs) {
-  const scratch = process.env.RUNNER_TEMP || process.env.TMPDIR;
-  if (!scratch) {
-    fail("RUNNER_TEMP or TMPDIR is required for isolated cold-start smoke");
-  }
+  const scratchRoot = process.env.RUNNER_TEMP || process.env.TMPDIR || tmpdir();
+  const scratch = mkdtempSync(join(scratchRoot, "evaos-teams-cold-start-"));
   const child = spawn(mainBinary, [], {
     cwd: scratch,
     env: {
       ...process.env,
       HOME: scratch,
+      TMPDIR: scratch,
       RUST_LOG: "off",
     },
     stdio: "ignore",
@@ -110,23 +112,31 @@ async function coldStart(mainBinary, aliveMs) {
     setTimeout(() => resolveAlive("alive"), aliveMs);
   });
 
-  const result = await Promise.race([exited, stayedAlive]);
-  if (result !== "alive") {
-    fail(
-      `Managed app exited before ${aliveMs}ms (code=${earlyExit?.code}, signal=${earlyExit?.signal})`,
-    );
-  }
+  try {
+    const result = await Promise.race([exited, stayedAlive]);
+    if (result !== "alive") {
+      fail(
+        `Managed app exited before ${aliveMs}ms (code=${earlyExit?.code}, signal=${earlyExit?.signal})`,
+      );
+    }
 
-  child.kill("SIGTERM");
-  const terminated = await Promise.race([
-    exited,
-    new Promise((resolveTimeout) =>
-      setTimeout(() => resolveTimeout("timeout"), 5_000),
-    ),
-  ]);
-  if (terminated === "timeout") {
-    child.kill("SIGKILL");
-    await exited;
+    child.kill("SIGTERM");
+    const terminated = await Promise.race([
+      exited,
+      new Promise((resolveTimeout) =>
+        setTimeout(() => resolveTimeout("timeout"), 5_000),
+      ),
+    ]);
+    if (terminated === "timeout") {
+      child.kill("SIGKILL");
+      await exited;
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await exited;
+    }
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
 
@@ -241,6 +251,7 @@ const evidence = {
     target: "aarch64-apple-darwin",
     hostArchitecture: run("uname", ["-m"]),
     signatureKind,
+    environmentPolicy: "explicit allowlist",
     updaterEndpoints: 0,
     updaterArtifacts: false,
   },

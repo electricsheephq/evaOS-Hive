@@ -21,6 +21,9 @@ assert.match(workflow, /EVAOS_TEAMS_PRE_SIGN_ISOLATED: "1"/);
 assert.match(workflow, /TAURI_BUNDLER_DMG_IGNORE_CI: "true"/);
 assert.match(workflow, /scripts\/evaos-teams-pre-sign-smoke\.sh/);
 assert.match(workflow, /runs-on: macos-latest/);
+assert.match(workflow, /pull_request:\s*\n\s*workflow_dispatch:/);
+assert.doesNotMatch(workflow, /\bpaths:/);
+assert.match(workflow, /cancel-in-progress: true/);
 
 for (const forbidden of [
   /actions\/upload-artifact/,
@@ -43,6 +46,11 @@ assert.match(preSign, /bundle-sidecars\.sh/);
 assert.match(preSign, /run tauri:build:evaos-teams --no-sign/);
 assert.doesNotMatch(preSign, /tauri:build:evaos-teams -- --no-sign/);
 assert.match(preSign, /verify-evaos-teams-app-bundle\.mjs/);
+assert.match(preSign, /CLEAN_ENV=/);
+assert.match(preSign, /env -i "\$\{CLEAN_ENV\[@\]\}" cargo build/);
+assert.match(preSign, /env -i "\$\{CLEAN_ENV\[@\]\}" node/);
+assert.match(preSign, /rm -rf -- "\$APP_PATH"/);
+assert.match(preSign, /rm -f -- "\$DEFAULT_DMG_PATH" "\$DMG_PATH"/);
 assert.match(preSign, /BUZZ_UPDATER_PUBLIC_KEY/);
 assert.match(preSign, /APPLE_SIGNING_IDENTITY/);
 assert.match(preSign, /TAURI_SIGNING_PRIVATE_KEY/);
@@ -53,6 +61,8 @@ assert.match(verifier, /CFBundleURLTypes\.0\.CFBundleURLSchemes\.0/);
 assert.match(verifier, /buzz-acp sidecar/);
 assert.match(verifier, /git-credential-nostr sidecar/);
 assert.match(verifier, /requireArm64/);
+assert.match(verifier, /mkdtempSync/);
+assert.match(verifier, /environmentPolicy: "explicit allowlist"/);
 assert.match(verifier, /updaterEndpoints: 0/);
 assert.match(
   verifier,

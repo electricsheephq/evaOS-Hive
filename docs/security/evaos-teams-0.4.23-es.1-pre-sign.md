@@ -18,11 +18,13 @@ EVAOS_TEAMS_PRE_SIGN_ISOLATED=1 \
 
 The script rejects a dirty or mismatched checkout, updater variables, and
 common signing credentials. It reuses the managed build wrapper, builds the
-real arm64 sidecars, checks the bundle identity and resources, checks every
-managed executable is arm64-only, rejects an identity-signed result, and holds
-an isolated signed-out cold start alive for eight seconds. The JSON evidence
-contains source and artifact hashes but no application logs, credentials, app,
-or DMG.
+real arm64 sidecars, and runs every build and launch command with an explicit
+environment allowlist so parent-shell credentials and product overrides cannot
+reach the artifact or app. It checks the bundle identity and resources, checks
+every managed executable is arm64-only, rejects an identity-signed result, and
+holds a newly created empty-home signed-out cold start alive for eight seconds.
+The JSON evidence contains source and artifact hashes but no application logs,
+credentials, app, or DMG.
 
 The GitHub workflow prints only that JSON into the job summary. It does not
 upload the unsigned app or DMG. No pre-sign evidence is signing, notarization,
