@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::Write,
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicU16},
+        atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicU64},
         Arc, Mutex,
     },
 };
@@ -102,14 +102,17 @@ pub struct AppState {
     /// Ordering: written once in `setup()` with `Ordering::Release`; read in
     /// `get_identity` with `Ordering::Acquire`.
     pub reset_failed: AtomicBool,
-    /// Managed builds may sign only after the Electric broker has refreshed a
-    /// current entitlement for the Keychain-held identity. Native Buzz keeps
-    /// this true and preserves its existing identity behavior.
+    /// Whether the Electric broker currently authorizes managed signing.
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
     pub evaos_teams_authorized: AtomicBool,
-    /// Unix timestamp after which a managed entitlement may no longer sign.
-    /// Native Buzz uses `i64::MAX`; managed builds start expired and install
-    /// the broker-provided deadline only after entitlement validation.
+    /// Broker-provided managed signing deadline; native uses `i64::MAX`.
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
     pub evaos_teams_expires_at: AtomicI64,
+    /// Serializes managed entitlement install, refresh, expiry, and revoke.
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
+    pub evaos_teams_access_transition: Mutex<()>,
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
+    pub evaos_teams_access_generation: AtomicU64,
     /// Cached ACP session config from running agents, keyed by canonical
     /// `(agent pubkey, relay URL)` runtime identity.
     /// Populated when the harness emits `session_config_captured` observer events.
@@ -240,6 +243,8 @@ pub fn build_app_state() -> AppState {
         } else {
             i64::MAX
         }),
+        evaos_teams_access_transition: Mutex::new(()),
+        evaos_teams_access_generation: AtomicU64::new(0),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]

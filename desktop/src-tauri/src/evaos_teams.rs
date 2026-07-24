@@ -7,7 +7,7 @@
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
-    sync::{atomic::Ordering, Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -381,6 +381,7 @@ fn disable_managed_access(app_state: &AppState) {
     app_state.disable_evaos_teams_access();
 }
 
+#[cfg(feature = "evaos-teams-managed")]
 fn install_entitlement(
     app_state: &AppState,
     keys: &Keys,
@@ -390,21 +391,7 @@ fn install_entitlement(
     let expires_at = chrono::DateTime::parse_from_rfc3339(&entitlement.expires_at)
         .map_err(|_| "managed entitlement expiry is invalid".to_string())?
         .timestamp();
-    app_state
-        .evaos_teams_authorized
-        .store(false, Ordering::Release);
-    *app_state.keys.lock().map_err(|error| error.to_string())? = keys.clone();
-    *app_state
-        .relay_url_override
-        .lock()
-        .map_err(|error| error.to_string())? = Some(relay);
-    app_state
-        .evaos_teams_expires_at
-        .store(expires_at, Ordering::Release);
-    app_state
-        .evaos_teams_authorized
-        .store(true, Ordering::Release);
-    Ok(())
+    app_state.install_evaos_teams_access(keys.clone(), relay, expires_at)
 }
 
 #[cfg(feature = "evaos-teams-managed")]

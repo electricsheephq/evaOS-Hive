@@ -169,34 +169,6 @@ pub(crate) async fn connect_audio_relay(
         .unwrap_or_else(|e| e.into_inner())
         .clone();
 
-    #[cfg(feature = "evaos-teams-managed")]
-    {
-        let expiry_app = app_handle
-            .clone()
-            .ok_or_else(|| "managed huddle expiry watcher is unavailable".to_string())?;
-        let expiry_cancel = cancel.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    _ = expiry_cancel.cancelled() => break,
-                    _ = interval.tick() => {
-                        use std::sync::atomic::Ordering;
-                        use tauri::Manager;
-
-                        let state = expiry_app.state::<AppState>();
-                        let expired = state.evaos_teams_expires_at.load(Ordering::Acquire)
-                            <= chrono::Utc::now().timestamp();
-                        if expired {
-                            state.disable_evaos_teams_access();
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-    }
-
     tokio::spawn(async move {
         if let Err(e) = audio_relay_pipeline(AudioRelayPipelineArgs {
             ws_tx,
