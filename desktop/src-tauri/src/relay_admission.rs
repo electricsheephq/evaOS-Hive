@@ -295,6 +295,10 @@ mod tests {
         state
             .evaos_teams_authorized
             .store(true, std::sync::atomic::Ordering::Release);
+        #[cfg(feature = "evaos-teams-managed")]
+        state
+            .evaos_teams_expires_at
+            .store(i64::MAX, std::sync::atomic::Ordering::Release);
         *state.relay_url_override.lock().unwrap() = Some(format!("http://{addr}"));
         let filters = [serde_json::json!({ "kinds": [1], "limit": 1 })];
 
@@ -475,6 +479,10 @@ mod tests {
         state
             .evaos_teams_authorized
             .store(true, std::sync::atomic::Ordering::Release);
+        #[cfg(feature = "evaos-teams-managed")]
+        state
+            .evaos_teams_expires_at
+            .store(i64::MAX, std::sync::atomic::Ordering::Release);
         *state.relay_url_override.lock().unwrap() = Some(format!("http://{addr}"));
         let filters = [serde_json::json!({ "kinds": [1], "limit": 1 })];
 

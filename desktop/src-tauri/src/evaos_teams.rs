@@ -7,7 +7,7 @@
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
-    sync::{Arc, Mutex, OnceLock},
+    sync::{atomic::Ordering, Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -25,6 +25,8 @@ use crate::{app_state::AppState, secret_store::SecretStore};
 mod api;
 mod credentials;
 mod login_callback;
+#[cfg(feature = "evaos-teams-managed")]
+mod logout;
 use api::{post_json, ApiFailure};
 #[cfg(feature = "evaos-teams-managed")]
 use credentials::managed_credential_entries;
@@ -35,12 +37,15 @@ pub(crate) use login_callback::handle_login_deep_link;
 #[cfg(test)]
 use login_callback::{callback_device_code, managed_login_callback_url};
 use login_callback::{login_callback, LoginCallback};
+#[cfg(feature = "evaos-teams-managed")]
+use logout::{begin_managed_logout, retry_pending_logout};
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const KEYRING_SERVICE: &str = "evaos-teams-desktop";
 const IDENTITY_KEY: &str = "identity";
 const SESSION_KEY: &str = "electric_desktop_session";
 const LOGOUT_PENDING_KEY: &str = "logout_pending";
+const LOGOUT_CONFIRMED_KEY: &str = "logout_confirmed";
 const PREVIOUS_SESSION_KEY: &str = "previous_electric_desktop_session";
 const KEY_BINDING_KIND: u16 = 27_235;
 const KEY_BINDING_SCHEMA: &str = "evaos.buzz_key_binding.v1";
@@ -164,6 +169,7 @@ struct ManagedRuntime {
     previous_session: Option<Zeroizing<String>>,
     keys: Option<Keys>,
     logout_pending: bool,
+    logout_confirmed: bool,
 }
 
 /// Backend-only managed credential state.
@@ -370,13 +376,9 @@ fn signed_challenge(
         .map_err(|error| format!("could not encode managed key challenge: {error}"))
 }
 
+#[cfg(feature = "evaos-teams-managed")]
 fn disable_managed_access(app_state: &AppState) {
-    app_state
-        .evaos_teams_authorized
-        .store(false, std::sync::atomic::Ordering::Release);
-    if let Ok(mut relay) = app_state.relay_url_override.lock() {
-        *relay = None;
-    }
+    app_state.disable_evaos_teams_access();
 }
 
 fn install_entitlement(
@@ -385,15 +387,23 @@ fn install_entitlement(
     entitlement: &EvaosTeamsEntitlement,
 ) -> Result<(), String> {
     let relay = validate_entitlement(entitlement, &keys.public_key().to_hex())?;
-    disable_managed_access(app_state);
+    let expires_at = chrono::DateTime::parse_from_rfc3339(&entitlement.expires_at)
+        .map_err(|_| "managed entitlement expiry is invalid".to_string())?
+        .timestamp();
+    app_state
+        .evaos_teams_authorized
+        .store(false, Ordering::Release);
     *app_state.keys.lock().map_err(|error| error.to_string())? = keys.clone();
     *app_state
         .relay_url_override
         .lock()
         .map_err(|error| error.to_string())? = Some(relay);
     app_state
+        .evaos_teams_expires_at
+        .store(expires_at, Ordering::Release);
+    app_state
         .evaos_teams_authorized
-        .store(true, std::sync::atomic::Ordering::Release);
+        .store(true, Ordering::Release);
     Ok(())
 }
 
@@ -424,9 +434,17 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
             runtime.logout_pending = stored
                 .get(LOGOUT_PENDING_KEY)
                 .is_some_and(|value| value == "1");
+            runtime.logout_confirmed = stored
+                .get(LOGOUT_CONFIRMED_KEY)
+                .is_some_and(|value| value == "1");
+            if runtime.logout_pending && runtime.logout_confirmed {
+                return Err("managed logout state is inconsistent".to_string());
+            }
             runtime.previous_session = stored
                 .get(PREVIOUS_SESSION_KEY)
-                .filter(|value| runtime.logout_pending && !value.trim().is_empty())
+                .filter(|value| {
+                    (runtime.logout_pending || runtime.logout_confirmed) && !value.trim().is_empty()
+                })
                 .map(|value| Zeroizing::new(value.clone()));
             runtime.initialized = true;
             Ok(())
@@ -438,7 +456,16 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
 #[cfg(feature = "evaos-teams-managed")]
 async fn current_credentials(
     state: &EvaosTeamsState,
-) -> Result<(Zeroizing<String>, Keys, bool, Option<Zeroizing<String>>), String> {
+) -> Result<
+    (
+        Zeroizing<String>,
+        Keys,
+        bool,
+        bool,
+        Option<Zeroizing<String>>,
+    ),
+    String,
+> {
     initialize_runtime(state)?;
     let runtime = state.runtime.lock().map_err(|error| error.to_string())?;
     let session = runtime
@@ -453,6 +480,7 @@ async fn current_credentials(
         session,
         keys,
         runtime.logout_pending,
+        runtime.logout_confirmed,
         runtime.previous_session.clone(),
     ))
 }
@@ -502,7 +530,7 @@ fn stage_pending_claim(
     previous_session: Option<&str>,
 ) -> Result<(), String> {
     disable_managed_access(app_state);
-    let pending = managed_credential_entries(keys, session, true, previous_session)?;
+    let pending = managed_credential_entries(keys, session, true, false, previous_session)?;
     managed_store()
         .replace_all(&pending)
         .map_err(|_| "Could not record the pending managed session in Keychain".to_string())?;
@@ -516,68 +544,9 @@ fn stage_pending_claim(
         previous_session: previous_session.map(|value| Zeroizing::new(value.to_string())),
         keys: Some(keys.clone()),
         logout_pending: true,
+        logout_confirmed: false,
     };
     Ok(())
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn retry_pending_logout(
-    client: &reqwest::Client,
-    state: &EvaosTeamsState,
-    app_state: &AppState,
-    session: &str,
-) -> EvaosTeamsAuthStatus {
-    disable_managed_access(app_state);
-    match remote_logout(client, session).await {
-        Ok(()) => {
-            let previous = state
-                .runtime
-                .lock()
-                .ok()
-                .and_then(|runtime| runtime.previous_session.clone().zip(runtime.keys.clone()));
-            if let Some((previous_session, keys)) = previous {
-                let restored = managed_credential_entries(&keys, &previous_session, false, None);
-                return match restored.and_then(|restored| {
-                    managed_store().replace_all(&restored)?;
-                    if managed_store().load_all_readonly()? != Some(restored) {
-                        return Err(
-                            "Managed Keychain previous-session verification failed".to_string()
-                        );
-                    }
-                    let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
-                    *runtime = ManagedRuntime {
-                        initialized: true,
-                        session: Some(previous_session),
-                        previous_session: None,
-                        keys: Some(keys),
-                        logout_pending: false,
-                    };
-                    Ok(())
-                }) {
-                    Ok(()) => EvaosTeamsAuthStatus::reauth(
-                        "The prior account was preserved. Sign in to that account again."
-                            .to_string(),
-                    ),
-                    Err(error) => EvaosTeamsAuthStatus::locked(error),
-                };
-            }
-            match wipe_managed_store() {
-                Ok(()) => {
-                    if let Ok(mut runtime) = state.runtime.lock() {
-                        *runtime = ManagedRuntime {
-                            initialized: true,
-                            ..ManagedRuntime::default()
-                        };
-                    }
-                    EvaosTeamsAuthStatus::signed_out()
-                }
-                Err(error) => EvaosTeamsAuthStatus::locked(error),
-            }
-        }
-        Err(error) => {
-            EvaosTeamsAuthStatus::logout_pending(format!("Remote logout is still pending: {error}"))
-        }
-    }
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -593,24 +562,6 @@ async fn finish_failed_staged_login(
     } else {
         Ok(outcome)
     }
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn begin_managed_logout(
-    state: &EvaosTeamsState,
-    app_state: &AppState,
-) -> Result<EvaosTeamsAuthStatus, String> {
-    let (session, keys, _, _) = current_credentials(state).await?;
-    disable_managed_access(app_state);
-    let pending = managed_credential_entries(&keys, &session, true, None)?;
-    managed_store()
-        .replace_all(&pending)
-        .map_err(|_| "Could not record durable managed logout".to_string())?;
-    if let Ok(mut runtime) = state.runtime.lock() {
-        runtime.logout_pending = true;
-        runtime.previous_session = None;
-    }
-    Ok(retry_pending_logout(&app_state.http_client, state, app_state, &session).await)
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -643,7 +594,7 @@ fn persist_managed_credentials(
     keys: Keys,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let replacement = managed_credential_entries(&keys, &session, false, None)?;
+    let replacement = managed_credential_entries(&keys, &session, false, false, None)?;
     let activation = (|| -> Result<(), String> {
         managed_store()
             .replace_all(&replacement)
@@ -658,6 +609,7 @@ fn persist_managed_credentials(
             previous_session: None,
             keys: Some(keys.clone()),
             logout_pending: false,
+            logout_confirmed: false,
         };
         drop(runtime);
         install_entitlement(app_state, &keys, &entitlement)
@@ -689,14 +641,14 @@ pub(crate) async fn get_evaos_teams_auth_status(
             return Ok(EvaosTeamsAuthStatus::locked(error));
         }
         let credentials = current_credentials(&state).await;
-        let (session, keys, logout_pending, _) = match credentials {
+        let (session, keys, logout_pending, logout_confirmed, _) = match credentials {
             Ok(value) => value,
             Err(_) => {
                 disable_managed_access(&app_state);
                 return Ok(EvaosTeamsAuthStatus::signed_out());
             }
         };
-        if logout_pending {
+        if logout_pending || logout_confirmed {
             return Ok(
                 retry_pending_logout(&app_state.http_client, &state, &app_state, &session).await,
             );
@@ -814,8 +766,10 @@ pub(crate) async fn start_evaos_teams_login(
 
         initialize_runtime(&state)?;
         let mut reauth_credentials = None;
-        if let Ok((session, keys, logout_pending, _)) = current_credentials(&state).await {
-            if logout_pending {
+        if let Ok((session, keys, logout_pending, logout_confirmed, _)) =
+            current_credentials(&state).await
+        {
+            if logout_pending || logout_confirmed {
                 return Ok(retry_pending_logout(
                     &app_state.http_client,
                     &state,

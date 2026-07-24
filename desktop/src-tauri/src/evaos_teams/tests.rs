@@ -264,23 +264,36 @@ fn managed_keychain_service_is_distinct_from_native_buzz() {
 #[test]
 fn managed_credential_states_are_exact_and_pending_is_removed_on_activation() {
     let keys = Keys::generate();
-    let pending = managed_credential_entries(&keys, "session", true, None).unwrap();
+    let pending = managed_credential_entries(&keys, "session", true, false, None).unwrap();
     assert_eq!(pending.len(), 3);
     assert_eq!(
         pending.get(LOGOUT_PENDING_KEY).map(String::as_str),
         Some("1")
     );
-    let active = managed_credential_entries(&keys, "session", false, None).unwrap();
+    let confirmed = managed_credential_entries(&keys, "session", false, true, None).unwrap();
+    assert_eq!(confirmed.len(), 3);
+    assert_eq!(
+        confirmed.get(LOGOUT_CONFIRMED_KEY).map(String::as_str),
+        Some("1")
+    );
+    assert!(!confirmed.contains_key(LOGOUT_PENDING_KEY));
+
+    let active = managed_credential_entries(&keys, "session", false, false, None).unwrap();
     assert_eq!(active.len(), 2);
     assert!(!active.contains_key(LOGOUT_PENDING_KEY));
+    assert!(!active.contains_key(LOGOUT_CONFIRMED_KEY));
     assert_eq!(active.get(SESSION_KEY).map(String::as_str), Some("session"));
 
     let reauth_pending =
-        managed_credential_entries(&keys, "new-session", true, Some("old-session")).unwrap();
+        managed_credential_entries(&keys, "new-session", true, false, Some("old-session")).unwrap();
     assert_eq!(reauth_pending.len(), 4);
     assert_eq!(
         reauth_pending.get(PREVIOUS_SESSION_KEY).map(String::as_str),
         Some("old-session")
+    );
+    assert!(
+        managed_credential_entries(&keys, "session", true, true, None).is_err(),
+        "logout phases must be mutually exclusive"
     );
 }
 
@@ -295,8 +308,68 @@ fn managed_nip98_auth_requires_current_entitlement() {
     state
         .evaos_teams_authorized
         .store(true, std::sync::atomic::Ordering::Release);
+    state
+        .evaos_teams_expires_at
+        .store(i64::MAX, std::sync::atomic::Ordering::Release);
     assert!(
         crate::relay::build_nip98_auth_header(&reqwest::Method::POST, url, b"{}", &state).is_ok()
+    );
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn managed_signing_expires_in_the_backend_and_disables_access() {
+    let state = crate::app_state::build_app_state();
+    state
+        .evaos_teams_authorized
+        .store(true, std::sync::atomic::Ordering::Release);
+    state.evaos_teams_expires_at.store(
+        chrono::Utc::now().timestamp() - 1,
+        std::sync::atomic::Ordering::Release,
+    );
+    assert!(state.signing_keys().is_err());
+    assert!(!state
+        .evaos_teams_authorized
+        .load(std::sync::atomic::Ordering::Acquire));
+
+    state
+        .evaos_teams_authorized
+        .store(true, std::sync::atomic::Ordering::Release);
+    state
+        .evaos_teams_expires_at
+        .store(i64::MAX, std::sync::atomic::Ordering::Release);
+    assert!(state.signing_keys().is_ok());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn disabling_managed_access_cancels_a_long_lived_huddle() {
+    let state = crate::app_state::build_app_state();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    {
+        let mut huddle = state.huddle_state.lock().unwrap();
+        huddle.phase = crate::huddle::HuddlePhase::Active;
+        huddle.audio_ws_cancel = Some(cancel.clone());
+    }
+    state
+        .evaos_teams_authorized
+        .store(true, std::sync::atomic::Ordering::Release);
+    state
+        .evaos_teams_expires_at
+        .store(i64::MAX, std::sync::atomic::Ordering::Release);
+
+    disable_managed_access(&state);
+
+    assert!(cancel.is_cancelled());
+    assert_eq!(
+        state.huddle_state.lock().unwrap().phase,
+        crate::huddle::HuddlePhase::Idle
+    );
+    assert_eq!(
+        state
+            .evaos_teams_expires_at
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
     );
 }
 

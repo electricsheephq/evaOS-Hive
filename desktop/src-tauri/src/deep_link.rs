@@ -298,8 +298,8 @@ fn parse_nostr_bind_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, Str
 pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     let url = match Url::parse(url_str) {
         Ok(u) => u,
-        Err(e) => {
-            eprintln!("buzz-desktop: invalid deep link URL {url_str:?}: {e}");
+        Err(_) => {
+            eprintln!("buzz-desktop: invalid deep link URL");
             return;
         }
     };
@@ -313,7 +313,7 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     }
 
     if url.scheme() != "buzz" {
-        eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
+        eprintln!("buzz-desktop: ignoring unsupported deep link scheme");
         return;
     }
 

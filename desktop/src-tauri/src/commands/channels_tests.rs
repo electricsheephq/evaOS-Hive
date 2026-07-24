@@ -225,6 +225,10 @@ fn pending_owner_mark_uses_signer_captured_before_identity_swap() {
     state
         .evaos_teams_authorized
         .store(true, std::sync::atomic::Ordering::Release);
+    #[cfg(feature = "evaos-teams-managed")]
+    state
+        .evaos_teams_expires_at
+        .store(i64::MAX, std::sync::atomic::Ordering::Release);
 
     // Mirrors `create_channel`'s new capture-before-submit step: read the
     // signer identity once, before anything that could race with a swap.

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::Write,
     sync::{
-        atomic::{AtomicBool, AtomicU16},
+        atomic::{AtomicBool, AtomicI64, AtomicU16},
         Arc, Mutex,
     },
 };
@@ -106,6 +106,10 @@ pub struct AppState {
     /// current entitlement for the Keychain-held identity. Native Buzz keeps
     /// this true and preserves its existing identity behavior.
     pub evaos_teams_authorized: AtomicBool,
+    /// Unix timestamp after which a managed entitlement may no longer sign.
+    /// Native Buzz uses `i64::MAX`; managed builds start expired and install
+    /// the broker-provided deadline only after entitlement validation.
+    pub evaos_teams_expires_at: AtomicI64,
     /// Cached ACP session config from running agents, keyed by canonical
     /// `(agent pubkey, relay URL)` runtime identity.
     /// Populated when the harness emits `session_config_captured` observer events.
@@ -231,6 +235,11 @@ pub fn build_app_state() -> AppState {
         identity_lost: AtomicBool::new(false),
         reset_failed: AtomicBool::new(false),
         evaos_teams_authorized: AtomicBool::new(!cfg!(feature = "evaos-teams-managed")),
+        evaos_teams_expires_at: AtomicI64::new(if cfg!(feature = "evaos-teams-managed") {
+            0
+        } else {
+            i64::MAX
+        }),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]

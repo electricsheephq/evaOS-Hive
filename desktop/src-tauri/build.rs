@@ -4,7 +4,45 @@ include!("src/commands/reconnect_hook_config.rs");
 
 use base64::Engine as _;
 
+fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                merge_json(base.entry(key).or_insert(serde_json::Value::Null), value);
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+fn configure_managed_deep_link_scheme() {
+    if std::env::var_os("CARGO_FEATURE_EVAOS_TEAMS_MANAGED").is_none() {
+        return;
+    }
+    let mut config = std::env::var("TAURI_CONFIG")
+        .ok()
+        .map(|value| {
+            serde_json::from_str(&value)
+                .unwrap_or_else(|error| panic!("TAURI_CONFIG is not valid JSON: {error}"))
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
+    merge_json(
+        &mut config,
+        serde_json::json!({
+            "plugins": {
+                "deep-link": {
+                    "desktop": {
+                        "schemes": ["buzz", "evaos-teams"]
+                    }
+                }
+            }
+        }),
+    );
+    std::env::set_var("TAURI_CONFIG", config.to_string());
+}
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EVAOS_TEAMS_MANAGED");
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_URL");
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_HTTP");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");
@@ -117,6 +155,7 @@ fn main() {
         );
     }
 
+    configure_managed_deep_link_scheme();
     tauri_build::try_build(
         tauri_build::Attributes::new().plugin(
             "websocket",
