@@ -7,19 +7,12 @@
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
-    collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
-use axum::{
-    extract::{Query, State as AxumState},
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
-    routing::get,
-    Router,
-};
-use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp, ToBech32};
+use axum::{routing::get, Router};
+use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
@@ -29,20 +22,29 @@ use zeroize::Zeroizing;
 
 use crate::{app_state::AppState, secret_store::SecretStore};
 
+mod api;
+mod credentials;
+mod login_callback;
+use api::{post_json, ApiFailure};
+#[cfg(feature = "evaos-teams-managed")]
+use credentials::managed_credential_entries;
+#[cfg(feature = "evaos-teams-managed")]
+use login_callback::clear_pending_login;
+#[cfg(feature = "evaos-teams-managed")]
+pub(crate) use login_callback::handle_login_deep_link;
+#[cfg(test)]
+use login_callback::{callback_device_code, managed_login_callback_url};
+use login_callback::{login_callback, LoginCallback};
+
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
-const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
-// Supabase publishable keys are intentionally public client identifiers. This
-// value grants no service-role access; authorization still comes exclusively
-// from the opaque Desktop session returned after browser authentication.
-const SUPABASE_PUBLISHABLE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmUiLCJyZWYiOiJyaGZvamVsa2d0d2N4bnJmaHRsaiIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzczMjQzNTc2LCJleHAiOjIwODg4MTk1NzZ9.X8mJHaYIolCmx6j_473GGb05OyFTy43Hq-BEelZRjAE";
 const KEYRING_SERVICE: &str = "evaos-teams-desktop";
 const IDENTITY_KEY: &str = "identity";
 const SESSION_KEY: &str = "electric_desktop_session";
 const LOGOUT_PENDING_KEY: &str = "logout_pending";
+const PREVIOUS_SESSION_KEY: &str = "previous_electric_desktop_session";
 const KEY_BINDING_KIND: u16 = 27_235;
 const KEY_BINDING_SCHEMA: &str = "evaos.buzz_key_binding.v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn managed_store() -> &'static SecretStore {
     static STORE: OnceLock<SecretStore> = OnceLock::new();
@@ -51,14 +53,10 @@ fn managed_store() -> &'static SecretStore {
 
 #[cfg(feature = "evaos-teams-managed")]
 fn verify_managed_store_writable() -> Result<(), String> {
-    let existing = managed_store()
-        .load_all_readonly()
-        .map_err(|_| "Unlock macOS Keychain, then try again".to_string())?
-        .unwrap_or_default();
-    managed_store()
-        .replace_all(&existing)
+    let rewritten = managed_store()
+        .force_rewrite_current()
         .map_err(|_| "evaOS Teams cannot write to macOS Keychain".to_string())?;
-    if managed_store().load_all_readonly()? != Some(existing) {
+    if managed_store().load_all_readonly()? != Some(rewritten) {
         return Err("evaOS Teams could not verify its Keychain write".to_string());
     }
     Ok(())
@@ -163,6 +161,7 @@ impl EvaosTeamsAuthStatus {
 struct ManagedRuntime {
     initialized: bool,
     session: Option<Zeroizing<String>>,
+    previous_session: Option<Zeroizing<String>>,
     keys: Option<Keys>,
     logout_pending: bool,
 }
@@ -172,6 +171,7 @@ struct ManagedRuntime {
 pub(crate) struct EvaosTeamsState {
     runtime: Mutex<ManagedRuntime>,
     operation: tokio::sync::Mutex<()>,
+    pending_login: Mutex<Option<Arc<LoginCallback>>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -217,68 +217,6 @@ struct LogoutResponse {
 struct ClaimResponse {
     desktop_session: String,
     desktop_session_expires_at: String,
-}
-
-#[derive(Debug)]
-struct ApiFailure {
-    status: reqwest::StatusCode,
-    code: String,
-}
-
-impl std::fmt::Display for ApiFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "HTTP {} ({})", self.status, self.code)
-    }
-}
-
-fn functions_url(name: &str) -> Result<Url, String> {
-    Url::parse(&format!("{SUPABASE_ORIGIN}/functions/v1/{name}"))
-        .map_err(|error| format!("invalid managed API URL: {error}"))
-}
-
-async fn post_json<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
-    function: &str,
-    bearer: Option<&str>,
-    body: serde_json::Value,
-) -> Result<T, ApiFailure> {
-    let url = functions_url(function).map_err(|code| ApiFailure {
-        status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-        code,
-    })?;
-    let mut request = client
-        .post(url)
-        .header("apikey", SUPABASE_PUBLISHABLE_KEY)
-        .header("x-client-info", "evaos-teams-desktop/0.4.23")
-        .timeout(REQUEST_TIMEOUT)
-        .json(&body);
-    if let Some(token) = bearer {
-        request = request.bearer_auth(token);
-    }
-    let response = request.send().await.map_err(|error| ApiFailure {
-        status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
-        code: format!("network_error:{}", error.is_timeout()),
-    })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(ApiFailure {
-            status,
-            // A remote error body is untrusted and may echo a device code,
-            // signed challenge, or bearer token. Only return a local category.
-            code: "request_failed".to_string(),
-        });
-    }
-    let value = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|_| ApiFailure {
-            status,
-            code: "invalid_json".to_string(),
-        })?;
-    serde_json::from_value(value).map_err(|_| ApiFailure {
-        status,
-        code: "invalid_response".to_string(),
-    })
 }
 
 fn normalize_device_code(value: &str) -> String {
@@ -486,6 +424,10 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
             runtime.logout_pending = stored
                 .get(LOGOUT_PENDING_KEY)
                 .is_some_and(|value| value == "1");
+            runtime.previous_session = stored
+                .get(PREVIOUS_SESSION_KEY)
+                .filter(|value| runtime.logout_pending && !value.trim().is_empty())
+                .map(|value| Zeroizing::new(value.clone()));
             runtime.initialized = true;
             Ok(())
         }
@@ -496,7 +438,7 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
 #[cfg(feature = "evaos-teams-managed")]
 async fn current_credentials(
     state: &EvaosTeamsState,
-) -> Result<(Zeroizing<String>, Keys, bool), String> {
+) -> Result<(Zeroizing<String>, Keys, bool, Option<Zeroizing<String>>), String> {
     initialize_runtime(state)?;
     let runtime = state.runtime.lock().map_err(|error| error.to_string())?;
     let session = runtime
@@ -507,7 +449,12 @@ async fn current_credentials(
         .keys
         .clone()
         .ok_or_else(|| "Managed identity is unavailable".to_string())?;
-    Ok((session, keys, runtime.logout_pending))
+    Ok((
+        session,
+        keys,
+        runtime.logout_pending,
+        runtime.previous_session.clone(),
+    ))
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -539,6 +486,41 @@ fn wipe_managed_store() -> Result<(), String> {
 }
 
 #[cfg(feature = "evaos-teams-managed")]
+fn reset_runtime_for_reload(state: &EvaosTeamsState, app_state: &AppState) {
+    disable_managed_access(app_state);
+    if let Ok(mut runtime) = state.runtime.lock() {
+        *runtime = ManagedRuntime::default();
+    }
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+fn stage_pending_claim(
+    state: &EvaosTeamsState,
+    app_state: &AppState,
+    session: &str,
+    keys: &Keys,
+    previous_session: Option<&str>,
+) -> Result<(), String> {
+    disable_managed_access(app_state);
+    let pending = managed_credential_entries(keys, session, true, previous_session)?;
+    managed_store()
+        .replace_all(&pending)
+        .map_err(|_| "Could not record the pending managed session in Keychain".to_string())?;
+    if managed_store().load_all_readonly()? != Some(pending) {
+        return Err("Managed Keychain pending-session verification failed".to_string());
+    }
+    let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
+    *runtime = ManagedRuntime {
+        initialized: true,
+        session: Some(Zeroizing::new(session.to_string())),
+        previous_session: previous_session.map(|value| Zeroizing::new(value.to_string())),
+        keys: Some(keys.clone()),
+        logout_pending: true,
+    };
+    Ok(())
+}
+
+#[cfg(feature = "evaos-teams-managed")]
 async fn retry_pending_logout(
     client: &reqwest::Client,
     state: &EvaosTeamsState,
@@ -547,21 +529,69 @@ async fn retry_pending_logout(
 ) -> EvaosTeamsAuthStatus {
     disable_managed_access(app_state);
     match remote_logout(client, session).await {
-        Ok(()) => match wipe_managed_store() {
-            Ok(()) => {
-                if let Ok(mut runtime) = state.runtime.lock() {
+        Ok(()) => {
+            let previous = state
+                .runtime
+                .lock()
+                .ok()
+                .and_then(|runtime| runtime.previous_session.clone().zip(runtime.keys.clone()));
+            if let Some((previous_session, keys)) = previous {
+                let restored = managed_credential_entries(&keys, &previous_session, false, None);
+                return match restored.and_then(|restored| {
+                    managed_store().replace_all(&restored)?;
+                    if managed_store().load_all_readonly()? != Some(restored) {
+                        return Err(
+                            "Managed Keychain previous-session verification failed".to_string()
+                        );
+                    }
+                    let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
                     *runtime = ManagedRuntime {
                         initialized: true,
-                        ..ManagedRuntime::default()
+                        session: Some(previous_session),
+                        previous_session: None,
+                        keys: Some(keys),
+                        logout_pending: false,
                     };
-                }
-                EvaosTeamsAuthStatus::signed_out()
+                    Ok(())
+                }) {
+                    Ok(()) => EvaosTeamsAuthStatus::reauth(
+                        "The prior account was preserved. Sign in to that account again."
+                            .to_string(),
+                    ),
+                    Err(error) => EvaosTeamsAuthStatus::locked(error),
+                };
             }
-            Err(error) => EvaosTeamsAuthStatus::locked(error),
-        },
+            match wipe_managed_store() {
+                Ok(()) => {
+                    if let Ok(mut runtime) = state.runtime.lock() {
+                        *runtime = ManagedRuntime {
+                            initialized: true,
+                            ..ManagedRuntime::default()
+                        };
+                    }
+                    EvaosTeamsAuthStatus::signed_out()
+                }
+                Err(error) => EvaosTeamsAuthStatus::locked(error),
+            }
+        }
         Err(error) => {
             EvaosTeamsAuthStatus::logout_pending(format!("Remote logout is still pending: {error}"))
         }
+    }
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+async fn finish_failed_staged_login(
+    state: &EvaosTeamsState,
+    app_state: &AppState,
+    session: &str,
+    original_error: String,
+) -> Result<EvaosTeamsAuthStatus, String> {
+    let outcome = retry_pending_logout(&app_state.http_client, state, app_state, session).await;
+    if outcome.phase == "signed_out" {
+        Err(original_error)
+    } else {
+        Ok(outcome)
     }
 }
 
@@ -570,22 +600,15 @@ async fn begin_managed_logout(
     state: &EvaosTeamsState,
     app_state: &AppState,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let (session, keys, _) = current_credentials(state).await?;
+    let (session, keys, _, _) = current_credentials(state).await?;
     disable_managed_access(app_state);
-    let identity = keys
-        .secret_key()
-        .to_bech32()
-        .map_err(|error| format!("could not encode managed identity: {error}"))?;
-    let pending = HashMap::from([
-        (IDENTITY_KEY.to_string(), identity),
-        (SESSION_KEY.to_string(), session.to_string()),
-        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
-    ]);
+    let pending = managed_credential_entries(&keys, &session, true, None)?;
     managed_store()
         .replace_all(&pending)
         .map_err(|_| "Could not record durable managed logout".to_string())?;
     if let Ok(mut runtime) = state.runtime.lock() {
         runtime.logout_pending = true;
+        runtime.previous_session = None;
     }
     Ok(retry_pending_logout(&app_state.http_client, state, app_state, &session).await)
 }
@@ -620,29 +643,28 @@ fn persist_managed_credentials(
     keys: Keys,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let identity = keys
-        .secret_key()
-        .to_bech32()
-        .map_err(|error| format!("could not encode managed identity: {error}"))?;
-    let replacement = HashMap::from([
-        (IDENTITY_KEY.to_string(), identity),
-        (SESSION_KEY.to_string(), session.clone()),
-    ]);
-    managed_store()
-        .replace_all(&replacement)
-        .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
-    if managed_store().load_all_readonly()? != Some(replacement) {
-        return Err("Managed Keychain read-back verification failed".to_string());
-    }
-    install_entitlement(app_state, &keys, &entitlement)?;
-    {
+    let replacement = managed_credential_entries(&keys, &session, false, None)?;
+    let activation = (|| -> Result<(), String> {
+        managed_store()
+            .replace_all(&replacement)
+            .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
+        if managed_store().load_all_readonly()? != Some(replacement) {
+            return Err("Managed Keychain read-back verification failed".to_string());
+        }
         let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
         *runtime = ManagedRuntime {
             initialized: true,
-            session: Some(Zeroizing::new(session)),
-            keys: Some(keys),
+            session: Some(Zeroizing::new(session.clone())),
+            previous_session: None,
+            keys: Some(keys.clone()),
             logout_pending: false,
         };
+        drop(runtime);
+        install_entitlement(app_state, &keys, &entitlement)
+    })();
+    if let Err(error) = activation {
+        reset_runtime_for_reload(state, app_state);
+        return Err(error);
     }
     Ok(EvaosTeamsAuthStatus::active(entitlement))
 }
@@ -667,7 +689,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
             return Ok(EvaosTeamsAuthStatus::locked(error));
         }
         let credentials = current_credentials(&state).await;
-        let (session, keys, logout_pending) = match credentials {
+        let (session, keys, logout_pending, _) = match credentials {
             Ok(value) => value,
             Err(_) => {
                 disable_managed_access(&app_state);
@@ -695,56 +717,6 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 )))
             }
         }
-    }
-}
-
-struct LoginCallback {
-    expected_state: String,
-    expected_code: String,
-    sender: Mutex<Option<oneshot::Sender<Result<String, String>>>>,
-}
-
-fn callback_device_code(
-    query: &HashMap<String, String>,
-    expected_state: &str,
-    expected_code: &str,
-) -> Result<String, String> {
-    let received_state = query.get("desktop_auth_state").map(String::as_str);
-    let received_code = query.get("device_code").map(String::as_str);
-    match (received_state, received_code) {
-        (Some(received_state), Some(received_code))
-            if received_state == expected_state
-                && normalize_device_code(received_code) == expected_code =>
-        {
-            Ok(expected_code.to_string())
-        }
-        _ => Err("Authentication callback did not match this login attempt".to_string()),
-    }
-}
-
-async fn login_callback(
-    Query(query): Query<HashMap<String, String>>,
-    AxumState(state): AxumState<std::sync::Arc<LoginCallback>>,
-) -> Response {
-    let result = callback_device_code(&query, &state.expected_state, &state.expected_code);
-    match result {
-        Ok(code) => {
-            if let Ok(mut sender) = state.sender.lock() {
-                if let Some(sender) = sender.take() {
-                    let _ = sender.send(Ok(code));
-                }
-            }
-            (
-                StatusCode::OK,
-                Html("<!doctype html><title>evaOS Teams</title><p>Sign-in received. Return to evaOS Teams.</p>"),
-            )
-                .into_response()
-        }
-        Err(_) => (
-            StatusCode::BAD_REQUEST,
-            Html("<!doctype html><title>evaOS Teams</title><p>This sign-in callback is not valid.</p>"),
-        )
-            .into_response(),
     }
 }
 
@@ -841,13 +813,16 @@ pub(crate) async fn start_evaos_teams_login(
         verify_managed_store_writable()?;
 
         initialize_runtime(&state)?;
-        let mut reauth_keys = None;
-        if let Ok((session, keys, logout_pending)) = current_credentials(&state).await {
+        let mut reauth_credentials = None;
+        if let Ok((session, keys, logout_pending, _)) = current_credentials(&state).await {
             if logout_pending {
-                let outcome = begin_managed_logout(&state, &app_state).await?;
-                if outcome.phase != "signed_out" {
-                    return Ok(outcome);
-                }
+                return Ok(retry_pending_logout(
+                    &app_state.http_client,
+                    &state,
+                    &app_state,
+                    &session,
+                )
+                .await);
             } else {
                 match get_remote_entitlement(&app_state.http_client, &session).await {
                     Ok(entitlement)
@@ -866,7 +841,7 @@ pub(crate) async fn start_evaos_teams_login(
                         // The old Desktop token can no longer prove logout.
                         // Permit only same-account reauthentication, established
                         // after claim by an entitlement for this exact old key.
-                        reauth_keys = Some(keys);
+                        reauth_credentials = Some((session, keys));
                     }
                 }
             }
@@ -885,88 +860,113 @@ pub(crate) async fn start_evaos_teams_login(
         let callback = format!("http://127.0.0.1:{port}/auth/callback");
         let login_url = dashboard_login_url(&callback, &auth_state, &device_code)?;
         let (sender, receiver) = oneshot::channel();
-        let callback_state = std::sync::Arc::new(LoginCallback {
-            expected_state: auth_state,
-            expected_code: device_code,
-            sender: Mutex::new(Some(sender)),
-        });
+        let callback_state = Arc::new(LoginCallback::new(auth_state, device_code, sender));
+        *state
+            .pending_login
+            .lock()
+            .map_err(|error| error.to_string())? = Some(callback_state.clone());
         let router = Router::new()
             .route("/auth/callback", get(login_callback))
-            .with_state(callback_state);
+            .with_state(callback_state.clone());
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
 
         if let Err(error) = app.opener().open_url(login_url.as_str(), None::<&str>) {
             server.abort();
+            clear_pending_login(&state, &callback_state);
             return Err(format!("could not open ElectricSheep sign-in: {error}"));
         }
         let code = match tokio::time::timeout(LOGIN_TIMEOUT, receiver).await {
             Ok(Ok(Ok(code))) => code,
             Ok(Ok(Err(error))) => {
                 server.abort();
+                clear_pending_login(&state, &callback_state);
                 return Err(error);
             }
             Ok(Err(_)) => {
                 server.abort();
+                clear_pending_login(&state, &callback_state);
                 return Err("local sign-in callback stopped unexpectedly".to_string());
             }
             Err(_) => {
                 server.abort();
+                clear_pending_login(&state, &callback_state);
                 return Err("ElectricSheep sign-in timed out".to_string());
             }
         };
         server.abort();
+        clear_pending_login(&state, &callback_state);
 
         let claim = claim_device_code(&app_state.http_client, &code).await?;
-        if let Some(keys) = reauth_keys {
+        let keys = reauth_credentials
+            .as_ref()
+            .map(|(_, keys)| keys.clone())
+            .unwrap_or_else(Keys::generate);
+        let previous_session = reauth_credentials
+            .as_ref()
+            .map(|(session, _)| session.as_str());
+        if let Err(error) = stage_pending_claim(
+            &state,
+            &app_state,
+            &claim.desktop_session,
+            &keys,
+            previous_session,
+        ) {
+            // The dashboard claim response is the first point at which the
+            // bearer exists, so a crash before this write cannot be recovered
+            // client-side. On an observed write failure, synchronously revoke
+            // the new session and report whether that cleanup was confirmed.
+            return match remote_logout(&app_state.http_client, &claim.desktop_session).await {
+                Ok(()) => {
+                    reset_runtime_for_reload(&state, &app_state);
+                    Err(error)
+                }
+                Err(cleanup_error) => Err(format!(
+                    "{error}; the newly claimed session could not be durably recorded or confirmed revoked: {cleanup_error}"
+                )),
+            };
+        }
+
+        if reauth_credentials.is_some() {
             match get_remote_entitlement(&app_state.http_client, &claim.desktop_session).await {
                 Ok(entitlement)
                     if validate_entitlement(&entitlement, &keys.public_key().to_hex()).is_ok() =>
                 {
-                    let rollback_session = claim.desktop_session.clone();
-                    let result = persist_managed_credentials(
+                    return persist_managed_credentials(
                         &state,
                         &app_state,
                         claim.desktop_session,
                         keys,
                         entitlement,
                     );
-                    if result.is_err() {
-                        let _ = remote_logout(&app_state.http_client, &rollback_session).await;
-                    }
-                    return result;
                 }
                 _ => {
-                    // Best-effort rollback of the newly claimed account. A
-                    // failed/ambiguous rollback is still fail-closed locally.
-                    let _ = remote_logout(&app_state.http_client, &claim.desktop_session).await;
-                    return Err(
+                    return finish_failed_staged_login(
+                        &state,
+                        &app_state,
+                        &claim.desktop_session,
                         "The previous account can no longer prove logout, so evaOS Teams will not replace it with a different account"
                             .to_string(),
-                    );
+                    )
+                    .await;
                 }
             }
         }
-        let candidate_keys = Keys::generate();
-        let entitlement = bind_identity(
-            &app_state.http_client,
-            &claim.desktop_session,
-            &candidate_keys,
-        )
-        .await?;
-        let rollback_session = claim.desktop_session.clone();
-        let result = persist_managed_credentials(
-            &state,
-            &app_state,
-            claim.desktop_session,
-            candidate_keys,
-            entitlement,
-        );
-        if result.is_err() {
-            let _ = remote_logout(&app_state.http_client, &rollback_session).await;
-        }
-        result
+        let entitlement =
+            match bind_identity(&app_state.http_client, &claim.desktop_session, &keys).await {
+                Ok(entitlement) => entitlement,
+                Err(error) => {
+                    return finish_failed_staged_login(
+                        &state,
+                        &app_state,
+                        &claim.desktop_session,
+                        error,
+                    )
+                    .await;
+                }
+            };
+        persist_managed_credentials(&state, &app_state, claim.desktop_session, keys, entitlement)
     }
 }
 

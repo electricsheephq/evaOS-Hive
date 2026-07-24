@@ -162,10 +162,8 @@ pub async fn get_agent_memory(
     // ── Resolve owner key material ──────────────────────────────────────
     // Owner = viewer. Clone the secret key out of the lock immediately so
     // we don't hold the mutex across the relay round trip.
-    let (owner_pubkey, owner_seckey) = {
-        let keys = state.keys.lock().map_err(|e| e.to_string())?;
-        (keys.public_key(), keys.secret_key().clone())
-    };
+    let owner_keys = state.signing_keys()?;
+    let (owner_pubkey, owner_seckey) = (owner_keys.public_key(), owner_keys.secret_key().clone());
 
     // ── Relay query ─────────────────────────────────────────────────────
     // Mirrors the CLI `mem ls` filter: kind 30174, authored by the agent,

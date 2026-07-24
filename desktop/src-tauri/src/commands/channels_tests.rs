@@ -221,6 +221,10 @@ fn pending_owner_mark_uses_signer_captured_before_identity_swap() {
     // marks with that captured identity, so a swap that happens afterward
     // (i.e. during what would be the submit await) can't retarget the mark.
     let state = crate::app_state::build_app_state();
+    #[cfg(feature = "evaos-teams-managed")]
+    state
+        .evaos_teams_authorized
+        .store(true, std::sync::atomic::Ordering::Release);
 
     // Mirrors `create_channel`'s new capture-before-submit step: read the
     // signer identity once, before anything that could race with a swap.

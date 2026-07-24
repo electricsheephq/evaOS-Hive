@@ -11,18 +11,18 @@ impl AppState {
     /// Native recovery mode blocks publishing under an invalid or inaccessible
     /// identity until the identity is restored and Buzz is relaunched.
     pub fn signing_keys(&self) -> Result<Keys, String> {
+        if self.identity_lost.load(Ordering::Acquire) || self.keyring_locked.load(Ordering::Acquire)
+        {
+            return Err("identity is in recovery mode; event signing is disabled \
+                 until the identity is restored and Buzz is relaunched"
+                .to_string());
+        }
         #[cfg(feature = "evaos-teams-managed")]
         if !self.evaos_teams_authorized.load(Ordering::Acquire) {
             return Err(
                 "evaOS Teams access is not currently authorized; sign in or refresh access"
                     .to_string(),
             );
-        }
-        if self.identity_lost.load(Ordering::Acquire) || self.keyring_locked.load(Ordering::Acquire)
-        {
-            return Err("identity is in recovery mode; event signing is disabled \
-                 until the identity is restored and Buzz is relaunched"
-                .to_string());
         }
         self.keys
             .lock()

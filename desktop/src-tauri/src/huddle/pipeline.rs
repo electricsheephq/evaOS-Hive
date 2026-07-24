@@ -9,6 +9,7 @@ use std::sync::{
 };
 
 use nostr::JsonUtil;
+use tauri::Manager;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
@@ -270,9 +271,14 @@ pub(crate) fn spawn_transcription_task(
     let spawned_gen = session_generation.load(Ordering::Acquire);
 
     let http_client = state.http_client.clone();
-    let keys = match state.keys.lock() {
-        Ok(k) => k.clone(),
-        Err(_) => return,
+    let app_handle = match state
+        .app_handle
+        .lock()
+        .ok()
+        .and_then(|handle| handle.clone())
+    {
+        Some(handle) => handle,
+        None => return,
     };
     let relay_base_url = crate::relay::relay_api_base_url_with_override(state);
 
@@ -310,6 +316,13 @@ pub(crate) fn spawn_transcription_task(
             // the kind event and build NIP-98 auth after the wait so both
             // timestamps are fresh — single clean order: wait → sign → auth → send.
             crate::relay_admission::wait_for_rate_limit().await;
+            let keys = match app_handle.state::<AppState>().signing_keys() {
+                Ok(keys) => keys,
+                Err(error) => {
+                    eprintln!("buzz-desktop: STT signing stopped: {error}");
+                    break;
+                }
+            };
             let event = match builder.sign_with_keys(&keys) {
                 Ok(e) => e,
                 Err(e) => {

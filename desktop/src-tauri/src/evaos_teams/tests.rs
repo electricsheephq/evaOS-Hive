@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 fn challenge(keys: &Keys) -> ChallengeResponse {
     let challenge = KeyBindingChallenge {
@@ -94,26 +95,85 @@ fn altered_challenge_template_is_rejected() {
 fn callback_requires_exact_state_and_normalized_code() {
     let expected_code = "AABBCCDDEEFF00112233445566778899";
     let expected_state = "state-12345678";
-    let valid = HashMap::from([
+    let valid = vec![
         ("desktop_auth_state".to_string(), expected_state.to_string()),
         (
             "device_code".to_string(),
             "aabb-ccdd-eeff-0011-2233-4455-6677-8899".to_string(),
         ),
-    ]);
+    ];
     assert_eq!(
         callback_device_code(&valid, expected_state, expected_code).unwrap(),
         expected_code
     );
     let mut wrong_state = valid.clone();
-    wrong_state.insert("desktop_auth_state".to_string(), "other-state".to_string());
+    wrong_state[0].1 = "other-state".to_string();
     assert!(callback_device_code(&wrong_state, expected_state, expected_code).is_err());
-    let mut wrong_code = valid;
-    wrong_code.insert(
-        "device_code".to_string(),
-        "BBBBCCDDEEFF00112233445566778899".to_string(),
-    );
+    let mut wrong_code = valid.clone();
+    wrong_code[1].1 = "BBBBCCDDEEFF00112233445566778899".to_string();
     assert!(callback_device_code(&wrong_code, expected_state, expected_code).is_err());
+    let mut credential_bearing = valid.clone();
+    credential_bearing.push(("desktop_session".to_string(), "secret".to_string()));
+    assert!(callback_device_code(&credential_bearing, expected_state, expected_code).is_err());
+    let duplicate = vec![valid[0].clone(), valid[0].clone(), valid[1].clone()];
+    assert!(callback_device_code(&duplicate, expected_state, expected_code).is_err());
+}
+
+#[test]
+fn invalid_callback_does_not_consume_valid_attempt() {
+    let (sender, mut receiver) = oneshot::channel();
+    let callback = LoginCallback::new(
+        "state-12345678".to_string(),
+        "AABBCCDDEEFF00112233445566778899".to_string(),
+        sender,
+    );
+    let invalid = vec![
+        ("desktop_auth_state".to_string(), "wrong-state".to_string()),
+        (
+            "device_code".to_string(),
+            "AABBCCDDEEFF00112233445566778899".to_string(),
+        ),
+    ];
+    assert!(callback.try_complete(&invalid).is_err());
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+
+    let valid = vec![
+        (
+            "desktop_auth_state".to_string(),
+            "state-12345678".to_string(),
+        ),
+        (
+            "device_code".to_string(),
+            "aabb-ccdd-eeff-0011-2233-4455-6677-8899".to_string(),
+        ),
+    ];
+    callback.try_complete(&valid).unwrap();
+    assert_eq!(
+        receiver.try_recv().unwrap().unwrap(),
+        "AABBCCDDEEFF00112233445566778899"
+    );
+    assert!(callback.try_complete(&valid).is_err());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn custom_scheme_accepts_only_the_exact_login_callback_shape() {
+    assert!(managed_login_callback_url(
+        &Url::parse("evaos-teams://auth/callback?desktop_auth_state=state&device_code=code")
+            .unwrap()
+    ));
+    for invalid in [
+        "evaos-teams://connect/callback?desktop_auth_state=state&device_code=code",
+        "evaos-teams://auth/other?desktop_auth_state=state&device_code=code",
+        "evaos-teams://auth:443/callback?desktop_auth_state=state&device_code=code",
+        "evaos-teams://auth/callback?desktop_auth_state=state&device_code=code#fragment",
+        "buzz://auth/callback?desktop_auth_state=state&device_code=code",
+    ] {
+        assert!(!managed_login_callback_url(&Url::parse(invalid).unwrap()));
+    }
 }
 
 #[test]
@@ -198,6 +258,46 @@ fn managed_keychain_service_is_distinct_from_native_buzz() {
     assert_eq!(KEYRING_SERVICE, "evaos-teams-desktop");
     assert_ne!(KEYRING_SERVICE, "buzz-desktop");
     assert_ne!(KEYRING_SERVICE, "buzz-desktop-dev");
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn managed_credential_states_are_exact_and_pending_is_removed_on_activation() {
+    let keys = Keys::generate();
+    let pending = managed_credential_entries(&keys, "session", true, None).unwrap();
+    assert_eq!(pending.len(), 3);
+    assert_eq!(
+        pending.get(LOGOUT_PENDING_KEY).map(String::as_str),
+        Some("1")
+    );
+    let active = managed_credential_entries(&keys, "session", false, None).unwrap();
+    assert_eq!(active.len(), 2);
+    assert!(!active.contains_key(LOGOUT_PENDING_KEY));
+    assert_eq!(active.get(SESSION_KEY).map(String::as_str), Some("session"));
+
+    let reauth_pending =
+        managed_credential_entries(&keys, "new-session", true, Some("old-session")).unwrap();
+    assert_eq!(reauth_pending.len(), 4);
+    assert_eq!(
+        reauth_pending.get(PREVIOUS_SESSION_KEY).map(String::as_str),
+        Some("old-session")
+    );
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn managed_nip98_auth_requires_current_entitlement() {
+    let state = crate::app_state::build_app_state();
+    let url = "https://relay.example.com/query";
+    assert!(
+        crate::relay::build_nip98_auth_header(&reqwest::Method::POST, url, b"{}", &state).is_err()
+    );
+    state
+        .evaos_teams_authorized
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert!(
+        crate::relay::build_nip98_auth_header(&reqwest::Method::POST, url, b"{}", &state).is_ok()
+    );
 }
 
 #[test]

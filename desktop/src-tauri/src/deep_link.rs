@@ -304,6 +304,14 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
     };
 
+    if url.scheme() == "evaos-teams" {
+        #[cfg(feature = "evaos-teams-managed")]
+        if crate::evaos_teams::handle_login_deep_link(app, &url) {
+            activate_main_window(app);
+        }
+        return;
+    }
+
     if url.scheme() != "buzz" {
         eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
         return;

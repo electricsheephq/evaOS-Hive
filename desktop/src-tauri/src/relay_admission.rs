@@ -291,6 +291,10 @@ mod tests {
         activate_rate_limit(Some(1));
 
         let state = crate::app_state::build_app_state();
+        #[cfg(feature = "evaos-teams-managed")]
+        state
+            .evaos_teams_authorized
+            .store(true, std::sync::atomic::Ordering::Release);
         *state.relay_url_override.lock().unwrap() = Some(format!("http://{addr}"));
         let filters = [serde_json::json!({ "kinds": [1], "limit": 1 })];
 
@@ -467,6 +471,10 @@ mod tests {
         });
 
         let state = crate::app_state::build_app_state();
+        #[cfg(feature = "evaos-teams-managed")]
+        state
+            .evaos_teams_authorized
+            .store(true, std::sync::atomic::Ordering::Release);
         *state.relay_url_override.lock().unwrap() = Some(format!("http://{addr}"));
         let filters = [serde_json::json!({ "kinds": [1], "limit": 1 })];
 

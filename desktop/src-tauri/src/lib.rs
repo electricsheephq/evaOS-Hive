@@ -173,7 +173,10 @@ pub fn run() {
             }
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
-                if arg.starts_with("buzz://") {
+                if arg.starts_with("buzz://")
+                    || (cfg!(feature = "evaos-teams-managed")
+                        && arg.starts_with("evaos-teams://"))
+                {
                     handle_deep_link_url(app, arg);
                 }
             }
@@ -361,6 +364,21 @@ pub fn run() {
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            // Register runtime/cold-start deep links before the managed setup
+            // boundary. Managed mode returns early to avoid all native
+            // migration and owner-key side effects, but still needs its
+            // device-login custom-scheme fallback.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let dl_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        handle_deep_link_url(&dl_handle, url.as_str());
+                    }
+                });
+            }
 
             // Managed Teams owns a separate Keychain identity and performs no
             // native Buzz migration, plaintext fallback, or owner-keyed boot
@@ -558,20 +576,6 @@ pub fn run() {
             if let Some(mgr) = huddle::models::global_model_manager() {
                 mgr.start_stt_download(state.http_client.clone());
                 mgr.start_tts_download(state.http_client.clone());
-            }
-
-            // Handle deep link URLs received while the app is running (macOS)
-            // and on cold start. The single-instance plugin handles forwarding
-            // from duplicate launches on Windows/Linux.
-            #[cfg(desktop)]
-            {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                let dl_handle = app.handle().clone();
-                app.deep_link().on_open_url(move |event| {
-                    for url in event.urls() {
-                        handle_deep_link_url(&dl_handle, url.as_str());
-                    }
-                });
             }
 
             // Defer launch-time agent restoration until `apply_workspace` has
