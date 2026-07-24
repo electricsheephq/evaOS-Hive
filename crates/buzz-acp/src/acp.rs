@@ -108,6 +108,24 @@ pub enum AcpError {
     AgentError { code: i64, message: String },
 }
 
+impl AcpError {
+    /// Stable, content-free category for service logs.
+    pub(crate) fn log_class(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "io",
+            Self::Json(_) => "json",
+            Self::AgentExited => "agent_exited",
+            Self::IdleTimeout(_) => "idle_timeout",
+            Self::HardTimeout { .. } => "hard_timeout",
+            Self::CancelDrainTimeout(_) => "cancel_drain_timeout",
+            Self::Timeout(_) => "request_timeout",
+            Self::WriteTimeout(_) => "write_timeout",
+            Self::Protocol(_) => "protocol",
+            Self::AgentError { .. } => "agent_error",
+        }
+    }
+}
+
 /// Build an [`AcpError::AgentError`] from a JSON-RPC error object,
 /// preserving the numeric code. When the `message` field is missing or
 /// non-string, fall back to the full JSON object so provider-specific
@@ -1548,30 +1566,19 @@ impl AcpClient {
 
         match update_type {
             "agent_message_chunk" => {
-                if let Some(text) = update["content"]["text"].as_str() {
-                    tracing::info!(target: "acp::stream", "{text}");
-                }
+                let bytes = update["content"]["text"]
+                    .as_str()
+                    .map(str::len)
+                    .unwrap_or_default();
+                tracing::debug!(target: "acp::stream", bytes, "agent message chunk received");
                 false
             }
             "tool_call" => {
-                let title = update
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let kind = update
-                    .get("kind")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                tracing::info!(target: "acp::tool", "tool_call: {title} ({kind})");
+                tracing::info!(target: "acp::tool", "tool call started");
                 true
             }
             "tool_call_update" => {
-                let tool_id = update
-                    .get("toolCallId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                tracing::info!(target: "acp::tool", "tool_call_update: {tool_id} → {status}");
+                tracing::info!(target: "acp::tool", "tool call updated");
                 false
             }
             "plan" => {
@@ -1579,23 +1586,24 @@ impl AcpClient {
                 false
             }
             "agent_thought_chunk" => {
-                if let Some(text) = update["content"]["text"].as_str() {
-                    tracing::debug!(target: "acp::thought", "{text}");
-                }
+                let bytes = update["content"]["text"]
+                    .as_str()
+                    .map(str::len)
+                    .unwrap_or_default();
+                tracing::debug!(target: "acp::thought", bytes, "agent thought chunk received");
                 false
             }
             "available_commands_update" => {
                 // Advertised slash commands (ACP slash-commands extension).
-                // Logged for observability; UI surfacing is a follow-up.
-                let names: Vec<&str> = update["availableCommands"]
+                // Log only the count; command names can reveal private tools.
+                let count = update["availableCommands"]
                     .as_array()
-                    .map(|cmds| cmds.iter().filter_map(|c| c["name"].as_str()).collect())
+                    .map(Vec::len)
                     .unwrap_or_default();
                 tracing::info!(
                     target: "acp::update",
-                    "available_commands_update: {} commands [{}]",
-                    names.len(),
-                    names.join(", ")
+                    count,
+                    "available commands updated"
                 );
                 false
             }
@@ -1618,7 +1626,7 @@ impl AcpClient {
                         Some(serde_json::Value::String(run_id)) => {
                             tracing::debug!(
                                 target: "acp::update",
-                                "session_info_update: activeRunId={run_id}"
+                                "session info reports an active run"
                             );
                             self.active_run_id = Some(run_id.clone());
                         }
@@ -1636,8 +1644,8 @@ impl AcpClient {
                 false
             }
             "keepalive" => false,
-            other => {
-                tracing::debug!(target: "acp::update", "session/update: {other}");
+            _ => {
+                tracing::debug!(target: "acp::update", "unrecognized session update");
                 false
             }
         }
@@ -3517,6 +3525,19 @@ mod tests {
             }
             other => panic!("expected AgentError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn error_log_class_never_copies_provider_or_protocol_detail() {
+        let provider = AcpError::AgentError {
+            code: -32000,
+            message: "provider credential and prompt text".to_string(),
+        };
+        let protocol = AcpError::Protocol("raw tool result".to_string());
+        assert_eq!(provider.log_class(), "agent_error");
+        assert_eq!(protocol.log_class(), "protocol");
+        assert!(!provider.log_class().contains("credential"));
+        assert!(!protocol.log_class().contains("tool result"));
     }
 
     // ── build_codex_config_env ────────────────────────────────────────────────

@@ -17,6 +17,7 @@
 import { mergeTimelineHistoryMessages } from "@/features/messages/lib/messageQueryKeys";
 import { normalizeRelayUrl } from "@/features/profile/lib/selfProfileStorage";
 import type { RelayEvent } from "@/shared/api/types";
+import { rendererContentPersistenceAllowed } from "@/shared/product/managedRendererPersistence";
 
 const STORAGE_KEY_PREFIX = "buzz-channel-messages.v1";
 
@@ -56,6 +57,9 @@ export function readMessageSnapshot(
   relayUrl: string,
   channelId: string,
 ): RelayEvent[] | null {
+  if (!rendererContentPersistenceAllowed()) {
+    return null;
+  }
   try {
     const raw = window.localStorage.getItem(
       messageSnapshotKey(relayUrl, channelId),
@@ -126,6 +130,9 @@ export function writeMessageSnapshot(
   channelId: string,
   events: RelayEvent[],
 ): void {
+  if (!rendererContentPersistenceAllowed()) {
+    return;
+  }
   try {
     const persistable = events
       .filter((event) => !event.pending)

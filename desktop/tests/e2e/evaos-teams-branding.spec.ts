@@ -5,7 +5,13 @@ import { installMockBridge } from "../helpers/bridge";
 const FORBIDDEN_HOSTS = [
   "app.builderlab.xyz",
   "communities.buzz.xyz",
+  "pairing.buzz.xyz",
+  "push.buzz.xyz",
+  "support.buzz.xyz",
+  "telemetry.buzz.xyz",
   "github.com",
+  "raw.githubusercontent.com",
+  "block.github.io",
 ];
 
 function isForbiddenHost(hostname: string) {
@@ -108,6 +114,40 @@ test("managed active UI uses evaOS identity and update path stays local", async 
   await expect(about).toContainText(
     "Built from Buzz by Block, used under the Apache License 2.0.",
   );
+});
+
+test("managed bootstrap purges content-bearing renderer persistence", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "buzz-drafts.v2:wss://relay.example:person",
+      "private draft",
+    );
+    window.localStorage.setItem(
+      "buzz-channel-messages.v1:wss://relay.example:room",
+      "private message",
+    );
+    window.localStorage.setItem("buzz-theme", "buzz-dark");
+  });
+  await installMockBridge(page, { evaosTeamsManaged: true });
+  await page.goto("/");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+
+  const persisted = await page.evaluate(() => ({
+    draft: window.localStorage.getItem(
+      "buzz-drafts.v2:wss://relay.example:person",
+    ),
+    message: window.localStorage.getItem(
+      "buzz-channel-messages.v1:wss://relay.example:room",
+    ),
+    theme: window.localStorage.getItem("buzz-theme"),
+  }));
+  expect(persisted).toEqual({
+    draft: null,
+    message: null,
+    theme: "buzz-dark",
+  });
 });
 
 for (const fixture of [

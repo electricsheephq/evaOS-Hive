@@ -10,6 +10,8 @@ use tokio_tungstenite::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::app_state::AppState;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
@@ -76,6 +78,8 @@ struct SendRequest {
 }
 
 struct ConnectionHandle {
+    #[cfg(feature = "evaos-teams-managed")]
+    url: String,
     sender: mpsc::Sender<SendRequest>,
     cancel: CancellationToken,
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
@@ -119,6 +123,16 @@ impl WebSocketManager {
             Self::disconnect_handle(handle).await;
         }
     }
+
+    #[cfg(feature = "evaos-teams-managed")]
+    async fn connection_url(&self, id: Id) -> Result<String, String> {
+        self.connections
+            .lock()
+            .await
+            .get(&id)
+            .map(|handle| handle.url.clone())
+            .ok_or_else(|| format!("WebSocket connection {id} not found"))
+    }
 }
 
 async fn open_connection(
@@ -150,6 +164,8 @@ async fn open_connection(
     let (sender, receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
     let cancel = CancellationToken::new();
     let handle = Arc::new(ConnectionHandle {
+        #[cfg(feature = "evaos-teams-managed")]
+        url: url.to_string(),
         sender,
         cancel: cancel.clone(),
         task: Mutex::new(None),
@@ -172,13 +188,63 @@ async fn open_connection(
     Ok(id)
 }
 
+#[cfg(any(test, feature = "evaos-teams-managed"))]
+fn validate_managed_websocket_request(
+    authorized: bool,
+    allowed_relay: Option<&str>,
+    requested_relay: &str,
+) -> Result<(), String> {
+    if !authorized {
+        return Err("Managed relay access is not authorized".to_string());
+    }
+    let allowed_relay = allowed_relay.ok_or_else(|| "Managed relay is unavailable".to_string())?;
+
+    fn parse_exact_origin(value: &str) -> Result<url::Url, String> {
+        let parsed =
+            url::Url::parse(value).map_err(|_| "Managed relay URL is invalid".to_string())?;
+        if !matches!(parsed.scheme(), "ws" | "wss")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || parsed.path() != "/"
+        {
+            return Err("Managed relay URL must be a credential-free WebSocket origin".to_string());
+        }
+        Ok(parsed)
+    }
+
+    let allowed = parse_exact_origin(allowed_relay)?;
+    let requested = parse_exact_origin(requested_relay)?;
+    if requested != allowed {
+        return Err("Managed relay must match the active entitlement".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn connect(
     manager: tauri::State<'_, WebSocketManager>,
+    state: tauri::State<'_, AppState>,
     url: String,
     on_message: Channel<serde_json::Value>,
     _config: Option<serde_json::Value>,
 ) -> Result<Id, String> {
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        // `signing_keys` rechecks expiry and revokes stale capability state.
+        state.signing_keys()?;
+        let allowed_relay = state
+            .relay_url_override
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clone();
+        validate_managed_websocket_request(true, allowed_relay.as_deref(), &url)?;
+    }
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    let _ = state;
+
     open_connection(manager.inner(), &url, on_message).await
 }
 
@@ -215,9 +281,31 @@ async fn send_message(
 #[tauri::command]
 async fn send(
     manager: tauri::State<'_, WebSocketManager>,
+    state: tauri::State<'_, AppState>,
     id: Id,
     message: WebSocketMessage,
 ) -> Result<(), String> {
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        // A connection opened under an earlier entitlement cannot be reused
+        // after revoke, expiry, or a community switch.
+        state.signing_keys()?;
+        let allowed_relay = state
+            .relay_url_override
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clone();
+        let connection_url = manager.connection_url(id).await?;
+        if let Err(error) =
+            validate_managed_websocket_request(true, allowed_relay.as_deref(), &connection_url)
+        {
+            manager.disconnect(id).await;
+            return Err(error);
+        }
+    }
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    let _ = state;
+
     send_message(manager.inner(), id, message).await
 }
 
@@ -337,6 +425,39 @@ mod tests {
         Channel::new(|_: InvokeResponseBody| Ok(()))
     }
 
+    #[test]
+    fn managed_websocket_requires_the_exact_authorized_credential_free_origin() {
+        assert!(validate_managed_websocket_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com/",
+        )
+        .is_ok());
+        for requested in [
+            "wss://attacker.example.com/",
+            "wss://user:password@relay.example.com/",
+            "wss://relay.example.com/other",
+            "wss://relay.example.com/?tenant=other",
+            "https://relay.example.com/",
+        ] {
+            assert!(
+                validate_managed_websocket_request(
+                    true,
+                    Some("wss://relay.example.com"),
+                    requested
+                )
+                .is_err(),
+                "{requested} must be rejected"
+            );
+        }
+        assert!(validate_managed_websocket_request(
+            false,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com/",
+        )
+        .is_err());
+    }
+
     #[tokio::test]
     async fn secure_websocket_reaches_tls_without_panicking() {
         install_crypto_provider();
@@ -406,6 +527,8 @@ mod tests {
         );
         let (sender, receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
         let handle = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(None),
@@ -446,6 +569,8 @@ mod tests {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (sender, _receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
         let handle = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(Some(tauri::async_runtime::spawn(async move {
@@ -473,6 +598,8 @@ mod tests {
         let gate = manager.connect_cancel.lock().await;
         let (sender, _receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
         let handle = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(Some(tauri::async_runtime::spawn(async {
@@ -510,6 +637,8 @@ mod tests {
             .await
             .unwrap();
         let blocked = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender: blocked_sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(None),
@@ -518,6 +647,8 @@ mod tests {
 
         let (healthy_sender, mut healthy_receiver) = mpsc::channel(1);
         let healthy = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender: healthy_sender.clone(),
             cancel: CancellationToken::new(),
             task: Mutex::new(None),
