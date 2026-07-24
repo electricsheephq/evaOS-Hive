@@ -1,0 +1,76 @@
+name: evaOS Teams Pre-sign
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/evaos-teams-pre-sign.yml"
+      - "scripts/evaos-teams-pre-sign-smoke.sh"
+      - "scripts/verify-evaos-teams-app-bundle.mjs"
+      - "scripts/test-evaos-teams-pre-sign-contract.mjs"
+      - "desktop/scripts/build-evaos-teams.mjs"
+      - "desktop/src-tauri/evaos-teams/**"
+      - "desktop/src-tauri/tauri.evaos-teams.conf.json"
+      - "desktop/src-tauri/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Full source SHA to verify before any build command
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  managed-pre-sign:
+    name: Exact-SHA unsigned arm64 smoke
+    if: github.repository == 'electricsheephq/evaOS-Hive'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      EVAOS_TEAMS_PRE_SIGN_ISOLATED: "1"
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.expected_sha }}
+      TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - name: Require exact Apple Silicon source
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Build and smoke unsigned managed app
+        env:
+          EVIDENCE_PATH: ${{ runner.temp }}/evaos-teams-pre-sign-evidence.json
+        run: scripts/evaos-teams-pre-sign-smoke.sh "$EXPECTED_SHA" "$EVIDENCE_PATH"
+
+      - name: Publish secret-free evidence summary
+        env:
+          EVIDENCE_PATH: ${{ runner.temp }}/evaos-teams-pre-sign-evidence.json
+        run: |
+          {
+            echo '## evaOS Teams pre-sign evidence'
+            echo
+            echo '```json'
+            cat "$EVIDENCE_PATH"
+            echo '```'
+            echo
+            echo 'Unsigned app and DMG were not uploaded.'
+          } >> "$GITHUB_STEP_SUMMARY"

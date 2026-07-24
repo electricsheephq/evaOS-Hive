@@ -65,6 +65,8 @@ jobs:
         run: node scripts/test-canary-dependency-contract.mjs
       - name: Managed boundary contract
         run: node scripts/test-managed-boundary-contract.mjs
+      - name: evaOS Teams pre-sign contract
+        run: node scripts/test-evaos-teams-pre-sign-contract.mjs
 
   rust-lint:
     name: Rust Lint
