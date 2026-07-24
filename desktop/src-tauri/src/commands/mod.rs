@@ -22,7 +22,7 @@ mod identity;
 mod identity_archive;
 mod legacy_storage;
 mod link_preview;
-mod managed_authority;
+pub(crate) mod managed_authority;
 pub(crate) mod media;
 mod media_download;
 mod media_gif;

@@ -258,6 +258,7 @@ pub async fn preview_agent_snapshot_import(
     file_bytes: Vec<u8>,
     file_name: String,
 ) -> Result<AgentSnapshotImportPreview, String> {
+    crate::commands::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || {
         reject_legacy_persona_filename(&file_name)?;
         let snapshot = decode_snapshot_from_bytes(&file_bytes)?;
@@ -313,6 +314,7 @@ pub async fn confirm_agent_snapshot_import(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AgentSnapshotImportResult, String> {
+    crate::commands::managed_authority::require_native_agent_authority()?;
     // ── Phase 1: validate (no I/O) ───────────────────────────────────────────
     let snapshot = decode_snapshot_from_bytes(&input.file_bytes)?;
 

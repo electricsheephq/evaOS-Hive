@@ -412,6 +412,7 @@ pub async fn export_team_snapshot(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    super::managed_authority::require_native_agent_authority()?;
     let is_png = parse_format_is_png(&format)?;
     let memory_level = parse_memory_level(&memory_level)?;
     let payload =
@@ -446,6 +447,7 @@ pub async fn encode_team_snapshot_for_send(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<EncodedTeamSnapshotPayload, String> {
+    super::managed_authority::require_native_agent_authority()?;
     let memory_level = parse_memory_level(&memory_level)?;
     materialize_team_snapshot_bytes(id, parse_format_is_png(&format)?, memory_level, app, state)
         .await
@@ -457,6 +459,7 @@ pub async fn preview_team_snapshot_import(
     file_bytes: Vec<u8>,
     _file_name: String,
 ) -> Result<TeamSnapshotImportPreview, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || {
         let snapshot = decode_team_snapshot_from_bytes(&file_bytes)?;
         let members: Vec<_> = snapshot.members.iter().map(member_preview).collect();
@@ -500,6 +503,7 @@ pub async fn confirm_team_snapshot_import(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<TeamSnapshotImportResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     // ── Phase 1: validate (no I/O) ───────────────────────────────────────────
     let snapshot = decode_team_snapshot_from_bytes(&input.file_bytes)?;
     let now = now_iso();

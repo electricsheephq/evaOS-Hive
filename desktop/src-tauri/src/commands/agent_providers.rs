@@ -2,6 +2,7 @@ use crate::managed_agents::{discover_provider_candidates, invoke_provider, Backe
 
 #[tauri::command]
 pub async fn discover_backend_providers() -> Result<Vec<BackendProviderInfo>, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(|| {
         discover_provider_candidates()
             .into_iter()
@@ -17,6 +18,7 @@ pub async fn discover_backend_providers() -> Result<Vec<BackendProviderInfo>, St
 
 #[tauri::command]
 pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::Value, String> {
+    super::managed_authority::require_native_agent_authority()?;
     // Validate that the requested path is actually a discovered buzz-backend-* binary.
     // This prevents arbitrary binary execution via a compromised frontend or IPC.
     let candidates = discover_provider_candidates();

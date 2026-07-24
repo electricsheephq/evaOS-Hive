@@ -10,6 +10,11 @@ impl AppState {
     /// long-lived huddle cannot outlive the authorization that started it.
     #[cfg(feature = "evaos-teams-managed")]
     pub(crate) fn disable_evaos_teams_access(&self) {
+        let app = self
+            .app_handle
+            .lock()
+            .ok()
+            .and_then(|handle| handle.clone());
         let old_pipelines = {
             let _transition = self
                 .evaos_teams_access_transition
@@ -35,6 +40,25 @@ impl AppState {
             })
         };
         drop(old_pipelines);
+        let tracked_runtimes = self
+            .managed_agent_runtime_transition
+            .lock()
+            .ok()
+            .and_then(|_transition| {
+                self.managed_agent_processes
+                    .lock()
+                    .ok()
+                    .map(|mut runtimes| runtimes.drain().collect::<Vec<_>>())
+            })
+            .unwrap_or_default();
+        for (key, mut runtime) in tracked_runtimes {
+            let _ = crate::managed_agents::terminate_process(runtime.child.id());
+            let _ = runtime.child.try_wait();
+            self.clear_agent_session_cache(&key);
+            if let Some(app) = app.as_ref() {
+                crate::managed_agents::remove_agent_runtime_receipt(app, &key);
+            }
+        }
         self.emit_huddle_state_changed();
     }
 
@@ -97,28 +121,8 @@ impl AppState {
                 if !still_current {
                     break;
                 }
-                state
-                    .evaos_teams_access_generation
-                    .fetch_add(1, Ordering::AcqRel);
-                state.evaos_teams_authorized.store(false, Ordering::Release);
-                state.evaos_teams_expires_at.store(0, Ordering::Release);
-                if let Ok(mut relay) = state.relay_url_override.lock() {
-                    *relay = None;
-                }
-                let old_pipelines = state.huddle_state.lock().ok().map(|mut huddle| {
-                    huddle.session_generation.fetch_add(1, Ordering::Release);
-                    if let Some(cancel) = huddle.audio_ws_cancel.take() {
-                        cancel.cancel();
-                    }
-                    huddle.audio_relay_pcm_tx.take();
-                    let stt = huddle.stt_pipeline.take();
-                    let tts = huddle.tts_pipeline.take();
-                    huddle.reset_preserving_generation();
-                    (stt, tts)
-                });
                 drop(_transition);
-                drop(old_pipelines);
-                state.emit_huddle_state_changed();
+                state.disable_evaos_teams_access();
                 break;
             }
         });

@@ -74,6 +74,7 @@ pub async fn install_acp_runtime(
     runtime_id: String,
     app: tauri::AppHandle,
 ) -> Result<InstallRuntimeResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     // ── Phase 1: blocking install ────────────────────────────────────────────
     //
     // Run the npm install steps synchronously in spawn_blocking.  The
@@ -890,6 +891,7 @@ use managed_node::{
 pub async fn discover_managed_agent_prereqs(
     input: DiscoverManagedAgentPrereqsRequest,
 ) -> Result<ManagedAgentPrereqsInfo, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || {
         let acp_command = input
             .acp_command

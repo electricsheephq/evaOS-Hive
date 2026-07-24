@@ -186,6 +186,7 @@ pub async fn discover_agent_models(
     input: DiscoverAgentModelsInput,
     state: State<'_, AppState>,
 ) -> Result<AgentModelsResponse, String> {
+    super::managed_authority::require_native_agent_authority()?;
     crate::managed_agents::validate_user_env_keys(&input.env_vars)?;
 
     let acp_command = input

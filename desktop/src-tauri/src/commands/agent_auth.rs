@@ -53,6 +53,7 @@ pub struct ConnectAcpRuntimeResult {
 
 #[tauri::command]
 pub async fn discover_acp_auth_methods(runtime_id: String) -> Result<AcpAuthMethodsResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || discover_acp_auth_methods_blocking(&runtime_id))
         .await
         .map_err(|error| format!("auth-method discovery task failed: {error}"))?
@@ -62,6 +63,7 @@ pub async fn discover_acp_auth_methods(runtime_id: String) -> Result<AcpAuthMeth
 pub async fn connect_acp_runtime(
     request: ConnectAcpRuntimeRequest,
 ) -> Result<ConnectAcpRuntimeResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || connect_acp_runtime_blocking(&request))
         .await
         .map_err(|error| format!("connect-account task failed: {error}"))?
