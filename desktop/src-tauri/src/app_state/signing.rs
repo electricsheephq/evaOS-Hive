@@ -5,40 +5,37 @@ use nostr::Keys;
 use super::AppState;
 
 impl AppState {
-    #[cfg(feature = "evaos-teams-managed")]
-    fn disable_evaos_teams_access_locked(&self) {
-        self.evaos_teams_access_generation
-            .fetch_add(1, Ordering::AcqRel);
-        self.evaos_teams_authorized.store(false, Ordering::Release);
-        self.evaos_teams_expires_at.store(0, Ordering::Release);
-        if let Ok(mut relay) = self.relay_url_override.lock() {
-            *relay = None;
-        }
-        let old_pipelines = self.huddle_state.lock().ok().map(|mut huddle| {
-            huddle.session_generation.fetch_add(1, Ordering::Release);
-            if let Some(cancel) = huddle.audio_ws_cancel.take() {
-                cancel.cancel();
-            }
-            huddle.audio_relay_pcm_tx.take();
-            let stt = huddle.stt_pipeline.take();
-            let tts = huddle.tts_pipeline.take();
-            huddle.reset_preserving_generation();
-            (stt, tts)
-        });
-        drop(old_pipelines);
-        self.emit_huddle_state_changed();
-    }
-
     /// Revoke every in-process capability derived from a managed entitlement.
     /// This is also called when `signing_keys` discovers backend expiry, so a
     /// long-lived huddle cannot outlive the authorization that started it.
     #[cfg(feature = "evaos-teams-managed")]
     pub(crate) fn disable_evaos_teams_access(&self) {
-        let _transition = self
-            .evaos_teams_access_transition
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        self.disable_evaos_teams_access_locked();
+        let old_pipelines = {
+            let _transition = self
+                .evaos_teams_access_transition
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.evaos_teams_access_generation
+                .fetch_add(1, Ordering::AcqRel);
+            self.evaos_teams_authorized.store(false, Ordering::Release);
+            self.evaos_teams_expires_at.store(0, Ordering::Release);
+            if let Ok(mut relay) = self.relay_url_override.lock() {
+                *relay = None;
+            }
+            self.huddle_state.lock().ok().map(|mut huddle| {
+                huddle.session_generation.fetch_add(1, Ordering::Release);
+                if let Some(cancel) = huddle.audio_ws_cancel.take() {
+                    cancel.cancel();
+                }
+                huddle.audio_relay_pcm_tx.take();
+                let stt = huddle.stt_pipeline.take();
+                let tts = huddle.tts_pipeline.take();
+                huddle.reset_preserving_generation();
+                (stt, tts)
+            })
+        };
+        drop(old_pipelines);
+        self.emit_huddle_state_changed();
     }
 
     /// Install a validated managed capability and arm an entitlement-owned
@@ -97,9 +94,31 @@ impl AppState {
                 let still_current = state.evaos_teams_access_generation.load(Ordering::Acquire)
                     == generation
                     && state.evaos_teams_expires_at.load(Ordering::Acquire) == expires_at;
-                if still_current {
-                    state.disable_evaos_teams_access_locked();
+                if !still_current {
+                    break;
                 }
+                state
+                    .evaos_teams_access_generation
+                    .fetch_add(1, Ordering::AcqRel);
+                state.evaos_teams_authorized.store(false, Ordering::Release);
+                state.evaos_teams_expires_at.store(0, Ordering::Release);
+                if let Ok(mut relay) = state.relay_url_override.lock() {
+                    *relay = None;
+                }
+                let old_pipelines = state.huddle_state.lock().ok().map(|mut huddle| {
+                    huddle.session_generation.fetch_add(1, Ordering::Release);
+                    if let Some(cancel) = huddle.audio_ws_cancel.take() {
+                        cancel.cancel();
+                    }
+                    huddle.audio_relay_pcm_tx.take();
+                    let stt = huddle.stt_pipeline.take();
+                    let tts = huddle.tts_pipeline.take();
+                    huddle.reset_preserving_generation();
+                    (stt, tts)
+                });
+                drop(_transition);
+                drop(old_pipelines);
+                state.emit_huddle_state_changed();
                 break;
             }
         });
