@@ -4,6 +4,7 @@ import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { useMyRelayMembershipLookupQuery } from "@/features/community-members/hooks";
 import { shouldWarnMissingMembershipSnapshot } from "@/shared/api/relayMembers";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { getFeature } from "@/shared/features/manifest";
 import {
   resolveEnabled,
@@ -122,6 +123,7 @@ export function SettingsView({
   onSetSoundForSlot,
   section,
 }: SettingsViewProps) {
+  const authority = useEvaosTeamsAuthority();
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const featureState = useFeatureSnapshot();
@@ -129,6 +131,19 @@ export function SettingsView({
     const membership = myMembershipQuery.data?.membership;
 
     return settingsSections.filter((s) => {
+      if (
+        authority.managed &&
+        [
+          "agents",
+          "channel-templates",
+          "hosted-communities",
+          "community-members",
+          "moderation",
+          "custom-emoji",
+        ].includes(s.value)
+      ) {
+        return false;
+      }
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).
@@ -147,7 +162,13 @@ export function SettingsView({
       }
       return true;
     });
-  }, [myMembershipQuery.data, featureState]);
+  }, [authority.managed, myMembershipQuery.data, featureState]);
+
+  const effectiveSection = visibleSections.some(
+    (entry) => entry.value === section,
+  )
+    ? section
+    : (visibleSections[0]?.value ?? "appearance");
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);
@@ -282,7 +303,7 @@ export function SettingsView({
                 <SidebarMenu aria-label={`${group.label} settings sections`}>
                   {group.sections.map((entry) => (
                     <SettingsSectionButton
-                      active={entry.value === section}
+                      active={entry.value === effectiveSection}
                       key={entry.value}
                       onSelect={onSectionChange}
                       section={entry}
@@ -331,9 +352,9 @@ export function SettingsView({
           >
             <div
               className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4"
-              data-testid={`settings-panel-${section}`}
+              data-testid={`settings-panel-${effectiveSection}`}
             >
-              {renderSettingsSection(section, {
+              {renderSettingsSection(effectiveSection, {
                 currentPubkey,
                 fallbackDisplayName,
                 isUpdatingDesktopNotifications,

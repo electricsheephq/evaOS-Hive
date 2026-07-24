@@ -569,7 +569,7 @@ pub fn run() {
             // identity resolution above, so JSON/SQLite/signing work must not
             // hold the boot path hostage. Skipped in recovery mode — the owner
             // key is ephemeral.
-            if !recovery_mode {
+            if !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
                 event_sync::spawn_event_sync(app_handle.clone(), owner_keys);
             }
 
@@ -584,7 +584,7 @@ pub fn run() {
             // has no relay override to the localhost fallback. Preserve the
             // boot-time repos and identity recovery safety gates by only marking
             // restoration pending when both allow it.
-            if restore_agents && !recovery_mode {
+            if restore_agents && !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
                 state
                     .managed_agent_restore_pending
                     .store(true, Ordering::Release);
@@ -636,7 +636,7 @@ pub fn run() {
             // the next sweep.
             // Skipped in recovery mode — flushing under an ephemeral key would
             // publish events attributed to an identity the user doesn't own.
-            if !recovery_mode {
+            if !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
                 let flush_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     use std::time::Duration;

@@ -77,6 +77,8 @@ pub(crate) struct EvaosTeamsEntitlement {
     relay_host: String,
     public_key: Option<String>,
     role: String,
+    assignment_status: String,
+    reconciliation_status: String,
     access_revision: u64,
     expires_at: String,
     refresh_after_seconds: u64,
@@ -159,6 +161,17 @@ impl EvaosTeamsAuthStatus {
             authenticated: true,
             keychain_available: true,
             message: None,
+            entitlement: Some(entitlement),
+        }
+    }
+
+    fn sync_pending(entitlement: EvaosTeamsEntitlement, message: String) -> Self {
+        Self {
+            managed: true,
+            phase: "sync_pending",
+            authenticated: true,
+            keychain_available: true,
+            message: Some(message),
             entitlement: Some(entitlement),
         }
     }
@@ -274,8 +287,16 @@ fn validate_entitlement(
     if entitlement.public_key.as_deref() != Some(expected_public_key) {
         return Err("managed entitlement belongs to a different identity".to_string());
     }
-    if entitlement.role.trim().is_empty()
-        || entitlement.refresh_after_seconds < 30
+    if !matches!(
+        entitlement.role.as_str(),
+        "owner" | "admin" | "member" | "employee" | "agent_only"
+    ) || !matches!(
+        entitlement.assignment_status.as_str(),
+        "unassigned" | "pending" | "assigned"
+    ) || !matches!(
+        entitlement.reconciliation_status.as_str(),
+        "pending" | "failed" | "current"
+    ) || entitlement.refresh_after_seconds < 30
         || entitlement.refresh_after_seconds > 3600
     {
         return Err("managed entitlement policy is invalid".to_string());
@@ -286,6 +307,24 @@ fn validate_entitlement(
         return Err("managed entitlement has expired".to_string());
     }
     relay_websocket_url(&entitlement.relay_host)
+}
+
+fn entitlement_access_ready(entitlement: &EvaosTeamsEntitlement) -> bool {
+    entitlement.reconciliation_status == "current"
+        && (entitlement.role != "agent_only" || entitlement.assignment_status == "assigned")
+}
+
+fn entitlement_sync_message(entitlement: &EvaosTeamsEntitlement) -> String {
+    if entitlement.reconciliation_status == "failed" {
+        "Managed relay projection failed and access remains disabled while ElectricSheep retries"
+            .to_string()
+    } else if entitlement.role == "agent_only" && entitlement.assignment_status != "assigned" {
+        "This managed agent is waiting for its server assignment; relay access remains disabled"
+            .to_string()
+    } else {
+        "ElectricSheep verified this device; managed relay projection is still being reconciled"
+            .to_string()
+    }
 }
 
 fn bind_verified_entitlement(
@@ -390,10 +429,30 @@ fn install_entitlement(
     entitlement: &EvaosTeamsEntitlement,
 ) -> Result<(), String> {
     let relay = validate_entitlement(entitlement, &keys.public_key().to_hex())?;
+    if !entitlement_access_ready(entitlement) {
+        return Err("managed relay projection is not current".to_string());
+    }
     let expires_at = chrono::DateTime::parse_from_rfc3339(&entitlement.expires_at)
         .map_err(|_| "managed entitlement expiry is invalid".to_string())?
         .timestamp();
     app_state.install_evaos_teams_access(keys.clone(), relay, expires_at)
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+fn apply_entitlement_status(
+    app_state: &AppState,
+    keys: &Keys,
+    entitlement: EvaosTeamsEntitlement,
+) -> Result<EvaosTeamsAuthStatus, String> {
+    validate_entitlement(&entitlement, &keys.public_key().to_hex())?;
+    if entitlement_access_ready(&entitlement) {
+        install_entitlement(app_state, keys, &entitlement)?;
+        Ok(EvaosTeamsAuthStatus::active(entitlement))
+    } else {
+        disable_managed_access(app_state);
+        let message = entitlement_sync_message(&entitlement);
+        Ok(EvaosTeamsAuthStatus::sync_pending(entitlement, message))
+    }
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -584,7 +643,7 @@ fn persist_managed_credentials(
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let replacement = managed_credential_entries(&keys, &session, false, false, None)?;
-    let activation = (|| -> Result<(), String> {
+    let activation = (|| -> Result<EvaosTeamsAuthStatus, String> {
         managed_store()
             .replace_all(&replacement)
             .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
@@ -601,13 +660,15 @@ fn persist_managed_credentials(
             logout_confirmed: false,
         };
         drop(runtime);
-        install_entitlement(app_state, &keys, &entitlement)
+        apply_entitlement_status(app_state, &keys, entitlement)
     })();
-    if let Err(error) = activation {
-        reset_runtime_for_reload(state, app_state);
-        return Err(error);
+    match activation {
+        Ok(status) => Ok(status),
+        Err(error) => {
+            reset_runtime_for_reload(state, app_state);
+            Err(error)
+        }
     }
-    Ok(EvaosTeamsAuthStatus::active(entitlement))
 }
 
 /// Return current managed-auth status and perform a bounded entitlement refresh.
@@ -644,13 +705,13 @@ pub(crate) async fn get_evaos_teams_auth_status(
         }
         let response = get_remote_entitlement(&app_state.http_client, &session).await;
         match response {
-            Ok(entitlement) => {
-                if let Err(error) = install_entitlement(&app_state, &keys, &entitlement) {
+            Ok(entitlement) => match apply_entitlement_status(&app_state, &keys, entitlement) {
+                Ok(status) => Ok(status),
+                Err(error) => {
                     disable_managed_access(&app_state);
-                    return Ok(EvaosTeamsAuthStatus::reauth(error));
+                    Ok(EvaosTeamsAuthStatus::reauth(error))
                 }
-                Ok(EvaosTeamsAuthStatus::active(entitlement))
-            }
+            },
             Err(error) => {
                 disable_managed_access(&app_state);
                 Ok(EvaosTeamsAuthStatus::reauth(format!(

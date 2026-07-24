@@ -4,7 +4,9 @@ export type EvaosTeamsEntitlement = {
   communityId: string;
   relayHost: string;
   publicKey?: string;
-  role: string;
+  role: "owner" | "admin" | "member" | "employee" | "agent_only";
+  assignmentStatus: "unassigned" | "pending" | "assigned";
+  reconciliationStatus: "pending" | "failed" | "current";
   accessRevision: number;
   expiresAt: string;
   refreshAfterSeconds: number;
@@ -16,6 +18,7 @@ export type EvaosTeamsAuthStatus = {
     | "native"
     | "signed_out"
     | "active"
+    | "sync_pending"
     | "keychain_locked"
     | "reauth_required"
     | "logout_pending";
@@ -38,6 +41,11 @@ export function logoutEvaosTeams() {
 }
 
 export function evaosTeamsRefreshDelay(status: EvaosTeamsAuthStatus) {
+  if (status.phase === "sync_pending") {
+    return status.entitlement?.reconciliationStatus === "failed"
+      ? 10_000
+      : 2_000;
+  }
   const seconds = status.entitlement?.refreshAfterSeconds ?? 300;
   return Math.min(Math.max(seconds, 30), 3600) * 1000;
 }
@@ -64,6 +72,13 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
         body:
           status.message ??
           "Your managed access could not be refreshed. evaOS Teams remains disconnected.",
+      };
+    case "sync_pending":
+      return {
+        title: "Finishing managed setup",
+        body:
+          status.message ??
+          "Your identity is verified. evaOS Teams is waiting for the managed relay projection.",
       };
     case "active":
       return {

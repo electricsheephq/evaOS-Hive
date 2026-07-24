@@ -30,6 +30,7 @@ import type {
   UsersBatchResponse,
 } from "@/shared/api/types";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { getAvatarSnapshotUrl } from "@/shared/lib/animatedAvatar";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import {
@@ -404,8 +405,10 @@ export function useUserSearchQuery(
     limit?: number;
   },
 ) {
+  const { policy } = useEvaosTeamsAuthority();
   const normalizedQuery = query.trim().toLowerCase();
   const enabled =
+    policy.canBrowsePeople &&
     (options?.enabled ?? true) &&
     (options?.allowEmpty === true || normalizedQuery.length > 0);
 
@@ -427,8 +430,10 @@ export function useInfiniteUserSearchQuery(
     limit?: number;
   },
 ) {
+  const { policy } = useEvaosTeamsAuthority();
   const normalizedQuery = query.trim().toLowerCase();
   const enabled =
+    policy.canBrowsePeople &&
     (options?.enabled ?? true) &&
     (options?.allowEmpty === true || normalizedQuery.length > 0);
 

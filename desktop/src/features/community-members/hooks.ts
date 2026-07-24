@@ -9,6 +9,7 @@ import {
   removeRelayMember,
 } from "@/shared/api/relayMembers";
 import type { RelayMember } from "@/shared/api/types";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 export const relayMembersQueryKey = ["relayMembers"] as const;
 export const myRelayMembershipQueryKey = ["myRelayMembership"] as const;
@@ -34,7 +35,9 @@ export function useMyRelayMembershipQuery() {
 }
 
 export function useMyRelayMembershipLookupQuery() {
+  const { managed } = useEvaosTeamsAuthority();
   return useQuery({
+    enabled: !managed,
     queryKey: myRelayMembershipLookupQueryKey,
     queryFn: getMyRelayMembershipLookup,
     staleTime: 60_000,

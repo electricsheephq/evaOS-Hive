@@ -164,6 +164,9 @@ pub async fn start_huddle(
     channel_name: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<HuddleJoinInfo, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed huddle membership is controlled by ElectricSheep".to_string());
+    }
     // Validate inputs at the Tauri boundary.
     if member_pubkeys.len() > MAX_HUDDLE_AGENTS {
         return Err(format!(
@@ -927,6 +930,9 @@ pub async fn add_agent_to_huddle(
     agent_pubkey: String,
     state: State<'_, AppState>,
 ) -> Result<agents::AgentAddResult, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed huddle membership is controlled by ElectricSheep".to_string());
+    }
     validate_pubkey_hex(&agent_pubkey)?;
 
     let (eph_id, parent_id) = {

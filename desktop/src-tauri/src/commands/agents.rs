@@ -18,16 +18,14 @@ use crate::{
     util::now_iso,
 };
 
-/// Read the workspace owner's pubkey hex from app state without holding the
-/// lock for longer than necessary. Used to populate `BUZZ_ACP_AGENT_OWNER`
-/// as a fallback for legacy agent records that have no NIP-OA `auth_tag`.
+/// Read the workspace owner's pubkey hex with a short lock. Used to populate
+/// `BUZZ_ACP_AGENT_OWNER` for legacy records without a NIP-OA `auth_tag`.
 pub(super) fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|e| e.to_string())?;
     Ok(keys.public_key().to_hex())
 }
 
-/// Retain a freshly authored managed-agent event in the local store, flagged
-/// for relay sync. MUST be called inside the `managed_agents_store_lock`-held
+/// Retain for relay sync inside the `managed_agents_store_lock`-held
 /// body after `save_managed_agents`, NEVER across an `.await`: it acquires
 /// `state.keys` and a retention-db connection, both `std::sync` guards, and
 /// drops them before returning.
@@ -523,6 +521,7 @@ async fn deploy_to_provider(
 // and `std::sync::MutexGuard` is not `Send`.
 #[tauri::command]
 pub async fn list_managed_agents(app: AppHandle) -> Result<Vec<ManagedAgentSummary>, String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -561,6 +560,7 @@ pub async fn create_managed_agent(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateManagedAgentResponse, String> {
+    super::managed_authority::require_native_agent_authority()?;
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Err("agent name is required".to_string());
@@ -1042,6 +1042,7 @@ pub async fn start_managed_agent(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ManagedAgentSummary, String> {
+    super::managed_authority::require_native_agent_authority()?;
     // Snapshot the workspace owner pubkey for the legacy auth_tag fallback.
     // Read outside the records lock to keep lock ordering simple.
     let owner_hex = workspace_owner_hex(&state)?;
@@ -1240,6 +1241,7 @@ pub async fn delete_managed_agent(
     force_remote_delete: Option<bool>,
     app: AppHandle,
 ) -> Result<(), String> {
+    super::managed_authority::require_native_agent_authority()?;
     use tauri::Manager;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();

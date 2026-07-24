@@ -185,6 +185,8 @@ fn entitlement_rejects_wrong_key_expiry_and_relay_injection() {
         relay_host: "https://relay.example.com".to_string(),
         public_key: Some(public_key.clone()),
         role: "member".to_string(),
+        assignment_status: "unassigned".to_string(),
+        reconciliation_status: "current".to_string(),
         access_revision: 7,
         expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
         refresh_after_seconds: 300,
@@ -218,6 +220,8 @@ fn entitlement_rejects_wrong_key_expiry_and_relay_injection() {
                 relay_host: "https://relay.example.com".to_string(),
                 public_key: Some(public_key.clone()),
                 role: "member".to_string(),
+                assignment_status: "unassigned".to_string(),
+                reconciliation_status: "current".to_string(),
                 access_revision: 7,
                 expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
                 refresh_after_seconds: 300,
@@ -236,6 +240,8 @@ fn verification_binds_the_local_key_but_refresh_requires_the_server_key() {
         relay_host: "https://relay.example.com".to_string(),
         public_key: None,
         role: "member".to_string(),
+        assignment_status: "unassigned".to_string(),
+        reconciliation_status: "pending".to_string(),
         access_revision: 7,
         expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
         refresh_after_seconds: 300,
@@ -251,6 +257,76 @@ fn verification_binds_the_local_key_but_refresh_requires_the_server_key() {
         &public_key,
     )
     .is_err());
+}
+
+#[test]
+fn managed_projection_readiness_is_separate_from_authenticated_entitlement() {
+    let keys = Keys::generate();
+    let public_key = keys.public_key().to_hex();
+    let base = EvaosTeamsEntitlement {
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(public_key.clone()),
+        role: "member".to_string(),
+        assignment_status: "unassigned".to_string(),
+        reconciliation_status: "pending".to_string(),
+        access_revision: 7,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        refresh_after_seconds: 300,
+    };
+
+    assert!(validate_entitlement(&base, &public_key).is_ok());
+    assert!(!entitlement_access_ready(&base));
+    assert!(entitlement_access_ready(&EvaosTeamsEntitlement {
+        reconciliation_status: "current".to_string(),
+        ..base.clone()
+    }));
+    assert!(!entitlement_access_ready(&EvaosTeamsEntitlement {
+        role: "agent_only".to_string(),
+        assignment_status: "pending".to_string(),
+        reconciliation_status: "current".to_string(),
+        ..base.clone()
+    }));
+    assert!(entitlement_access_ready(&EvaosTeamsEntitlement {
+        role: "agent_only".to_string(),
+        assignment_status: "assigned".to_string(),
+        reconciliation_status: "current".to_string(),
+        ..base
+    }));
+}
+
+#[test]
+fn entitlement_rejects_unknown_role_and_server_status() {
+    let keys = Keys::generate();
+    let public_key = keys.public_key().to_hex();
+    let base = EvaosTeamsEntitlement {
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(public_key.clone()),
+        role: "member".to_string(),
+        assignment_status: "unassigned".to_string(),
+        reconciliation_status: "current".to_string(),
+        access_revision: 7,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        refresh_after_seconds: 300,
+    };
+
+    for invalid in [
+        EvaosTeamsEntitlement {
+            role: "relay-admin".to_string(),
+            ..base.clone()
+        },
+        EvaosTeamsEntitlement {
+            assignment_status: "ready".to_string(),
+            ..base.clone()
+        },
+        EvaosTeamsEntitlement {
+            reconciliation_status: "stale".to_string(),
+            ..base.clone()
+        },
+    ] {
+        assert!(validate_entitlement(&invalid, &public_key).is_err());
+    }
 }
 
 #[test]

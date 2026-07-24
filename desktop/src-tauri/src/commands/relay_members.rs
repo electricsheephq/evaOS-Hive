@@ -16,6 +16,14 @@ struct RelayInformationDocument {
     supported_nips: Vec<u32>,
 }
 
+fn require_native_relay_authority() -> Result<(), String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        Err("Managed relay membership is controlled by ElectricSheep".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub async fn relay_requires_membership(state: State<'_, AppState>) -> Result<bool, String> {
     let url = format!("{}/info", relay_api_base_url_with_override(&state));
@@ -37,6 +45,7 @@ pub async fn relay_requires_membership(state: State<'_, AppState>) -> Result<boo
 
 #[tauri::command]
 pub async fn list_relay_members(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    require_native_relay_authority()?;
     // kind:13534 is a single replaceable event on the relay carrying all members.
     let events = query_relay(
         &state,
@@ -94,6 +103,7 @@ pub async fn add_relay_member(
     role: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    require_native_relay_authority()?;
     let builder = events::build_relay_admin_add(&target_pubkey, &role)?;
     let result = submit_event(builder, &state).await?;
     serde_json::to_value(result).map_err(|e| e.to_string())
@@ -104,6 +114,7 @@ pub async fn remove_relay_member(
     target_pubkey: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    require_native_relay_authority()?;
     let builder = events::build_relay_admin_remove(&target_pubkey)?;
     let result = submit_event(builder, &state).await?;
     serde_json::to_value(result).map_err(|e| e.to_string())
@@ -115,6 +126,7 @@ pub async fn change_relay_member_role(
     new_role: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    require_native_relay_authority()?;
     let builder = events::build_relay_admin_change_role(&target_pubkey, &new_role)?;
     let result = submit_event(builder, &state).await?;
     serde_json::to_value(result).map_err(|e| e.to_string())

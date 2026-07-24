@@ -1,5 +1,6 @@
 import { MessageCircle, SlidersHorizontal } from "lucide-react";
 
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -28,6 +29,9 @@ export function WelcomeAgentCreateDialog({
   onCreateManually,
   onOpenChange,
 }: WelcomeAgentCreateDialogProps) {
+  const { policy } = useEvaosTeamsAuthority();
+  if (!policy.canManageAgents) return null;
+
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent className="max-w-lg">

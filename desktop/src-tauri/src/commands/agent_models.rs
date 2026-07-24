@@ -31,6 +31,7 @@ pub async fn get_agent_models(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AgentModelsResponse, String> {
+    super::managed_authority::require_native_agent_authority()?;
     let (resolved_acp, agent_command, agent_args, persisted_model, effective_provider, merged_env) = {
         let _store_guard = state
             .managed_agents_store_lock
@@ -778,6 +779,7 @@ pub async fn update_managed_agent(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<UpdateManagedAgentResponse, String> {
+    super::managed_authority::require_native_agent_authority()?;
     // Phase 1: local save (synchronous, under lock)
     let (summary, sync_params, rollback) = {
         let _store_guard = state

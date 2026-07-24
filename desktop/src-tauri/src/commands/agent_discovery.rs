@@ -915,6 +915,9 @@ pub async fn discover_managed_agent_prereqs(
 
 #[tauri::command]
 pub async fn list_relay_agents(state: State<'_, AppState>) -> Result<Vec<RelayAgentInfo>, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed agent discovery is controlled by ElectricSheep".to_string());
+    }
     // Query kind:10100 agent profile events from the relay.
     let events = query_relay(
         &state,

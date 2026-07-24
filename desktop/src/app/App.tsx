@@ -19,6 +19,7 @@ import { EvaosTeamsAuthGate } from "@/features/evaosTeams/EvaosTeamsAuthGate";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
 import {
+  CommunityOnboardingProvider,
   type FirstCommunityPage,
   useCommunityOnboarding,
   markCommunityOnboardingComplete,
@@ -38,6 +39,8 @@ import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
 import { useCommunityInit } from "@/features/communities/useCommunityInit";
 import { useNestNotifications } from "@/features/communities/useNestNotifications";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { CommunitiesProvider } from "@/features/communities/useCommunities";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   onAddCommunityPrefillAvailable,
   requestAddCommunityPrefill,
@@ -628,6 +631,11 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
 }
 
 function NativeBuzzApp() {
+  const authority = useEvaosTeamsAuthority();
+  return <NativeBuzzRuntime key={authority.cacheKey} />;
+}
+
+function NativeBuzzRuntime() {
   const [sharedIdentity, setSharedIdentity] = useState<boolean | null>(null);
   const [queryClient] = useState(createBuzzQueryClient);
 
@@ -643,9 +651,11 @@ function NativeBuzzApp() {
   if (sharedIdentity === null) return <AppLoadingGate />;
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <MachineBootstrap sharedIdentity={sharedIdentity} />
-    </QueryClientProvider>
+    <CommunitiesProvider>
+      <QueryClientProvider client={queryClient}>
+        <MachineBootstrap sharedIdentity={sharedIdentity} />
+      </QueryClientProvider>
+    </CommunitiesProvider>
   );
 }
 
@@ -654,7 +664,9 @@ export function App() {
   useInitialRenderReady();
   return (
     <EvaosTeamsAuthGate>
-      <NativeBuzzApp />
+      <CommunityOnboardingProvider>
+        <NativeBuzzApp />
+      </CommunityOnboardingProvider>
     </EvaosTeamsAuthGate>
   );
 }

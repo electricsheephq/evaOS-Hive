@@ -9,10 +9,18 @@ import {
   startEvaosTeamsLogin,
   type EvaosTeamsAuthStatus,
 } from "@/features/evaosTeams/api";
+import {
+  createManagedEvaosTeamsAuthority,
+  EvaosTeamsAuthorityProvider,
+  nativeEvaosTeamsAuthority,
+} from "@/features/evaosTeams/authority";
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { Button } from "@/shared/ui/button";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
+import { removeChannelSnapshotForRelay } from "@/features/channels/channelSnapshot";
+import { removeMessageSnapshotsForRelay } from "@/features/messages/lib/messageSnapshot";
+import { clearSavedCommunitySnapshot } from "@/features/agents/activeAgentTurnsStore";
 
 export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const tauri = isTauri();
@@ -27,6 +35,9 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
       setError(null);
       return next;
     } catch (refreshError) {
+      // A failed managed refresh must unmount the previously authorized tree;
+      // stale renderer state can never extend an expired server revision.
+      setStatus(null);
       setError(
         refreshError instanceof Error
           ? refreshError.message
@@ -42,12 +53,28 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   }, [refresh, tauri]);
 
   useEffect(() => {
-    if (!status?.managed || status.phase !== "active") return;
+    if (
+      !status?.managed ||
+      (status.phase !== "active" && status.phase !== "sync_pending")
+    )
+      return;
     const timer = window.setTimeout(() => {
       void refresh();
     }, evaosTeamsRefreshDelay(status));
     return () => window.clearTimeout(timer);
   }, [refresh, status]);
+
+  useEffect(() => {
+    const entitlement =
+      status?.phase === "active" ? status.entitlement : undefined;
+    if (!entitlement) return;
+    const relay = new URL(entitlement.relayHost);
+    relay.protocol = "wss:";
+    const relayUrl = relay.toString().replace(/\/$/, "");
+    removeChannelSnapshotForRelay(relayUrl);
+    removeMessageSnapshotsForRelay(relayUrl);
+    clearSavedCommunitySnapshot(entitlement.communityId);
+  }, [status]);
 
   async function run(action: () => Promise<EvaosTeamsAuthStatus>) {
     setWorking(true);
@@ -66,14 +93,29 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     }
   }
 
-  if (!tauri || (status && !status.managed)) return children;
+  if (!tauri || (status && !status.managed)) {
+    return (
+      <EvaosTeamsAuthorityProvider authority={nativeEvaosTeamsAuthority}>
+        {children}
+      </EvaosTeamsAuthorityProvider>
+    );
+  }
+  if (status?.phase === "active" && status.entitlement) {
+    return (
+      <EvaosTeamsAuthorityProvider
+        authority={createManagedEvaosTeamsAuthority(status.entitlement)}
+      >
+        {children}
+      </EvaosTeamsAuthorityProvider>
+    );
+  }
   const copy = status
     ? evaosTeamsStatusCopy(status)
     : {
         title: "Checking managed access",
         body: "evaOS Teams is checking Keychain and your ElectricSheep access.",
       };
-  const active = status?.phase === "active" && status.entitlement;
+  const entitlement = status?.entitlement;
   const maySignIn =
     status?.phase === "signed_out" || status?.phase === "reauth_required";
 
@@ -91,24 +133,38 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
           {copy.body}
         </p>
 
-        {active ? (
+        {entitlement ? (
           <dl className="mt-6 space-y-3 rounded-xl border border-border bg-muted/30 p-4 text-sm">
             <div>
               <dt className="text-xs uppercase tracking-wide text-muted-foreground">
                 Relay selected by ElectricSheep
               </dt>
               <dd className="mt-1 break-all font-mono text-foreground">
-                {active.relayHost}
+                {entitlement.relayHost}
               </dd>
             </div>
             <div className="flex justify-between gap-4">
               <dt className="text-muted-foreground">Role</dt>
-              <dd className="font-medium text-foreground">{active.role}</dd>
+              <dd className="font-medium text-foreground">
+                {entitlement.role}
+              </dd>
             </div>
             <div className="flex justify-between gap-4">
               <dt className="text-muted-foreground">Access revision</dt>
               <dd className="font-medium text-foreground">
-                {active.accessRevision}
+                {entitlement.accessRevision}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Agent assignment</dt>
+              <dd className="font-medium text-foreground">
+                {entitlement.assignmentStatus}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Relay projection</dt>
+              <dd className="font-medium text-foreground">
+                {entitlement.reconciliationStatus}
               </dd>
             </div>
           </dl>
@@ -134,22 +190,14 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 : "Sign in with ElectricSheep"}
             </Button>
           ) : null}
-          {active ? (
-            <>
-              <Button
-                disabled={working}
-                onClick={() => void run(startEvaosTeamsLogin)}
-              >
-                Sign out and switch account
-              </Button>
-              <Button
-                disabled={working}
-                variant="outline"
-                onClick={() => void run(logoutEvaosTeams)}
-              >
-                Sign out
-              </Button>
-            </>
+          {status?.phase === "sync_pending" ? (
+            <Button
+              disabled={working}
+              variant="outline"
+              onClick={() => void run(logoutEvaosTeams)}
+            >
+              Sign out
+            </Button>
           ) : null}
           {status?.phase === "keychain_locked" ||
           status?.phase === "logout_pending" ? (

@@ -23,14 +23,15 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 type ChannelMembersBarProps = {
   channel: Channel;
   currentPubkey?: string;
   isAddBotOpen?: boolean;
   onAddBotOpenChange?: (open: boolean) => void;
-  onManageChannel: () => void;
-  onToggleMembers: () => void;
+  onManageChannel?: () => void;
+  onToggleMembers?: () => void;
   variant?: "inline" | "compact";
 };
 
@@ -43,6 +44,7 @@ export function ChannelMembersBar({
   onToggleMembers,
   variant = "inline",
 }: ChannelMembersBarProps) {
+  const authority = useEvaosTeamsAuthority();
   const [uncontrolledAddBotOpen, setUncontrolledAddBotOpen] =
     React.useState(false);
   const isAddBotOpen = isAddBotOpenProp ?? uncontrolledAddBotOpen;
@@ -57,7 +59,10 @@ export function ChannelMembersBar({
   );
   const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
   const queryClient = useQueryClient();
-  const membersQuery = useChannelMembersQuery(channel.id);
+  const membersQuery = useChannelMembersQuery(
+    channel.id,
+    authority.policy.canViewMembers,
+  );
   const providersQuery = useAvailableAcpRuntimes();
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
@@ -107,6 +112,8 @@ export function ChannelMembersBar({
         : relayAgentsQuery.error instanceof Error
           ? relayAgentsQuery.error.message
           : null;
+
+  if (authority.managed) return null;
 
   const huddleIndicator = (
     <HuddleIndicator

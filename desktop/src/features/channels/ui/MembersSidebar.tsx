@@ -14,6 +14,7 @@ import {
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   useFlattenedUserSearchResults,
   useInfiniteUserSearchQuery,
@@ -132,7 +133,12 @@ type MembersSidebarProps = {
   relayUrl?: string;
 };
 
-export function MembersSidebar({
+export function MembersSidebar({ ...props }: MembersSidebarProps) {
+  const { policy } = useEvaosTeamsAuthority();
+  return policy.canViewMembers ? <ManagedMembersSidebar {...props} /> : null;
+}
+
+function ManagedMembersSidebar({
   channel,
   currentPubkey,
   open,

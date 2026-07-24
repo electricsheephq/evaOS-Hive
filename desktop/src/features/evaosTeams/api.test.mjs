@@ -29,6 +29,8 @@ test("managed entitlement controls a bounded refresh delay", () => {
       communityId: "10000000-0000-4000-8000-000000000001",
       relayHost: "https://relay.example.com",
       role: "member",
+      assignmentStatus: "unassigned",
+      reconciliationStatus: "current",
       accessRevision: 4,
       expiresAt: "2030-01-01T00:00:00Z",
       refreshAfterSeconds: 300,
@@ -42,4 +44,29 @@ test("managed entitlement controls a bounded refresh delay", () => {
     }),
     30_000,
   );
+});
+
+test("pending reconciliation polls quickly without claiming active access", () => {
+  const status = {
+    managed: true,
+    phase: "sync_pending",
+    authenticated: true,
+    keychainAvailable: true,
+    message: "Managed relay projection is still being reconciled",
+    entitlement: {
+      communityId: "10000000-0000-4000-8000-000000000001",
+      relayHost: "https://relay.example.com",
+      role: "member",
+      assignmentStatus: "unassigned",
+      reconciliationStatus: "pending",
+      accessRevision: 4,
+      expiresAt: "2030-01-01T00:00:00Z",
+      refreshAfterSeconds: 300,
+    },
+  };
+
+  assert.equal(evaosTeamsRefreshDelay(status), 2_000);
+  const copy = evaosTeamsStatusCopy(status);
+  assert.equal(copy.title, "Finishing managed setup");
+  assert.doesNotMatch(JSON.stringify(copy), /access ready|authenticated/i);
 });

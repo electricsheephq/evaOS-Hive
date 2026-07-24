@@ -225,9 +225,10 @@ pub async fn apply_workspace(
     .map_err(|e| format!("spawn_blocking failed: {e}"))??;
 
     let state = restore_app.state::<AppState>();
-    let restore_pending = state
-        .managed_agent_restore_pending
-        .swap(false, Ordering::AcqRel);
+    let restore_pending = !cfg!(feature = "evaos-teams-managed")
+        && state
+            .managed_agent_restore_pending
+            .swap(false, Ordering::AcqRel);
 
     // The coordinator starts before React applies the selected workspace, so
     // its startup publication may have used the fallback relay and placeholder

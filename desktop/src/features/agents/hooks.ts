@@ -36,6 +36,7 @@ import {
   listRelayAgents,
   updateManagedAgent,
 } from "@/shared/api/tauri";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   setManagedAgentAutoRestart,
   setManagedAgentStartOnAppLaunch,
@@ -254,8 +255,10 @@ export function useBackendProvidersQuery(options?: { enabled?: boolean }) {
   });
 }
 
-export function usePersonasQuery() {
+export function usePersonasQuery(options?: { enabled?: boolean }) {
+  const { policy } = useEvaosTeamsAuthority();
   return useQuery({
+    enabled: policy.canBrowseAgents && (options?.enabled ?? true),
     queryKey: personasQueryKey,
     queryFn: listPersonas,
     staleTime: 30_000,
@@ -291,6 +294,7 @@ export function useManagedAgentPrereqsQuery(
 }
 
 export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
+  const { policy } = useEvaosTeamsAuthority();
   return useQuery({
     queryKey: relayAgentsQueryKey,
     queryFn: listRelayAgents,
@@ -305,13 +309,14 @@ export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
     // keep polling but at a relaxed cadence and pause it while backgrounded.
     refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: false,
-    enabled: options?.enabled,
+    enabled: policy.canBrowseAgents && (options?.enabled ?? true),
   });
 }
 
 export function useManagedAgentsQuery(options?: { enabled?: boolean }) {
+  const { policy } = useEvaosTeamsAuthority();
   return useQuery({
-    enabled: options?.enabled ?? true,
+    enabled: policy.canBrowseAgents && (options?.enabled ?? true),
     queryKey: managedAgentsQueryKey,
     queryFn: listManagedAgents,
     staleTime: 5_000,

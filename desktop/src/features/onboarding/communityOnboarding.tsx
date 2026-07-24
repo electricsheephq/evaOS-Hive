@@ -4,6 +4,7 @@ import {
 } from "@/features/communities/communityStorage";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 import type { Profile } from "@/shared/api/types";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 const STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 
@@ -332,11 +333,17 @@ export function CommunityOnboardingProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const [transaction, setTransaction] = React.useState(
-    loadCommunityOnboardingTransaction,
-  );
+  const { managed } = useEvaosTeamsAuthority();
+  const [transaction, setTransaction] = React.useState(() => {
+    if (managed) {
+      clearCommunityOnboardingTransaction();
+      return null;
+    }
+    return loadCommunityOnboardingTransaction();
+  });
   const start = React.useCallback(
     (input: StartCommunityOnboardingInput) => {
+      if (managed) return false;
       if (
         transaction &&
         canonicalRelayUrl(input.relayUrl) !== transaction.relayUrl
@@ -346,15 +353,16 @@ export function CommunityOnboardingProvider({
       setTransaction(startCommunityOnboarding(input));
       return true;
     },
-    [transaction],
+    [managed, transaction],
   );
   const update = React.useCallback(
     (patch: CommunityOnboardingTransactionPatch, expectedId?: string) => {
+      if (managed) return;
       setTransaction((current) =>
         updateCurrentCommunityOnboardingTransaction(current, patch, expectedId),
       );
     },
-    [],
+    [managed],
   );
   const clear = React.useCallback(() => {
     clearCommunityOnboardingTransaction();
