@@ -826,6 +826,179 @@ test("managed relay agents are visible in channel mentions regardless of relay p
   await expect(dropdown.getByText("agent")).toBeVisible();
 });
 
+test("shared in-channel bot agents are mentioned by pubkey without local lifecycle actions", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    relayAgents: [
+      {
+        pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
+        name: "Tech Goose",
+        respondTo: "anyone",
+        channelNames: ["general"],
+        memberChannelNames: ["general"],
+      },
+    ],
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const baselineCommands = await readCommandLog(page);
+  const input = page.getByTestId("message-input");
+  await input.fill("@Tech");
+
+  const dropdown = autocomplete(page);
+  await expect(dropdown.getByText("Tech Goose")).toBeVisible();
+  await expect(dropdown.getByText("agent")).toBeVisible();
+  await input.press("Enter");
+  await page.keyboard.type(" please help");
+  await page.getByTestId("send-message").click();
+
+  await expect(
+    page
+      .getByTestId("message-row")
+      .last()
+      .locator("[data-mention].agent-mention-highlight", {
+        hasText: "Tech Goose",
+      }),
+  ).toBeVisible();
+  expect(commandCount(await readCommandLog(page), "start_managed_agent")).toBe(
+    commandCount(baselineCommands, "start_managed_agent"),
+  );
+  expect(commandCount(await readCommandLog(page), "add_channel_members")).toBe(
+    commandCount(baselineCommands, "add_channel_members"),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate((pubkey) => {
+        const signedEvents = (
+          window as Window & {
+            __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
+              kind: number;
+              tags: string[][];
+            }>;
+          }
+        ).__BUZZ_E2E_SIGNED_EVENTS__;
+        return (
+          signedEvents
+            ?.filter((event) => event.kind === 9)
+            .at(-1)
+            ?.tags.some((tag) => tag[0] === "p" && tag[1] === pubkey) ?? false
+        );
+      }, ALLOWLIST_RELAY_AGENT_PUBKEY),
+    )
+    .toBe(true);
+});
+
+test("remote bot members can be mentioned in direct rooms without local lifecycle actions", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    relayAgents: [
+      {
+        pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
+        name: "Direct Goose",
+        respondTo: "anyone",
+        channelNames: ["bob-tyler"],
+        memberChannelNames: ["bob-tyler"],
+      },
+    ],
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-bob-tyler").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("bob-tyler");
+
+  const baselineCommands = await readCommandLog(page);
+  const input = page.getByTestId("message-input");
+  await input.fill("@Direct");
+  await expect(autocomplete(page).getByText("Direct Goose")).toBeVisible();
+  await input.press("Enter");
+  await page.keyboard.type(" please help");
+  await page.getByTestId("send-message").click();
+
+  await expect(
+    page
+      .getByTestId("message-row")
+      .last()
+      .locator("[data-mention].agent-mention-highlight", {
+        hasText: "Direct Goose",
+      }),
+  ).toBeVisible();
+  expect(commandCount(await readCommandLog(page), "start_managed_agent")).toBe(
+    commandCount(baselineCommands, "start_managed_agent"),
+  );
+  expect(commandCount(await readCommandLog(page), "add_channel_members")).toBe(
+    commandCount(baselineCommands, "add_channel_members"),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate((pubkey) => {
+        const signedEvents = (
+          window as Window & {
+            __BUZZ_E2E_SIGNED_EVENTS__?: Array<{
+              kind: number;
+              tags: string[][];
+            }>;
+          }
+        ).__BUZZ_E2E_SIGNED_EVENTS__;
+        return (
+          signedEvents
+            ?.filter((event) => event.kind === 9)
+            .at(-1)
+            ?.tags.some((tag) => tag[0] === "p" && tag[1] === pubkey) ?? false
+        );
+      }, ALLOWLIST_RELAY_AGENT_PUBKEY),
+    )
+    .toBe(true);
+});
+
+test("remote in-channel bots with an excluding response policy stay hidden", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    relayAgents: [
+      {
+        pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
+        name: "Private Goose",
+        respondTo: "owner-only",
+        channelNames: ["general"],
+        memberChannelNames: ["general"],
+      },
+    ],
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  await page.getByTestId("message-input").fill("@Private");
+
+  await expect(autocomplete(page)).toHaveCount(0);
+});
+
+test("remote bots from another room stay hidden from the active room", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    relayAgents: [
+      {
+        pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
+        name: "Other Room Goose",
+        respondTo: "anyone",
+        channelNames: ["secret-projects"],
+        memberChannelNames: ["secret-projects"],
+      },
+    ],
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  await page.getByTestId("message-input").fill("@Other");
+
+  await expect(autocomplete(page)).toHaveCount(0);
+});
+
 test("relay-only agents stay hidden from channel mentions even when allowlisted", async ({
   page,
 }) => {

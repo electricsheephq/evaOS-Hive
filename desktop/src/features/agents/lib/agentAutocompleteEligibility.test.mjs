@@ -6,6 +6,7 @@ import {
   getMentionableAgentPubkeys,
   getSharedChannelIds,
   isAgentIdentityInManagedList,
+  isAgentIdentityMentionable,
   relayAgentIsSharedWithUser,
   shouldHideAgentFromMentions,
 } from "./agentAutocompleteEligibility.ts";
@@ -159,6 +160,39 @@ test("isAgentIdentityInManagedList: keeps people and only current managed agent 
       managedAgentPubkeys,
     ),
     false,
+  );
+});
+
+test("isAgentIdentityMentionable: admits in-channel bots owned elsewhere", () => {
+  const managedAgentPubkeys = new Set([PUB_A]);
+
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: true, isMember: true, pubkey: PUB_B, role: "bot" },
+      managedAgentPubkeys,
+    ),
+    true,
+  );
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: true, isMember: true, pubkey: PUB_B, role: "member" },
+      managedAgentPubkeys,
+    ),
+    false,
+  );
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: true, pubkey: PUB_B },
+      managedAgentPubkeys,
+    ),
+    false,
+  );
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: false, isMember: true, pubkey: PUB_B, role: "member" },
+      managedAgentPubkeys,
+    ),
+    true,
   );
 });
 

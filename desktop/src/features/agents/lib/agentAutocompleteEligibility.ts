@@ -64,6 +64,26 @@ export function isAgentIdentityInManagedList(
   );
 }
 
+/**
+ * Allows channel bot members into mention eligibility without granting this
+ * client ownership of their runtime. The later relay-policy check remains
+ * authoritative for whether the agent can be invoked.
+ */
+export function isAgentIdentityMentionable(
+  candidate: {
+    isAgent?: boolean;
+    isMember?: boolean;
+    pubkey: string;
+    role?: string | null;
+  },
+  managedAgentPubkeys: ReadonlySet<string>,
+) {
+  return (
+    isAgentIdentityInManagedList(candidate, managedAgentPubkeys) ||
+    (candidate.isMember === true && candidate.role === "bot")
+  );
+}
+
 export function shouldHideAgentFromMentions({
   isAgent,
   isMember,
