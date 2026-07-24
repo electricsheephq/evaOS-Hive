@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 mod baked_env;
+#[cfg(test)]
 use baked_env::is_safe_to_reveal;
 pub use baked_env::*;
 
