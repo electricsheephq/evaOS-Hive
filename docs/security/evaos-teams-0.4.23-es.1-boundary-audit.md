@@ -99,6 +99,52 @@ managed inbound generation validation and renderer enqueue share the same
 entitlement-transition lock, with a deterministic race regression proving that
 only a content-free `Close` is delivered after a transition.
 
+## Upstream v0.4.24 candidate disposition
+
+The managed candidate stays pinned to the v0.4.23 line. It was not rebased onto
+v0.4.24. Every commit from upstream v0.4.23
+`acfbb1bb6af54cb29cb152496ff43b8285dcb8cf` through v0.4.24
+`710ed9fff57878a1d69f809b80a6ee0416c53fc4` received the following
+candidate-scoped terminal disposition:
+
+| Upstream commit | Change | Candidate-scoped disposition |
+|---|---|---|
+| `bcc3e1306946528102bb26be9a7c41299e2f8e00` | Configurable Redis pool size (#2521) | **Not applicable** to the source security/reconnect gate; relay capacity tuning remains an operator/runtime decision. |
+| `03f645ef7e139f2eb703b477150034e8238062ae` | Benchmark script cleanup | **Not applicable**; no candidate product or canary behavior changes. |
+| `06e3d82b04ab326a36694264ffb4b9dd94ec5661` | Optional harness onboarding skip (#2360) | **Accepted follow-up**; the managed login and Hermes launch contracts do not require this native onboarding UX change. |
+| `d0ab3fdb054e0cfedbf21e4c5143ad6c671c10cc` | Strip channel-name hash prefixes (#2250) | **Accepted follow-up**; channel-name normalization does not affect the current trust or reconnect gate. |
+| `1e68c6c05021ef2fc93ed0a02a84009ce94cdda5` | Community-rail drag reorder (#2549) | **Accepted follow-up**; unrelated product UX. |
+| `55c9211241fcfb92a36ed5d6935cb4d2b3ae0702` | Populate team instructions in edit dialog (#2565) | **Accepted follow-up**; unrelated team-edit UX. |
+| `8f8f5fa5a4b2463cdc6c2a527acb7086150cdaae` | Sanitize animated image uploads (#2524) | **Accepted follow-up**; it repairs animated-upload compatibility and metadata policy but is not required for the internal canary's managed authority, content-persistence, or reconnect boundary. The relay remains the final upload-policy authority. |
+| `659e6a8d651b52602142f1e5b91817b2e0ca047f` | Protect the Sprig rolling tag (#2221) | **Not applicable**; the evaOS Teams candidate does not publish or move that tag. |
+| `9cf9539040aee9774cf8d12b651348a2806c05c0` | Omit empty optional model control (#2262) | **Accepted follow-up**; Hermes remains model/provider authority and this UI refinement is not required for launch correctness. |
+| `4253688bf05c21a066bc5a5dc928256163fd3451` | Add `just production` (#2572) | **Not applicable**; development recipe only. |
+| `df0a0861776f358e8c365e18a429900044b12989` | Install rustls provider in Buzz CLI (#2590) | **Not applicable**; the managed desktop native WebSocket path, not `buzz-cli` WSS publishing, is in the candidate canary path. |
+| `8cb05028be84829501a4f87f8db4ee7034fb786f` | Observer archive hydration/paging (#2574) | **Accepted follow-up**; unrelated observer UX and archive paging. |
+| `80244f82318c85f931d1055e419456945c5eca99` | Avatar upload lifecycle fixes (#2277) | **Accepted follow-up**; unrelated profile UX. |
+| `daeaf7c33d5415199a33cbc3dab00244fad5c219` | Channel lifecycle settings (#2427) | **Accepted follow-up**; the canary's managed channel/author policy is server-owned and does not depend on this UI. |
+| `9ec52cfedf579d2ccb2021c216abd4c821a15165` | Retry failed initial relay dials (#2564) | **Fixed now** by exact backport as local commit `9defad62`; a rejected initial managed native dial must enter bounded reconnect handling. |
+| `1911c69aa2912c1408bd6b21759b657458fb43af` | Send 1012 on graceful relay drain (#2575) | **Fixed now** by exact backport as local commit `c2104d74`; the VM-hosted relay restart path must notify every connected client and reject late registrations. |
+| `6a56c8bdac6d115a0d6d48b24a2a04dc46b336c5` | Live relay kill/restart gate (#2583) | **Escalated to the live canary gate**; this test-only change requires an opted-in database, Redis, object store, relay process, and browser harness, and does not prove the managed Tauri entitlement boundary in canonical CI. Reuse its scenario when an authorized installed candidate and relay exist. |
+| `cb42c8d5b60b15fd6ad47149c8785c7c863c8a37` | Restrict DM turns to owner/verified siblings (#2591) | **Fixed now; security-blocking** by exact backport as local commit `53bf5f97`. The candidate's agent bridge is reachable by member-authored DMs, so allowlisted humans cannot safely inherit turn authority through DM participation. Missing or unresolved channel metadata fails closed and setup mode uses the same gate. |
+| `b096b0a15af4c4566365c5b1efe7f39b700222ed` | Preserve snapshot text chunks through sanitization (#2438) | **Accepted follow-up**; snapshot metadata preservation is unrelated to the canary trust/reconnect gate. |
+| `f3f7688c3a4ecb0405ca8b26e0b6ee815e0f11e6` | Fast-track 1012 restart reconnects (#2579) | **Fixed now** by exact backport as local commit `b9b59ed9`; only an actual service-restart close resets accumulated delay, while entitlement invalidation keeps normal backoff. |
+| `e67303f60334d6cd4224216080bd4b851fc5ee4d` | Build-gate upstream default-relay auto-connect (#2589) | **Not applicable** to the managed route; evaOS Teams installs broker-issued entitlement and its exact relay through the managed login flow, while upstream/default-relay auto-connect is disabled by product policy. Importing this separate release flag would create a second authority path. |
+| `21573b6cb9695b46c11885cfb63bc548bbcd55de` | Mobile release process (#2144) | **Not applicable**; the milestone is a macOS internal canary and does not publish mobile artifacts. |
+| `1e6e743a3570722f26878a3f2660371d8c0425ec` | Update `SECURITY.md` | **Accepted follow-up**; documentation-only and no candidate behavior changes. |
+| `cca16635d69dc8bea5406013095d25f3b0e287d3` | Windows PATH and `.cmd` handling (#2563) | **Not applicable**; the internal canary target is macOS. |
+| `5afa16157a63c71f2cd8a80aa7276de28ce1c54c` | Windows console/WSL alias fixes (#2587) | **Not applicable**; the internal canary target is macOS. |
+| `95478919fc24bf5b43e29ce2c7e52a4c9c9287fc` | Per-community navigation memory (#2629) | **Accepted follow-up**; unrelated navigation UX and persistence deliberately remains outside this boundary patch. |
+| `710ed9fff57878a1d69f809b80a6ee0416c53fc4` | v0.4.24 release version (#2627) | **Not applicable**; importing the version commit would falsely relabel the selectively backported `0.4.23-es.1` candidate as full v0.4.24. |
+
+The selected patch set is dependency-closed for the current gate:
+`#2564 + #2575 + #2579` supplies the production restart/reconnect behavior, and
+the complete `#2591` patch supplies DM authorization, lazy channel-type
+resolution, fail-closed unknown handling, and setup-mode parity. No unrelated
+v0.4.24 ancestry is included. Author-allowlist revocations are still
+process-snapshot state in #2591; restart/reload and the live unauthorized
+DM/channel matrix remain explicit canary evidence gates.
+
 ## Exact next gate
 
 The source candidate may advance only after focused tests, canonical CI, and an
