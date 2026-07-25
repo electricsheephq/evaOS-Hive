@@ -4,10 +4,7 @@ import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { useMyRelayMembershipLookupQuery } from "@/features/community-members/hooks";
 import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
-import {
-  canManageCommunityMembers,
-  shouldWarnMissingMembershipSnapshot,
-} from "@/shared/api/relayMembers";
+import { shouldWarnMissingMembershipSnapshot } from "@/shared/api/relayMembers";
 import { getFeature } from "@/shared/features/manifest";
 import {
   resolveEnabled,
@@ -37,6 +34,7 @@ import {
   type SettingsSection,
   type SettingsSectionDescriptor,
 } from "./SettingsPanels";
+import { canShowCommunityMembersSettings } from "../settingsNavigation";
 
 export {
   DEFAULT_SETTINGS_SECTION,
@@ -167,10 +165,13 @@ export function SettingsView({
           return false;
         }
       }
-      // Invites and member management require a discovered owner/admin role.
-      // Open relays have no membership snapshot or invite controls.
+      // Managed workspaces use the server-derived authority role. Native
+      // relays require a discovered owner/admin membership snapshot.
       if (s.value === "community-members") {
-        return canManageCommunityMembers(myMembershipQuery.data);
+        return canShowCommunityMembersSettings(
+          authority,
+          myMembershipQuery.data,
+        );
       }
       return true;
     });

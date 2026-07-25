@@ -108,6 +108,7 @@ pub(crate) struct HiveChannelMutationInput {
     name: Option<String>,
     description: Option<String>,
     visibility: Option<String>,
+    #[serde(default, deserialize_with = "crate::util::double_option")]
     ttl_seconds: Option<Option<u64>>,
 }
 
@@ -555,5 +556,30 @@ pub(crate) async fn invite_hive_member(
             return Err("Invitation was not created".to_string());
         }
         Ok(response.invitation)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deserialize_channel_mutation(ttl_json: &str) -> HiveChannelMutationInput {
+        serde_json::from_str(&format!(
+            r#"{{"action":"update","roomId":"10000000-0000-4000-8000-000000000001"{ttl_json}}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn channel_mutation_ttl_distinguishes_missing_null_and_value() {
+        assert_eq!(deserialize_channel_mutation("").ttl_seconds, None);
+        assert_eq!(
+            deserialize_channel_mutation(r#","ttlSeconds":null"#).ttl_seconds,
+            Some(None)
+        );
+        assert_eq!(
+            deserialize_channel_mutation(r#","ttlSeconds":3600"#).ttl_seconds,
+            Some(Some(3600))
+        );
     }
 }
