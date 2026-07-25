@@ -146,9 +146,10 @@ function ManagedMembersSidebar({
   onViewActivity,
   relayUrl,
 }: MembersSidebarProps) {
+  const { managed } = useEvaosTeamsAuthority();
   const channelId = channel?.id ?? null;
   const managedAgentRuntimesQuery = useManagedAgentRuntimesQuery({
-    enabled: open,
+    enabled: open && !managed,
   });
   const queryClient = useQueryClient();
   const searchInputRef = React.useRef<HTMLInputElement>(null);
@@ -622,9 +623,13 @@ function ManagedMembersSidebar({
     return (
       <div className="content-visibility-auto" key={member.pubkey}>
         <MembersSidebarMemberCard
-          canChangeRole={canManageMembers && member.pubkey !== currentPubkey}
-          canModerate={canModerate && member.pubkey !== currentPubkey}
-          canRemoveMember={canRemoveMember(member)}
+          canChangeRole={
+            !managed && canManageMembers && member.pubkey !== currentPubkey
+          }
+          canModerate={
+            !managed && canModerate && member.pubkey !== currentPubkey
+          }
+          canRemoveMember={!managed && canRemoveMember(member)}
           isActionPending={
             isActionPending ||
             changeRoleMutation.isPending ||
@@ -646,7 +651,9 @@ function ManagedMembersSidebar({
           onChangeRole={(m, role) => {
             void changeRoleMutation.mutateAsync({ pubkey: m.pubkey, role });
           }}
-          onEditRespondTo={memberIsBot ? setEditRespondToAgent : undefined}
+          onEditRespondTo={
+            !managed && memberIsBot ? setEditRespondToAgent : undefined
+          }
           onManagedAgentAction={(agent) => {
             void handleAgentLifecycleAction(agent, managedAgentRuntime);
           }}

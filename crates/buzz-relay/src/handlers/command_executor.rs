@@ -63,7 +63,9 @@ pub async fn handle_command(
 
     let kind = event.kind.as_u16() as u32;
     match kind {
-        KIND_DM_OPEN => handle_dm_open(tenant, state, &event, &auth).await,
+        KIND_DM_OPEN => {
+            handle_dm_open(tenant, state, &event, &auth, control_plane_authorized).await
+        }
         KIND_DM_ADD_MEMBER => {
             handle_dm_add_member(tenant, state, &event, &auth, control_plane_authorized).await
         }
@@ -315,38 +317,12 @@ async fn handle_dm_open(
     state: &Arc<AppState>,
     event: &Event,
     auth: &IngestAuth,
+    control_plane_authorized: bool,
 ) -> Result<IngestResult, IngestError> {
     let self_bytes = auth.pubkey().to_bytes().to_vec();
-    let self_hex = hex::encode(&self_bytes);
-
-    // 1. Extract participant pubkeys from `p` tags
-    let p_tags = extract_p_tags(event);
-
-    // 2. Validate: at least 1 other participant, max 8 others (9 total)
-    if p_tags.is_empty() {
-        return Err(IngestError::Rejected(
-            "invalid: pubkeys must contain at least 1 other participant".into(),
-        ));
-    }
-    if p_tags.len() > 8 {
-        return Err(IngestError::Rejected(
-            "invalid: pubkeys may contain at most 8 other participants (9 total)".into(),
-        ));
-    }
-
-    // Decode all provided pubkeys
-    let mut other_bytes: Vec<Vec<u8>> = Vec::with_capacity(p_tags.len());
-    for hex_str in &p_tags {
-        other_bytes.push(decode_pubkey(hex_str)?);
-    }
-
-    // 3. Build full participant set (self + others, deduplicated)
-    let mut all_bytes: Vec<Vec<u8>> = vec![self_bytes.clone()];
-    for ob in &other_bytes {
-        if !all_bytes.iter().any(|b| b == ob) {
-            all_bytes.push(ob.clone());
-        }
-    }
+    let (actor_bytes, all_bytes) =
+        dm_open_participants(event, &self_bytes, control_plane_authorized)?;
+    let actor_hex = hex::encode(&actor_bytes);
 
     // Persist the command event (idempotency) — returns open transaction
     let tx = match persist_command_event(state, tenant, event, None).await? {
@@ -364,7 +340,7 @@ async fn handle_dm_open(
     let all_refs: Vec<&[u8]> = all_bytes.iter().map(|b| b.as_slice()).collect();
     let (channel, was_created) = state
         .db
-        .open_dm(tenant.community(), &all_refs, &self_bytes)
+        .open_dm(tenant.community(), &all_refs, &actor_bytes)
         .await
         .map_err(|e| IngestError::Internal(format!("error: db open_dm: {e}")))?;
 
@@ -394,7 +370,7 @@ async fn handle_dm_open(
             channel.id,
             serde_json::json!({
                 "type": "dm_created",
-                "actor": self_hex,
+                "actor": actor_hex,
                 "participants": participant_hexes,
             }),
         )
@@ -413,7 +389,7 @@ async fn handle_dm_open(
                 state,
                 channel.id,
                 participant,
-                &self_bytes,
+                &actor_bytes,
                 KIND_MEMBER_ADDED_NOTIFICATION,
             )
             .await
@@ -424,7 +400,7 @@ async fn handle_dm_open(
     } else {
         // Re-open of an existing DM cleared the caller's hidden_at; refresh
         // their NIP-DV snapshot so the DM reappears in the sidebar.
-        if let Err(e) = publish_dm_visibility_snapshot(tenant, state, &self_bytes).await {
+        if let Err(e) = publish_dm_visibility_snapshot(tenant, state, &actor_bytes).await {
             warn!("DM re-open: visibility snapshot failed: {e}");
         }
     }
@@ -441,6 +417,85 @@ async fn handle_dm_open(
             })
         ),
     })
+}
+
+/// Resolve the human actor and complete DM participant set.
+///
+/// Native events retain the existing contract: the signer is the actor and
+/// `p` tags contain only the other participants. In a control-plane community,
+/// the control identity signs on behalf of a server-verified human actor, so
+/// `p` tags are the complete human participant set and the single `actor` tag
+/// names the human whose action the broker authorized.
+fn dm_open_participants(
+    event: &Event,
+    signer_bytes: &[u8],
+    control_plane_authorized: bool,
+) -> Result<(Vec<u8>, Vec<Vec<u8>>), IngestError> {
+    let p_tags = extract_p_tags(event);
+    if !control_plane_authorized {
+        if p_tags.is_empty() {
+            return Err(IngestError::Rejected(
+                "invalid: pubkeys must contain at least 1 other participant".into(),
+            ));
+        }
+        if p_tags.len() > 8 {
+            return Err(IngestError::Rejected(
+                "invalid: pubkeys may contain at most 8 other participants (9 total)".into(),
+            ));
+        }
+        let mut all_bytes = vec![signer_bytes.to_vec()];
+        for public_key in p_tags {
+            let decoded = decode_pubkey(&public_key)?;
+            if !all_bytes.iter().any(|candidate| candidate == &decoded) {
+                all_bytes.push(decoded);
+            }
+        }
+        return Ok((signer_bytes.to_vec(), all_bytes));
+    }
+
+    let actor_tags: Vec<String> = event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            (tag.kind().to_string() == "actor")
+                .then(|| tag.content().map(str::to_string))
+                .flatten()
+        })
+        .collect();
+    if actor_tags.len() != 1 {
+        return Err(IngestError::Rejected(
+            "invalid: managed DM requires exactly one actor tag".into(),
+        ));
+    }
+
+    let mut all_bytes = Vec::with_capacity(p_tags.len());
+    for public_key in p_tags {
+        let decoded = decode_pubkey(&public_key)?;
+        if decoded == signer_bytes {
+            return Err(IngestError::Rejected(
+                "invalid: managed DM cannot include the control identity".into(),
+            ));
+        }
+        if all_bytes.iter().any(|candidate| candidate == &decoded) {
+            return Err(IngestError::Rejected(
+                "invalid: managed DM contains duplicate participants".into(),
+            ));
+        }
+        all_bytes.push(decoded);
+    }
+    if !(2..=9).contains(&all_bytes.len()) {
+        return Err(IngestError::Rejected(
+            "invalid: managed DM requires between 2 and 9 participants".into(),
+        ));
+    }
+
+    let actor_bytes = decode_pubkey(&actor_tags[0])?;
+    if !all_bytes.iter().any(|candidate| candidate == &actor_bytes) {
+        return Err(IngestError::Rejected(
+            "invalid: managed DM actor must be a participant".into(),
+        ));
+    }
+    Ok((actor_bytes, all_bytes))
 }
 
 async fn handle_dm_add_member(
@@ -1328,4 +1383,82 @@ async fn resume_workflow_after_approval(
     engine
         .finalize_run(community_id, run_id, result, existing_trace)
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    fn dm_event(signer: &Keys, tags: Vec<Tag>) -> Event {
+        EventBuilder::new(Kind::Custom(KIND_DM_OPEN as u16), "")
+            .tags(tags)
+            .sign_with_keys(signer)
+            .expect("test event must sign")
+    }
+
+    #[test]
+    fn native_dm_keeps_signer_as_actor_and_implicit_participant() {
+        let signer = Keys::generate();
+        let other = Keys::generate();
+        let event = dm_event(
+            &signer,
+            vec![Tag::parse(["p", &other.public_key().to_hex()]).unwrap()],
+        );
+
+        let signer_bytes = signer.public_key().to_bytes().to_vec();
+        let (actor, participants) = dm_open_participants(&event, &signer_bytes, false).unwrap();
+
+        assert_eq!(actor, signer_bytes);
+        assert_eq!(participants.len(), 2);
+        assert!(participants.contains(&other.public_key().to_bytes().to_vec()));
+    }
+
+    #[test]
+    fn managed_dm_uses_complete_human_set_without_control_signer() {
+        let control = Keys::generate();
+        let actor = Keys::generate();
+        let other = Keys::generate();
+        let actor_hex = actor.public_key().to_hex();
+        let event = dm_event(
+            &control,
+            vec![
+                Tag::parse(["p", &actor_hex]).unwrap(),
+                Tag::parse(["p", &other.public_key().to_hex()]).unwrap(),
+                Tag::parse(["actor", &actor_hex]).unwrap(),
+            ],
+        );
+
+        let control_bytes = control.public_key().to_bytes().to_vec();
+        let (resolved_actor, participants) =
+            dm_open_participants(&event, &control_bytes, true).unwrap();
+
+        assert_eq!(resolved_actor, actor.public_key().to_bytes().to_vec());
+        assert_eq!(participants.len(), 2);
+        assert!(!participants.contains(&control_bytes));
+    }
+
+    #[test]
+    fn managed_dm_rejects_actor_outside_server_selected_participants() {
+        let control = Keys::generate();
+        let actor = Keys::generate();
+        let first = Keys::generate();
+        let second = Keys::generate();
+        let event = dm_event(
+            &control,
+            vec![
+                Tag::parse(["p", &first.public_key().to_hex()]).unwrap(),
+                Tag::parse(["p", &second.public_key().to_hex()]).unwrap(),
+                Tag::parse(["actor", &actor.public_key().to_hex()]).unwrap(),
+            ],
+        );
+
+        let error =
+            dm_open_participants(&event, &control.public_key().to_bytes(), true).unwrap_err();
+        assert!(matches!(
+            error,
+            IngestError::Rejected(message)
+                if message.contains("managed DM actor must be a participant")
+        ));
+    }
 }

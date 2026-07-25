@@ -1,9 +1,5 @@
-//! Electric-only Hive authentication.
-//!
-//! This module is intentionally separate from Buzz's native identity path.
-//! Managed builds use an opaque Electric Desktop session plus a Nostr key held
-//! under a distinct OS-keyring service. Neither value is serialized to the
-//! renderer, migrated from native Buzz, or accepted from environment input.
+//! Electric-only Hive authentication using an opaque Desktop session and a
+//! separate OS-keyring identity.
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
@@ -23,11 +19,13 @@ use zeroize::Zeroizing;
 use crate::{app_state::AppState, secret_store::SecretStore};
 
 mod api;
+mod collaboration;
 mod credentials;
 mod login_callback;
 #[cfg(feature = "evaos-teams-managed")]
 mod logout;
 use api::{post_json, ApiFailure};
+pub(crate) use collaboration::*;
 #[cfg(feature = "evaos-teams-managed")]
 use credentials::managed_credential_entries;
 #[cfg(test)]
@@ -187,7 +185,6 @@ struct ManagedRuntime {
     logout_confirmed: bool,
 }
 
-/// Backend-only managed credential state.
 #[derive(Default)]
 pub(crate) struct EvaosTeamsState {
     runtime: Mutex<ManagedRuntime>,

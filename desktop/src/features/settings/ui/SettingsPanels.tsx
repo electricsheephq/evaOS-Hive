@@ -87,6 +87,8 @@ import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
 import { EvaosTeamsAboutCard } from "@/features/evaosTeams/EvaosTeamsAboutCard";
+import { HiveWorkspaceSettingsCard } from "@/features/evaosTeams/HiveWorkspaceSettingsCard";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 export type SettingsSection =
   | "profile"
@@ -845,7 +847,7 @@ export function renderSettingsSection(
       return <HostedCommunitiesSettingsCard />;
     case "community-members":
       return (
-        <CommunityMembersSettingsCard currentPubkey={props.currentPubkey} />
+        <WorkspaceAccessSettingsPanel currentPubkey={props.currentPubkey} />
       );
     case "moderation":
       return <ModerationQueueCard />;
@@ -864,4 +866,17 @@ export function renderSettingsSection(
       return exhaustiveCheck;
     }
   }
+}
+
+function WorkspaceAccessSettingsPanel({
+  currentPubkey,
+}: {
+  currentPubkey?: string;
+}) {
+  const authority = useEvaosTeamsAuthority();
+  return authority.managed ? (
+    <HiveWorkspaceSettingsCard />
+  ) : (
+    <CommunityMembersSettingsCard currentPubkey={currentPubkey} />
+  );
 }

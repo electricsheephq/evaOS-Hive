@@ -409,9 +409,6 @@ pub async fn get_channel_members(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelMembersResponse, String> {
-    if cfg!(feature = "evaos-teams-managed") {
-        return Err("Managed member discovery is controlled by ElectricSheep".to_string());
-    }
     let events = query_relay(
         &state,
         &[serde_json::json!({

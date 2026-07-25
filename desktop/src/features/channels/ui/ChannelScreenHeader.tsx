@@ -63,7 +63,7 @@ export function ChannelScreenHeader({
   onManageChannel,
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
-  const { policy } = useEvaosTeamsAuthority();
+  const { managed, policy } = useEvaosTeamsAuthority();
   const isGroupDm =
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
@@ -72,6 +72,7 @@ export function ChannelScreenHeader({
     !activeChannel.isMember &&
     activeChannel.visibility === "open" &&
     !activeChannel.archivedAt &&
+    !managed &&
     policy.canManageMembership &&
     onJoinChannel;
 
@@ -92,7 +93,9 @@ export function ChannelScreenHeader({
         currentPubkey={currentPubkey}
         isAddBotOpen={isAddBotOpen}
         onAddBotOpenChange={onAddBotOpenChange}
-        onManageChannel={policy.canManageChannels ? onManageChannel : undefined}
+        onManageChannel={
+          !managed && policy.canManageChannels ? onManageChannel : undefined
+        }
         onToggleMembers={policy.canViewMembers ? onToggleMembers : undefined}
         variant={actionsVariant}
       />

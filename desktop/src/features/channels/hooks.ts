@@ -37,6 +37,11 @@ import {
   writeChannelSnapshot,
 } from "@/features/channels/channelSnapshot";
 import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
+import {
+  addHiveRoomParticipant,
+  createHiveChannel,
+  openHiveDm,
+} from "@/features/evaosTeams/api";
 
 export const channelsQueryKey = ["channels"] as const;
 const channelDetailQueryKey = (channelId: string) =>
@@ -66,6 +71,22 @@ function sortChannels(channels: Channel[]) {
 
     return left.name.localeCompare(right.name);
   });
+}
+
+async function waitForManagedChannel(
+  channelId: string,
+  attempts = 20,
+): Promise<Channel> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const channel = (await getChannels()).find(
+      (candidate) => candidate.id === channelId,
+    );
+    if (channel) return channel;
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+  throw new Error(
+    "Hive created the channel, but the relay has not projected it yet. Refresh in a moment.",
+  );
 }
 
 export type CachedChannelMember = {
@@ -222,9 +243,19 @@ export function useChannelsQuery(options?: { enabled?: boolean }) {
 
 export function useCreateChannelMutation() {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
-    mutationFn: (input: CreateChannelInput) => createChannel(input),
+    mutationFn: async (input: CreateChannelInput) => {
+      if (!authority.managed) return createChannel(input);
+      if (input.channelType !== "stream") {
+        throw new Error(
+          "Managed Hive workspaces currently support stream channels only.",
+        );
+      }
+      const result = await createHiveChannel(input.name);
+      return waitForManagedChannel(result.roomId);
+    },
     onSuccess: (createdChannel) => {
       queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
         upsertCachedChannel(current, createdChannel),
@@ -244,9 +275,19 @@ export function useCreateChannelMutation() {
 
 export function useOpenDmMutation() {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
-    mutationFn: (input: OpenDmInput) => openDm(input),
+    mutationFn: async (input: OpenDmInput) => {
+      if (!authority.managed) return openDm(input);
+      if (input.pubkeys.length < 1 || input.pubkeys.length > 8) {
+        throw new Error(
+          "Start a managed direct message with between one and eight teammates.",
+        );
+      }
+      const result = await openHiveDm(input.pubkeys);
+      return waitForManagedChannel(result.roomId);
+    },
     onSuccess: (openedChannel) => {
       queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
         upsertCachedChannel(current, openedChannel),
@@ -509,9 +550,10 @@ export function useDeleteChannelMutation(channelId: string | null) {
 
 export function useAddChannelMembersMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
-    mutationFn: (
+    mutationFn: async (
       input: Omit<AddChannelMembersInput, "channelId"> & {
         channelId?: string;
       },
@@ -522,7 +564,30 @@ export function useAddChannelMembersMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return addChannelMembers({ ...rest, channelId: effectiveChannelId });
+      if (!authority.managed) {
+        return addChannelMembers({ ...rest, channelId: effectiveChannelId });
+      }
+      const added: string[] = [];
+      const errors: Array<{ pubkey: string; error: string }> = [];
+      for (const pubkey of rest.pubkeys) {
+        try {
+          await addHiveRoomParticipant(
+            effectiveChannelId,
+            pubkey,
+            rest.role === "bot" ? "agent" : "human",
+          );
+          added.push(pubkey);
+        } catch (error) {
+          errors.push({
+            pubkey,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Participant could not be added.",
+          });
+        }
+      }
+      return { added, errors };
     },
     onSettled: async (_data, _err, variables) => {
       // Invalidate the effective channel (the one actually mutated) not the

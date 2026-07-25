@@ -146,7 +146,6 @@ export function SettingsView({
           "compute",
           "experimental",
           "hosted-communities",
-          "community-members",
           "moderation",
           "custom-emoji",
           "local-archive",
@@ -169,6 +168,9 @@ export function SettingsView({
       }
       // Community members requires admin/owner role
       if (s.value === "community-members") {
+        if (authority.managed) {
+          return authority.policy.canViewMembers;
+        }
         return (
           membership != null &&
           (membership.role === "owner" || membership.role === "admin")
@@ -176,7 +178,7 @@ export function SettingsView({
       }
       return true;
     });
-  }, [authority.managed, myMembershipQuery.data, featureState]);
+  }, [authority, myMembershipQuery.data, featureState]);
 
   const effectiveSection = visibleSections.some(
     (entry) => entry.value === section,
@@ -272,7 +274,7 @@ export function SettingsView({
         </SidebarHeader>
 
         <SidebarContent>
-          {myMembershipQuery.isPending ? (
+          {!authority.managed && myMembershipQuery.isPending ? (
             <div
               className="mx-3 flex items-center gap-2 rounded-md border border-sidebar-border px-3 py-2 text-xs text-sidebar-foreground/70"
               data-testid="community-access-loading"
@@ -281,7 +283,7 @@ export function SettingsView({
               Checking community access…
             </div>
           ) : null}
-          {myMembershipQuery.isError ? (
+          {!authority.managed && myMembershipQuery.isError ? (
             <div
               className="mx-3 space-y-2 rounded-md border border-destructive/40 px-3 py-2 text-xs text-sidebar-foreground"
               data-testid="community-access-error"
@@ -300,7 +302,8 @@ export function SettingsView({
               </button>
             </div>
           ) : null}
-          {shouldWarnMissingMembershipSnapshot(myMembershipQuery.data) ? (
+          {!authority.managed &&
+          shouldWarnMissingMembershipSnapshot(myMembershipQuery.data) ? (
             <div
               className="mx-3 flex items-start gap-2 rounded-md border border-amber-500/40 px-3 py-2 text-xs text-sidebar-foreground"
               data-testid="community-access-snapshot-missing"
