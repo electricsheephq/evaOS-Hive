@@ -500,7 +500,18 @@ const overrides = new Map([
   // Includes unit tests for detection, routing, and -Command body preservation.
   // +16: test_powershell_command_goose_catalog_dequoted proves the \$→$ escape
   // fix for the Goose Windows installer (PR #2680 interaction with #2750).
-  ["src-tauri/src/commands/agent_discovery.rs", 1826],
+  // Hermes readiness metadata adds command-specific `acp --check` arguments
+  // plus focused tests while preserving ACP auth discovery at launch. Keep the
+  // temporary ceiling exact so unrelated growth still fails this gate.
+  ["src-tauri/src/commands/agent_discovery.rs", 1831],
+  // Managed Hive restores upstream routing while keeping the account/session
+  // handoff in the existing application composition root. The feature logic
+  // remains in the managed adapters; this exact ceiling covers their wiring.
+  ["src/app/AppShell.tsx", 1048],
+  // Managed Hive restores the upstream Channels, Direct Messages, and Agents
+  // navigation callbacks through the existing sidebar composition boundary.
+  // Ratchet at the exact current size until the upstream sidebar is split.
+  ["src/features/sidebar/ui/AppSidebar.tsx", 1008],
   // draft-persistence predicate: submit-time `loadDraft` check + inline comment
   // + deps-array entry in submitMessage closes the never-persisted-boundary
   // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to
