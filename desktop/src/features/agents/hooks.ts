@@ -38,7 +38,10 @@ import {
 } from "@/shared/api/tauri";
 import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { getHiveCollaborationState } from "@/features/evaosTeams/api";
-import { projectManagedWorkspaceAgents } from "@/features/evaosTeams/managedWorkspaceAgents";
+import {
+  managedWorkspaceAgentsQueryKey,
+  projectManagedWorkspaceAgents,
+} from "@/features/evaosTeams/managedWorkspaceAgents";
 import {
   setManagedAgentAutoRestart,
   setManagedAgentStartOnAppLaunch,
@@ -300,12 +303,21 @@ export function useManagedAgentPrereqsQuery(
 
 export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
   const authority = useEvaosTeamsAuthority();
-  return useQuery({
+  const enabled =
+    authority.policy.canBrowseAgents && (options?.enabled ?? true);
+  const managedQuery = useQuery({
+    queryKey: managedWorkspaceAgentsQueryKey(authority.cacheKey),
+    queryFn: getHiveCollaborationState,
+    select: (state) =>
+      projectManagedWorkspaceAgents(state, authority.entitlement?.publicKey),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    enabled: authority.managed && enabled,
+  });
+  const nativeQuery = useQuery({
     queryKey: relayAgentsQueryKey,
-    queryFn: async () =>
-      authority.managed
-        ? projectManagedWorkspaceAgents(await getHiveCollaborationState())
-        : listRelayAgents(),
+    queryFn: listRelayAgents,
     staleTime: 30_000,
     // Relay agent profiles (kind:10100) are near-static and the backing
     // `list_relay_agents` command is an unfiltered relay query for the whole
@@ -317,8 +329,10 @@ export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
     // keep polling but at a relaxed cadence and pause it while backgrounded.
     refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: false,
-    enabled: authority.policy.canBrowseAgents && (options?.enabled ?? true),
+    enabled: !authority.managed && enabled,
   });
+
+  return authority.managed ? managedQuery : nativeQuery;
 }
 
 export function useManagedAgentsQuery(options?: { enabled?: boolean }) {

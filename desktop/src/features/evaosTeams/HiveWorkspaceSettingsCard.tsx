@@ -8,6 +8,7 @@ import {
   inviteHiveMember,
 } from "@/features/evaosTeams/api";
 import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
+import { invalidateManagedWorkspaceAgentProjection } from "@/features/evaosTeams/managedWorkspaceAgents";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
@@ -62,9 +63,7 @@ export function HiveWorkspaceSettingsCard() {
     mutationFn: () => addHiveRoomParticipant(roomId, agentPublicKey, "agent"),
     onSuccess: () => {
       setNotice("Agent added to the channel.");
-      void queryClient.invalidateQueries({
-        queryKey: hiveCollaborationQueryKey,
-      });
+      void invalidateManagedWorkspaceAgentProjection(queryClient);
     },
     onError: (error) => {
       setNotice(

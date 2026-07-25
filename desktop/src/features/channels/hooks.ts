@@ -50,6 +50,7 @@ import {
   unarchiveHiveChannel,
   updateHiveChannel,
 } from "@/features/evaosTeams/api";
+import { invalidateManagedWorkspaceAgentProjection } from "@/features/evaosTeams/managedWorkspaceAgents";
 
 export const channelsQueryKey = ["channels"] as const;
 const channelDetailQueryKey = (channelId: string) =>
@@ -636,7 +637,12 @@ export function useAddChannelMembersMutation(channelId: string | null) {
       // Invalidate the effective channel (the one actually mutated) not the
       // live hook-closure channel, which may have changed mid-send.
       const effectiveChannelId = variables?.channelId ?? channelId;
-      await invalidateChannelState(queryClient, effectiveChannelId);
+      await Promise.all([
+        invalidateChannelState(queryClient, effectiveChannelId),
+        ...(authority.managed
+          ? [invalidateManagedWorkspaceAgentProjection(queryClient)]
+          : []),
+      ]);
     },
   });
 }
@@ -666,6 +672,9 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
     onSettled: async () => {
       await Promise.all([
         invalidateChannelState(queryClient, channelId),
+        ...(authority.managed
+          ? [invalidateManagedWorkspaceAgentProjection(queryClient)]
+          : []),
         queryClient.invalidateQueries({ queryKey: ["managed-agents"] }),
         queryClient.invalidateQueries({ queryKey: ["relay-agents"] }),
       ]);
