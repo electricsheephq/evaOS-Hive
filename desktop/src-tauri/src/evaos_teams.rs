@@ -25,10 +25,7 @@ mod login_callback;
 #[cfg(feature = "evaos-teams-managed")]
 mod logout;
 use api::{post_json, ApiFailure};
-pub(crate) use collaboration::{
-    add_hive_room_participant, create_hive_channel, get_hive_collaboration_state,
-    invite_hive_member, open_hive_dm,
-};
+pub(crate) use collaboration::*;
 #[cfg(feature = "evaos-teams-managed")]
 use credentials::managed_credential_entries;
 #[cfg(test)]
