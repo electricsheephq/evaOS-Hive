@@ -208,7 +208,7 @@ impl AppState {
             };
             if self.disable_evaos_teams_access_if_current(Some(expected)) {
                 return Err(
-                    "evaOS Teams access is not currently authorized; sign in or refresh access"
+                    "Hive access is not currently authorized; sign in or refresh access"
                         .to_string(),
                 );
             }

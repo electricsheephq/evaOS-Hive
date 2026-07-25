@@ -107,13 +107,14 @@ test("managed active UI uses evaOS identity and update path stays local", async 
 
   await page.getByTestId("settings-nav-about").click();
   const about = page.getByTestId("settings-panel-about");
-  await expect(about).toContainText("About evaOS Teams");
+  await expect(about).toContainText("About Hive");
   await expect(about).toContainText("0.4.23-es.1");
-  await expect(about).toContainText("com.electricsheephq.evaos.teams");
-  await expect(about).toContainText("evaos-teams://");
   await expect(about).toContainText(
-    "Built from Buzz by Block, used under the Apache License 2.0.",
+    "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
   );
+  await expect(about).not.toContainText("evaos-teams");
+  await expect(about).not.toContainText("com.electricsheephq.evaos.teams");
+  await expect(about).not.toContainText("Buzz");
 });
 
 test("managed bootstrap purges content-bearing renderer persistence", async ({
@@ -153,7 +154,7 @@ test("managed bootstrap purges content-bearing renderer persistence", async ({
 for (const fixture of [
   {
     phase: "signed_out" as const,
-    expected: "Sign in to evaOS Teams",
+    expected: "Sign in to Hive",
   },
   {
     phase: "keychain_locked" as const,
@@ -178,7 +179,7 @@ for (const fixture of [
     await expect(
       page.getByText(fixture.expected, { exact: true }),
     ).toBeVisible();
-    await expect(page.getByAltText("evaOS Teams")).toBeVisible();
+    await expect(page.getByAltText("Hive")).toBeVisible();
     await expect(page.locator("body")).not.toContainText("Builderlab");
     await expect(page.locator("body")).not.toContainText("Block");
     expect(forbiddenRequests).toEqual([]);

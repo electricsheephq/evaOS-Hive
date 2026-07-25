@@ -77,7 +77,7 @@ pub async fn start_pairing(
 ) -> Result<String, String> {
     if !pairing_identity_export_allowed() {
         return Err(
-            "Device pairing is unavailable in evaOS Teams because managed identities cannot be exported"
+            "Device pairing is unavailable in Hive because managed identities cannot be exported"
                 .to_string(),
         );
     }

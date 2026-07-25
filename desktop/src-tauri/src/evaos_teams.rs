@@ -1,4 +1,4 @@
-//! Electric-only evaOS Teams authentication.
+//! Electric-only Hive authentication.
 //!
 //! This module is intentionally separate from Buzz's native identity path.
 //! Managed builds use an opaque Electric Desktop session plus a Nostr key held
@@ -62,16 +62,16 @@ fn managed_store() -> &'static SecretStore {
 fn verify_managed_store_writable() -> Result<(), String> {
     let rewritten = managed_store()
         .force_rewrite_current()
-        .map_err(|_| "evaOS Teams cannot write to macOS Keychain".to_string())?;
+        .map_err(|_| "Hive cannot write to macOS Keychain".to_string())?;
     if managed_store().load_all_readonly()? != Some(rewritten) {
-        return Err("evaOS Teams could not verify its Keychain write".to_string());
+        return Err("Hive could not verify its Keychain write".to_string());
     }
     Ok(())
 }
 
 /// Public, renderer-safe entitlement projection.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub(crate) struct EvaosTeamsEntitlement {
     community_id: String,
     relay_host: String,
@@ -519,7 +519,7 @@ async fn current_credentials(
     let session = runtime
         .session
         .clone()
-        .ok_or_else(|| "Sign in to evaOS Teams first".to_string())?;
+        .ok_or_else(|| "Sign in to Hive first".to_string())?;
     let keys = runtime
         .keys
         .clone()
@@ -764,7 +764,7 @@ async fn bind_identity(
             "action": "issue_key_challenge",
             "public_key": public_key,
             "device_metadata": {
-                "label": "evaOS Teams",
+                "label": "Hive",
                 "app_version": env!("CARGO_PKG_VERSION"),
                 "platform": std::env::consts::OS,
             },
@@ -804,7 +804,7 @@ pub(crate) async fn start_evaos_teams_login(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&app, &state, &app_state);
-        Err("evaOS Teams managed login is not enabled in this build".to_string())
+        Err("Hive managed login is not enabled in this build".to_string())
     }
 
     #[cfg(feature = "evaos-teams-managed")]
@@ -950,7 +950,7 @@ pub(crate) async fn start_evaos_teams_login(
                         &state,
                         &app_state,
                         &claim.desktop_session,
-                        "The previous account can no longer prove logout, so evaOS Teams will not replace it with a different account"
+                        "The previous account can no longer prove logout, so Hive will not replace it with a different account"
                             .to_string(),
                     )
                     .await;
@@ -985,7 +985,7 @@ pub(crate) async fn logout_evaos_teams(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&state, &app_state);
-        Err("evaOS Teams managed login is not enabled in this build".to_string())
+        Err("Hive managed login is not enabled in this build".to_string())
     }
 
     #[cfg(feature = "evaos-teams-managed")]

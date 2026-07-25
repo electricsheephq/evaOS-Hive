@@ -43,7 +43,7 @@ export function EvaosTeamsSignOutSection() {
           <h2 className="text-lg font-semibold tracking-tight">Sign out</h2>
           <p className="text-sm text-muted-foreground">
             Revokes this managed session and removes its identity from this
-            device. Private keys are never shown in evaOS Teams.
+            device. Private keys are never shown in Hive.
           </p>
         </div>
         <Button
@@ -64,7 +64,7 @@ export function EvaosTeamsSignOutSection() {
       <AlertDialog onOpenChange={setOpen} open={open}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Sign out of evaOS Teams?</AlertDialogTitle>
+            <AlertDialogTitle>Sign out of Hive?</AlertDialogTitle>
             <AlertDialogDescription>
               This device will disconnect from the managed relay and must be
               verified again before it can reconnect.

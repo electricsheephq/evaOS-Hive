@@ -22,7 +22,7 @@ const entitlement = {
 test("managed community is derived only from the server entitlement", () => {
   assert.deepEqual(managedCommunityFromEntitlement(entitlement), {
     id: entitlement.communityId,
-    name: "evaOS Teams",
+    name: "Hive",
     relayUrl: "wss://relay.example.com",
     pubkey: entitlement.publicKey,
     addedAt: entitlement.expiresAt,

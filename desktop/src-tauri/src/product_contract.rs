@@ -1,10 +1,10 @@
 use serde_json::{json, Value};
 
-pub(crate) const EVAOS_TEAMS_PRODUCT_NAME: &str = "evaOS Teams";
+pub(crate) const EVAOS_TEAMS_PRODUCT_NAME: &str = "Hive";
 pub(crate) const EVAOS_TEAMS_VERSION: &str = "0.4.23-es.1";
 pub(crate) const EVAOS_TEAMS_BUNDLE_IDENTIFIER: &str = "com.electricsheephq.evaos.teams";
 pub(crate) const EVAOS_TEAMS_DEEP_LINK_SCHEME: &str = "evaos-teams";
-pub(crate) const EVAOS_TEAMS_ARTIFACT_NAME: &str = "evaOS-Teams-0.4.23-es.1-arm64.dmg";
+pub(crate) const EVAOS_TEAMS_ARTIFACT_NAME: &str = "Hive-0.4.23-es.1-arm64.dmg";
 pub(crate) const EVAOS_TEAMS_UPDATE_CHANNEL: &str = "managed-beta";
 pub(crate) const EVAOS_TEAMS_CSP: &str = "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost buzz-media: blob: data:; media-src 'self' asset: http://asset.localhost buzz-media: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-src 'none'";
 
@@ -39,7 +39,7 @@ pub(crate) fn managed_tauri_overlay() -> Value {
             ],
             "resources": {
                 "../../LICENSE": "licenses/Buzz-Apache-2.0.txt",
-                "evaos-teams/NOTICE.txt": "licenses/evaOS-Teams-NOTICE.txt"
+                "evaos-teams/NOTICE.txt": "licenses/Hive-NOTICE.txt"
             },
             "macOS": {
                 "infoPlist": "evaos-teams/Info.plist",
@@ -59,9 +59,7 @@ pub(crate) fn updater_enabled(
 ) -> Result<bool, &'static str> {
     let configured = public_key.is_some() || endpoint.is_some();
     if managed && configured {
-        return Err(
-            "evaOS Teams managed builds reject BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT",
-        );
+        return Err("Hive managed builds reject BUZZ_UPDATER_PUBLIC_KEY and BUZZ_UPDATER_ENDPOINT");
     }
     Ok(!managed && public_key.is_some() && endpoint.is_some())
 }
@@ -92,6 +90,10 @@ mod tests {
         assert_eq!(
             overlay["bundle"]["resources"]["../../LICENSE"],
             "licenses/Buzz-Apache-2.0.txt"
+        );
+        assert_eq!(
+            overlay["bundle"]["macOS"]["dmg"]["background"],
+            "evaos-teams/dmg-background.png"
         );
     }
 

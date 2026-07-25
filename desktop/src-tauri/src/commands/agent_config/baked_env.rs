@@ -2,7 +2,7 @@
 ///
 /// Internal builds can bake provider credentials and other environment pairs
 /// into the binary via `BUZZ_BUILD_AGENT_ENV`. Only key names cross this IPC
-/// boundary. Managed evaOS Teams builds do not expose native agent settings.
+/// boundary. Managed Hive builds do not expose native agent settings.
 #[tauri::command]
 pub fn get_baked_build_env_keys() -> Vec<String> {
     if cfg!(feature = "evaos-teams-managed") {
@@ -41,7 +41,7 @@ pub(super) fn is_safe_to_reveal(key: &str) -> bool {
 
 /// Return baked agent environment with secret values masked.
 ///
-/// Managed evaOS Teams builds return no native agent configuration.
+/// Managed Hive builds return no native agent configuration.
 #[tauri::command]
 pub fn get_baked_build_env() -> Vec<BakedEnvEntry> {
     if cfg!(feature = "evaos-teams-managed") {

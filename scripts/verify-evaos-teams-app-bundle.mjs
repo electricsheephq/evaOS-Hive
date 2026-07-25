@@ -210,8 +210,8 @@ for (const [path, description] of [
     "Apache license",
   ],
   [
-    join(appPath, "Contents/Resources/licenses/evaOS-Teams-NOTICE.txt"),
-    "evaOS Teams notice",
+    join(appPath, "Contents/Resources/licenses/Hive-NOTICE.txt"),
+    "Hive notice",
   ],
 ]) {
   requireFile(path, description);

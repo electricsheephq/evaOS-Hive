@@ -87,12 +87,12 @@ pub(super) async fn login_callback(
     match state.try_complete(&query) {
         Ok(()) => (
             StatusCode::OK,
-            Html("<!doctype html><title>evaOS Teams</title><p>Sign-in received. Return to evaOS Teams.</p>"),
+            Html("<!doctype html><title>Hive</title><p>Sign-in received. Return to Hive.</p>"),
         )
             .into_response(),
         Err(_) => (
             StatusCode::BAD_REQUEST,
-            Html("<!doctype html><title>evaOS Teams</title><p>This sign-in callback is not valid.</p>"),
+            Html("<!doctype html><title>Hive</title><p>This sign-in callback is not valid.</p>"),
         )
             .into_response(),
     }

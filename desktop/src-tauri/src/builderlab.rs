@@ -20,8 +20,7 @@ const BB_SESSION_CREDENTIAL_HEADER: &str = "X-BB-Session-Credential";
 // or challenge/verify fail with `invalid_origin`. It also seeds the challenge
 // body's `origin` field so both agree.
 const BUILDERLAB_ORIGIN: &str = "https://app.builderlab.xyz";
-const MANAGED_BUILDERLAB_UNAVAILABLE: &str =
-    "Builderlab hosted services are unavailable in evaOS Teams";
+const MANAGED_BUILDERLAB_UNAVAILABLE: &str = "Builderlab hosted services are unavailable in Hive";
 const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>

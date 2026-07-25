@@ -260,6 +260,36 @@ fn verification_binds_the_local_key_but_refresh_requires_the_server_key() {
 }
 
 #[test]
+fn broker_snake_case_entitlement_deserializes_and_renderer_stays_camel_case() {
+    let response: EntitlementResponse = serde_json::from_value(serde_json::json!({
+        "status": "active",
+        "entitlement": {
+            "community_id": "10000000-0000-4000-8000-000000000003",
+            "relay_host": "https://relay.example.com",
+            "role": "owner",
+            "assignment_status": "unassigned",
+            "reconciliation_status": "pending",
+            "access_revision": 7,
+            "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+            "refresh_after_seconds": 300
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(response.status, "active");
+    assert_eq!(response.entitlement.public_key, None);
+    assert_eq!(response.entitlement.reconciliation_status, "pending");
+
+    let rendered = serde_json::to_value(response.entitlement).unwrap();
+    assert_eq!(
+        rendered["communityId"],
+        "10000000-0000-4000-8000-000000000003"
+    );
+    assert_eq!(rendered["reconciliationStatus"], "pending");
+    assert!(rendered.get("community_id").is_none());
+}
+
+#[test]
 fn managed_projection_readiness_is_separate_from_authenticated_entitlement() {
     let keys = Keys::generate();
     let public_key = keys.public_key().to_hex();

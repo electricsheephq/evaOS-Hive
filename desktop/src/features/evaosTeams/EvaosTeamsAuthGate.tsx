@@ -113,7 +113,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     ? evaosTeamsStatusCopy(status)
     : {
         title: "Checking managed access",
-        body: "evaOS Teams is checking Keychain and your ElectricSheep access.",
+        body: "Hive is checking Keychain and your ElectricSheep access.",
       };
   const entitlement = status?.entitlement;
   const maySignIn =
@@ -129,7 +129,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
           imageClassName="mb-6 h-14 w-14 rounded-[22%]"
         />
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          evaOS Teams
+          Hive
         </p>
         <h1 className="text-2xl font-semibold text-foreground">{copy.title}</h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
@@ -216,7 +216,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
 
         <p className="mt-6 text-xs leading-5 text-muted-foreground">
           Provider setup and agent permissions remain inside Hermes. This screen
-          verifies only your ElectricSheep Teams membership and managed relay
+          verifies only your Hive workspace membership and managed relay
           identity.
         </p>
       </section>
