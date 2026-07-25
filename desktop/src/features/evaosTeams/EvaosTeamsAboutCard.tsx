@@ -27,14 +27,6 @@ export function EvaosTeamsAboutCard() {
           <Value>{policy.version}</Value>
         </SettingsOptionRow>
         <SettingsOptionRow>
-          <span className="text-sm font-medium">Bundle ID</span>
-          <Value>{policy.bundleIdentifier}</Value>
-        </SettingsOptionRow>
-        <SettingsOptionRow>
-          <span className="text-sm font-medium">Protocol</span>
-          <Value>{`${policy.deepLinkScheme}://`}</Value>
-        </SettingsOptionRow>
-        <SettingsOptionRow>
           <span className="text-sm font-medium">Update channel</span>
           <Value>{policy.updateChannel}</Value>
         </SettingsOptionRow>

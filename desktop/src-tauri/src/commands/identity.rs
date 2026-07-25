@@ -326,7 +326,7 @@ pub async fn persist_current_identity(
 #[tauri::command]
 pub async fn sign_out(app: tauri::AppHandle) -> Result<(), String> {
     if cfg!(feature = "evaos-teams-managed") {
-        return Err("Use managed evaOS Teams logout".to_string());
+        return Err("Use managed Hive logout".to_string());
     }
     if is_shared_identity() {
         return Err(

@@ -87,10 +87,10 @@ if [[ "${CI:-}" == "true" ]]; then
 fi
 
 TARGET=aarch64-apple-darwin
-APP_PATH="$REPO_ROOT/desktop/src-tauri/target/$TARGET/release/bundle/macos/evaOS Teams.app"
+APP_PATH="$REPO_ROOT/desktop/src-tauri/target/$TARGET/release/bundle/macos/Hive.app"
 DMG_DIR="$REPO_ROOT/desktop/src-tauri/target/$TARGET/release/bundle/dmg"
-DEFAULT_DMG_PATH="$DMG_DIR/evaOS Teams_0.4.23-es.1_aarch64.dmg"
-DMG_PATH="$DMG_DIR/evaOS-Teams-0.4.23-es.1-arm64.dmg"
+DEFAULT_DMG_PATH="$DMG_DIR/Hive_0.4.23-es.1_aarch64.dmg"
+DMG_PATH="$DMG_DIR/Hive-0.4.23-es.1-arm64.dmg"
 
 env -i "${CLEAN_ENV[@]}" cargo build \
   --release \

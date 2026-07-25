@@ -1,6 +1,6 @@
 {
-  "productName": "evaOS Teams",
-  "mainBinaryName": "evaOS Teams",
+  "productName": "Hive",
+  "mainBinaryName": "Hive",
   "version": "0.4.23-es.1",
   "identifier": "com.electricsheephq.evaos.teams",
   "app": {
@@ -24,13 +24,10 @@
     "icon": ["evaos-teams/icon.png", "evaos-teams/icon.icns"],
     "resources": {
       "../../LICENSE": "licenses/Buzz-Apache-2.0.txt",
-      "evaos-teams/NOTICE.txt": "licenses/evaOS-Teams-NOTICE.txt"
+      "evaos-teams/NOTICE.txt": "licenses/Hive-NOTICE.txt"
     },
     "macOS": {
-      "infoPlist": "evaos-teams/Info.plist",
-      "dmg": {
-        "background": "evaos-teams/dmg-background.png"
-      }
+      "infoPlist": "evaos-teams/Info.plist"
     }
   }
 }

@@ -18,7 +18,7 @@ export function ProductMark({
   }
   return (
     <img
-      alt="evaOS Teams"
+      alt="Hive"
       className={imageClassName ?? className}
       src="/evaos-teams-icon.png"
     />

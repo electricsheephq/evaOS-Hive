@@ -666,16 +666,16 @@ test("remarkMessageLinks: recognizes only the active product scheme", () => {
   try {
     installDesktopProductPolicy({
       managed: true,
-      productName: "evaOS Teams",
+      productName: "Hive",
       version: "0.4.23-es.1",
       bundleIdentifier: "com.electricsheephq.evaos.teams",
       deepLinkScheme: "evaos-teams",
-      artifactName: "evaOS-Teams-0.4.23-es.1-arm64.dmg",
+      artifactName: "Hive-0.4.23-es.1-arm64.dmg",
       updateChannel: "managed-beta",
       updaterEnabled: false,
       upstreamHostedServicesEnabled: false,
       originAttribution:
-        "Built from Buzz by Block, used under the Apache License 2.0.",
+        "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
     });
     const managedLink = runPlugin(
       paragraph(text("evaos-teams://message?channel=c&id=m")),

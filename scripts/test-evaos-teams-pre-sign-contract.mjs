@@ -79,4 +79,4 @@ for (const requiredBoundary of [
   assert.match(runbook, new RegExp(requiredBoundary));
 }
 
-console.log("evaOS Teams credential-free pre-sign contract passed");
+console.log("Hive credential-free pre-sign contract passed");

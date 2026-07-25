@@ -9,7 +9,7 @@ import contract from "../src-tauri/evaos-teams/package-contract.json" with {
 
 for (const name of ["BUZZ_UPDATER_PUBLIC_KEY", "BUZZ_UPDATER_ENDPOINT"]) {
   if (process.env[name]?.trim()) {
-    throw new Error(`${name} must not be set for evaOS Teams managed builds`);
+    throw new Error(`${name} must not be set for Hive managed builds`);
   }
 }
 

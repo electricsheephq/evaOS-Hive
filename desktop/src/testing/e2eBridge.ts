@@ -134,7 +134,7 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
-    /** Run the renderer under the managed evaOS Teams product/auth contract. */
+    /** Run the renderer under the managed Hive product/auth contract. */
     evaosTeamsManaged?: boolean;
     /** Managed auth state returned by the mock. Defaults to active. */
     evaosTeamsPhase?: "active" | "signed_out" | "keychain_locked";
@@ -9202,16 +9202,16 @@ export function maybeInstallE2eTauriMocks() {
         return activeConfig?.mock?.evaosTeamsManaged
           ? {
               managed: true,
-              productName: "evaOS Teams",
+              productName: "Hive",
               version: "0.4.23-es.1",
               bundleIdentifier: "com.electricsheephq.evaos.teams",
               deepLinkScheme: "evaos-teams",
-              artifactName: "evaOS-Teams-0.4.23-es.1-arm64.dmg",
+              artifactName: "Hive-0.4.23-es.1-arm64.dmg",
               updateChannel: "managed-beta",
               updaterEnabled: false,
               upstreamHostedServicesEnabled: false,
               originAttribution:
-                "Built from Buzz by Block, used under the Apache License 2.0.",
+                "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
             }
           : {
               managed: false,
@@ -9237,7 +9237,7 @@ export function maybeInstallE2eTauriMocks() {
               keychainAvailable: phase !== "keychain_locked",
               message:
                 phase === "keychain_locked"
-                  ? "evaOS Teams cannot read its managed identity."
+                  ? "Hive cannot read its managed identity."
                   : undefined,
             };
           }

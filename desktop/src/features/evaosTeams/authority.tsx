@@ -78,7 +78,7 @@ export function managedCommunityFromEntitlement(
   relay.protocol = "wss:";
   return {
     id: entitlement.communityId,
-    name: "evaOS Teams",
+    name: "Hive",
     relayUrl: relay.toString().replace(/\/$/, ""),
     pubkey: entitlement.publicKey,
     addedAt: entitlement.expiresAt,

@@ -129,7 +129,7 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
-  /** Run the renderer under the managed evaOS Teams product/auth contract. */
+  /** Run the renderer under the managed Hive product/auth contract. */
   evaosTeamsManaged?: boolean;
   /** Managed auth state returned by the mock. Defaults to active. */
   evaosTeamsPhase?: "active" | "signed_out" | "keychain_locked";

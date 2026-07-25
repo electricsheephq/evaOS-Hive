@@ -57,37 +57,37 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
         title: "Unlock macOS Keychain",
         body:
           status.message ??
-          "evaOS Teams cannot read its managed identity. Unlock Keychain and try again.",
+          "Hive cannot read its managed identity. Unlock Keychain and try again.",
       };
     case "logout_pending":
       return {
         title: "Finishing sign-out",
         body:
           status.message ??
-          "evaOS Teams is disconnected locally and will retry remote revocation.",
+          "Hive is disconnected locally and will retry remote revocation.",
       };
     case "reauth_required":
       return {
         title: "Sign in again",
         body:
           status.message ??
-          "Your managed access could not be refreshed. evaOS Teams remains disconnected.",
+          "Your managed access could not be refreshed. Hive remains disconnected.",
       };
     case "sync_pending":
       return {
         title: "Finishing managed setup",
         body:
           status.message ??
-          "Your identity is verified. evaOS Teams is waiting for the managed relay projection.",
+          "Your identity is verified. Hive is waiting for the managed relay projection.",
       };
     case "active":
       return {
         title: "Access ready",
-        body: "ElectricSheep verified this device and selected your Teams community.",
+        body: "ElectricSheep verified this device and selected your Hive workspace.",
       };
     default:
       return {
-        title: "Sign in to evaOS Teams",
+        title: "Sign in to Hive",
         body: "Use your ElectricSheep account to connect this device.",
       };
   }

@@ -33,7 +33,8 @@ impl DesktopProductPolicy {
                 update_channel: EVAOS_TEAMS_UPDATE_CHANNEL,
                 updater_enabled: false,
                 upstream_hosted_services_enabled: false,
-                origin_attribution: "Built from Buzz by Block, used under the Apache License 2.0.",
+                origin_attribution:
+                    "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
             }
         } else {
             Self {
@@ -66,7 +67,7 @@ mod tests {
         let policy = DesktopProductPolicy::current();
         assert_eq!(policy.managed, cfg!(feature = "evaos-teams-managed"));
         if policy.managed {
-            assert_eq!(policy.product_name, "evaOS Teams");
+            assert_eq!(policy.product_name, "Hive");
             assert_eq!(policy.deep_link_scheme, "evaos-teams");
             assert!(!policy.updater_enabled);
             assert!(!policy.upstream_hosted_services_enabled);

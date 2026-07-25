@@ -1,4 +1,4 @@
-name: evaOS Teams Pre-sign
+name: Hive Pre-sign
 
 on:
   pull_request:
@@ -57,7 +57,7 @@ jobs:
           EVIDENCE_PATH: ${{ runner.temp }}/evaos-teams-pre-sign-evidence.json
         run: |
           {
-            echo '## evaOS Teams pre-sign evidence'
+            echo '## Hive pre-sign evidence'
             echo
             echo '```json'
             cat "$EVIDENCE_PATH"
