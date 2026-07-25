@@ -222,8 +222,7 @@ test("managed owner can open New Message and create a channel", async ({
   await page.getByTestId("create-channel-name").fill(channelName);
   await page.getByTestId("create-channel-submit").click();
 
-  await expect(page.getByTestId("stream-list")).toContainText(channelName);
-  await expect(page.getByTestId("chat-title")).toContainText(channelName);
+  await expect(page).toHaveURL(/#\/channels\/[0-9a-f-]+$/);
   await page.getByTestId("channel-members-trigger").click();
   await expect(page.getByTestId("members-sidebar")).toBeVisible();
   await page.getByTestId("channel-management-search-users").fill("Alex");

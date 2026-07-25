@@ -37,6 +37,8 @@ import {
   updateManagedAgent,
 } from "@/shared/api/tauri";
 import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
+import { getHiveCollaborationState } from "@/features/evaosTeams/api";
+import { projectManagedWorkspaceAgents } from "@/features/evaosTeams/managedWorkspaceAgents";
 import {
   setManagedAgentAutoRestart,
   setManagedAgentStartOnAppLaunch,
@@ -256,9 +258,12 @@ export function useBackendProvidersQuery(options?: { enabled?: boolean }) {
 }
 
 export function usePersonasQuery(options?: { enabled?: boolean }) {
-  const { policy } = useEvaosTeamsAuthority();
+  const authority = useEvaosTeamsAuthority();
   return useQuery({
-    enabled: policy.canBrowseAgents && (options?.enabled ?? true),
+    enabled:
+      !authority.managed &&
+      authority.policy.canBrowseAgents &&
+      (options?.enabled ?? true),
     queryKey: personasQueryKey,
     queryFn: listPersonas,
     staleTime: 30_000,
@@ -294,10 +299,13 @@ export function useManagedAgentPrereqsQuery(
 }
 
 export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
-  const { policy } = useEvaosTeamsAuthority();
+  const authority = useEvaosTeamsAuthority();
   return useQuery({
     queryKey: relayAgentsQueryKey,
-    queryFn: listRelayAgents,
+    queryFn: async () =>
+      authority.managed
+        ? projectManagedWorkspaceAgents(await getHiveCollaborationState())
+        : listRelayAgents(),
     staleTime: 30_000,
     // Relay agent profiles (kind:10100) are near-static and the backing
     // `list_relay_agents` command is an unfiltered relay query for the whole
@@ -309,14 +317,17 @@ export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
     // keep polling but at a relaxed cadence and pause it while backgrounded.
     refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: false,
-    enabled: policy.canBrowseAgents && (options?.enabled ?? true),
+    enabled: authority.policy.canBrowseAgents && (options?.enabled ?? true),
   });
 }
 
 export function useManagedAgentsQuery(options?: { enabled?: boolean }) {
-  const { policy } = useEvaosTeamsAuthority();
+  const authority = useEvaosTeamsAuthority();
   return useQuery({
-    enabled: policy.canBrowseAgents && (options?.enabled ?? true),
+    enabled:
+      !authority.managed &&
+      authority.policy.canBrowseAgents &&
+      (options?.enabled ?? true),
     queryKey: managedAgentsQueryKey,
     queryFn: listManagedAgents,
     staleTime: 5_000,

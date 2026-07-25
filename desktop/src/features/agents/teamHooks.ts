@@ -16,9 +16,9 @@ import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 export const teamsQueryKey = ["teams"] as const;
 
 export function useTeamsQuery() {
-  const { policy } = useEvaosTeamsAuthority();
+  const authority = useEvaosTeamsAuthority();
   return useQuery({
-    enabled: policy.canBrowseAgents,
+    enabled: !authority.managed && authority.policy.canBrowseAgents,
     queryKey: teamsQueryKey,
     queryFn: listTeams,
     staleTime: 30_000,
