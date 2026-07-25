@@ -42,7 +42,10 @@ pub(crate) fn managed_tauri_overlay() -> Value {
                 "evaos-teams/NOTICE.txt": "licenses/Hive-NOTICE.txt"
             },
             "macOS": {
-                "infoPlist": "evaos-teams/Info.plist"
+                "infoPlist": "evaos-teams/Info.plist",
+                "dmg": {
+                    "background": "evaos-teams/dmg-background.png"
+                }
             }
         }
     })
@@ -87,6 +90,10 @@ mod tests {
         assert_eq!(
             overlay["bundle"]["resources"]["../../LICENSE"],
             "licenses/Buzz-Apache-2.0.txt"
+        );
+        assert_eq!(
+            overlay["bundle"]["macOS"]["dmg"]["background"],
+            "evaos-teams/dmg-background.png"
         );
     }
 

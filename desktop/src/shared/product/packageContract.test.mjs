@@ -65,6 +65,21 @@ test("managed package uses the approved Hive identity and Beekeeper icons", asyn
     ),
     "e18c5e7ead889e26aa111921e9482b25eff91829b2a4cb9d854069ab2ccded0b",
   );
+  assert.equal(
+    tauriConfig.bundle.macOS.dmg.background,
+    "evaos-teams/dmg-background.png",
+  );
+  assert.equal(
+    sha256(
+      await readFile(
+        new URL(
+          "../../../src-tauri/evaos-teams/dmg-background.png",
+          import.meta.url,
+        ),
+      ),
+    ),
+    "3fd81eca5f8d171f6969efc798ffe5e83be896d88a52abb1e2bbc5c010749640",
+  );
 });
 
 test("managed bundle retains license and notice resources", () => {
