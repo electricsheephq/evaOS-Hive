@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.23-es.1
+
+- Restore Hive workspace channel creation, direct messages, invitations, member and agent visibility, and managed channel assignment.
+- Replace the Hive installer background with the approved honeycomb artwork and clarify the private feedback destination.
+
 ## v0.4.23
 
 - fix(desktop): strip GIF metadata extensions before upload ([#2425](https://github.com/block/buzz/pull/2425)) ([`47d7eb698`](https://github.com/block/buzz/commit/47d7eb6982900920bcdbe7a2f5013baca37daeeb))

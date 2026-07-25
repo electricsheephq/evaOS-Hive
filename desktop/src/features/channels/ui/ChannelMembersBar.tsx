@@ -35,7 +35,27 @@ type ChannelMembersBarProps = {
   variant?: "inline" | "compact";
 };
 
-export function ChannelMembersBar({
+export function ChannelMembersBar({ ...props }: ChannelMembersBarProps) {
+  const { managed, policy } = useEvaosTeamsAuthority();
+  if (!managed) return <NativeChannelMembersBar {...props} />;
+  if (!policy.canViewMembers || !props.onToggleMembers) return null;
+
+  return (
+    <Button
+      aria-label="View channel members"
+      data-testid="channel-members-trigger"
+      onClick={props.onToggleMembers}
+      size={props.variant === "compact" ? "sm" : "icon"}
+      type="button"
+      variant="outline"
+    >
+      <Users className="h-4 w-4" />
+      {props.variant === "compact" ? <span>Members</span> : null}
+    </Button>
+  );
+}
+
+function NativeChannelMembersBar({
   channel,
   currentPubkey,
   isAddBotOpen: isAddBotOpenProp,
@@ -112,8 +132,6 @@ export function ChannelMembersBar({
         : relayAgentsQuery.error instanceof Error
           ? relayAgentsQuery.error.message
           : null;
-
-  if (authority.managed) return null;
 
   const huddleIndicator = (
     <HuddleIndicator

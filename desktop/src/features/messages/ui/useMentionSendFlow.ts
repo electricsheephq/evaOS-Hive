@@ -820,12 +820,6 @@ export function useMentionSendFlow({
 
   const handleInviteNonMembers = React.useCallback(() => {
     if (!pendingNonMemberSend) return;
-    if (managed) {
-      setNonMemberPromptError(
-        "Managed channel membership is controlled by ElectricSheep.",
-      );
-      return;
-    }
 
     const invitedPubkeys = new Set(
       pendingNonMemberSend.nonMemberPubkeys.map(normalizePubkey),
@@ -842,7 +836,9 @@ export function useMentionSendFlow({
 
     setNonMemberPromptError(null);
     void (async () => {
-      const managedAgentsByPubkey = await getManagedAgentsByPubkey();
+      const managedAgentsByPubkey = managed
+        ? new Map<string, ManagedAgent>()
+        : await getManagedAgentsByPubkey();
       const peoplePubkeys: string[] = [];
       const relayAgentPubkeys: string[] = [];
 

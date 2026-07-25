@@ -52,22 +52,22 @@ export function managedAuthorityPolicy(
   role: EvaosTeamsRole,
 ): EvaosTeamsAuthorityPolicy {
   const agentOnly = role === "agent_only";
+  const managesWorkspace = role === "owner" || role === "admin";
   return {
     canManageCommunities: false,
-    canManageMembership: false,
-    canManageChannels: false,
+    // Managed membership and agent mutations use the dedicated workspace
+    // settings broker, never Buzz's native relay/local-agent commands.
+    canManageMembership: managesWorkspace,
+    canManageChannels: !agentOnly,
     canManageAgents: false,
     canBrowsePeople: !agentOnly,
-    // Managed agent discovery is server-assignment data (#7), never the
-    // native local/relay-wide directory. Keep it closed until that projection
-    // is wired.
+    // The native Agents screen controls local runtimes and is not meaningful
+    // in a company-managed workspace. Company agents remain visible and
+    // assignable through the brokered Workspace access panel.
     canBrowseAgents: false,
     canBrowsePrivateRooms: !agentOnly,
-    canStartDirectMessages: false,
-    // The current native member directory includes mutation controls and
-    // relay-wide agent enrichment. Keep the managed surface closed until a
-    // server-derived read-only projection replaces it.
-    canViewMembers: false,
+    canStartDirectMessages: !agentOnly,
+    canViewMembers: !agentOnly,
   };
 }
 

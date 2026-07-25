@@ -7,6 +7,7 @@ import { Input } from "@/shared/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Switch } from "@/shared/ui/switch";
 import { Textarea } from "@/shared/ui/textarea";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 import type { CreateChannelFormState } from "@/features/sidebar/lib/useCreateChannelForm";
 
@@ -30,6 +31,7 @@ export function CreateChannelFormFields({
 }: {
   form: CreateChannelFormState;
 }) {
+  const { managed } = useEvaosTeamsAuthority();
   const { channelKind, kindLabel, isCreating } = form;
 
   return (
@@ -69,7 +71,13 @@ export function CreateChannelFormFields({
         </div>
       </div>
 
-      <div className="space-y-1.5">
+      {managed ? (
+        <p className="text-sm text-muted-foreground">
+          Company channels are private to members of this Hive workspace.
+        </p>
+      ) : null}
+
+      <div className={cn("space-y-1.5", managed && "hidden")}>
         <label
           className="text-sm font-medium text-foreground"
           htmlFor="create-channel-description"
@@ -98,6 +106,7 @@ export function CreateChannelFormFields({
         className={cn(
           "flex min-h-12 items-center justify-between gap-4 rounded-xl py-1",
           isCreating && "opacity-50",
+          managed && "hidden",
         )}
         data-testid="create-channel-visibility"
       >
@@ -128,7 +137,7 @@ export function CreateChannelFormFields({
         />
       </div>
 
-      {form.templates.length > 0 ? (
+      {!managed && form.templates.length > 0 ? (
         <div className="space-y-1.5">
           <label
             className="text-sm font-medium text-foreground"
@@ -174,58 +183,63 @@ export function CreateChannelFormFooter({
   form: CreateChannelFormState;
   submitLabel?: string;
 }) {
+  const { managed } = useEvaosTeamsAuthority();
   const { DurationIcon, durationLabel, isCreating, kindLabel } = form;
 
   return (
     <div className="flex w-full items-center justify-between gap-3">
-      <Popover
-        onOpenChange={form.setTypePopoverOpen}
-        open={form.typePopoverOpen}
-      >
-        <PopoverTrigger asChild>
-          <Button
-            aria-label={`Channel duration: ${durationLabel}`}
-            className="-ml-2.5 h-9 px-2.5 text-sm font-medium text-foreground hover:bg-muted/50"
-            disabled={isCreating}
-            type="button"
-            variant="ghost"
-          >
-            <DurationIcon className="h-4 w-4" />
-            {durationLabel}
-            <ChevronDown className="h-4 w-4 text-muted-foreground/70" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-72 p-1">
-          <div className="px-3 pb-1.5 pt-2 text-xs font-medium text-muted-foreground/70">
-            Channel type
-          </div>
-          <fieldset className="space-y-1">
-            <legend className="sr-only">Channel type</legend>
-            <ChannelDurationOption
-              ariaLabel="Ongoing channel"
-              checked={!form.ephemeral}
-              description="For projects, teams, and recurring conversations."
-              icon={Hash}
-              label="Ongoing"
-              onSelect={() => {
-                form.setEphemeral(false);
-                form.setTypePopoverOpen(false);
-              }}
-            />
-            <ChannelDurationOption
-              ariaLabel="Ephemeral - auto-archives after 7 days of inactivity"
-              checked={form.ephemeral}
-              description="For quick discussions that archive automatically when inactive."
-              icon={ClockFading}
-              label="Temporary"
-              onSelect={() => {
-                form.setEphemeral(true);
-                form.setTypePopoverOpen(false);
-              }}
-            />
-          </fieldset>
-        </PopoverContent>
-      </Popover>
+      {!managed ? (
+        <Popover
+          onOpenChange={form.setTypePopoverOpen}
+          open={form.typePopoverOpen}
+        >
+          <PopoverTrigger asChild>
+            <Button
+              aria-label={`Channel duration: ${durationLabel}`}
+              className="-ml-2.5 h-9 px-2.5 text-sm font-medium text-foreground hover:bg-muted/50"
+              disabled={isCreating}
+              type="button"
+              variant="ghost"
+            >
+              <DurationIcon className="h-4 w-4" />
+              {durationLabel}
+              <ChevronDown className="h-4 w-4 text-muted-foreground/70" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-72 p-1">
+            <div className="px-3 pb-1.5 pt-2 text-xs font-medium text-muted-foreground/70">
+              Channel type
+            </div>
+            <fieldset className="space-y-1">
+              <legend className="sr-only">Channel type</legend>
+              <ChannelDurationOption
+                ariaLabel="Ongoing channel"
+                checked={!form.ephemeral}
+                description="For projects, teams, and recurring conversations."
+                icon={Hash}
+                label="Ongoing"
+                onSelect={() => {
+                  form.setEphemeral(false);
+                  form.setTypePopoverOpen(false);
+                }}
+              />
+              <ChannelDurationOption
+                ariaLabel="Ephemeral - auto-archives after 7 days of inactivity"
+                checked={form.ephemeral}
+                description="For quick discussions that archive automatically when inactive."
+                icon={ClockFading}
+                label="Temporary"
+                onSelect={() => {
+                  form.setEphemeral(true);
+                  form.setTypePopoverOpen(false);
+                }}
+              />
+            </fieldset>
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <span />
+      )}
       <Button
         data-testid="create-channel-submit"
         disabled={!form.canSubmit}

@@ -7,12 +7,12 @@ import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 export const ManagedChannelPane = React.memo(function ManagedChannelPane(
   props: ChannelPaneProps,
 ) {
-  const { policy } = useEvaosTeamsAuthority();
+  const { managed, policy } = useEvaosTeamsAuthority();
   return (
     <NativeChannelPane
       {...props}
       channelManagementOpen={
-        policy.canManageChannels && props.channelManagementOpen
+        !managed && policy.canManageChannels && props.channelManagementOpen
       }
       onAddAgent={policy.canManageAgents ? props.onAddAgent : undefined}
       onBrowseChannels={
@@ -21,11 +21,15 @@ export const ManagedChannelPane = React.memo(function ManagedChannelPane(
       onCreateChannel={
         policy.canManageChannels ? props.onCreateChannel : undefined
       }
-      onDelete={policy.canManageChannels ? props.onDelete : undefined}
-      onEdit={policy.canManageChannels ? props.onEdit : undefined}
-      onEditSave={policy.canManageChannels ? props.onEditSave : undefined}
+      onDelete={
+        !managed && policy.canManageChannels ? props.onDelete : undefined
+      }
+      onEdit={!managed && policy.canManageChannels ? props.onEdit : undefined}
+      onEditSave={
+        !managed && policy.canManageChannels ? props.onEditSave : undefined
+      }
       onJoinChannel={
-        policy.canManageMembership ? props.onJoinChannel : undefined
+        !managed && policy.canManageMembership ? props.onJoinChannel : undefined
       }
       onOpenMembers={policy.canViewMembers ? props.onOpenMembers : undefined}
     />

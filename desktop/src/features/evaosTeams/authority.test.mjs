@@ -36,21 +36,33 @@ test("managed community is derived only from the server entitlement", () => {
   assert.equal(authority.managed, true);
 });
 
-test("managed policy never grants native authority mutations", () => {
-  for (const role of ["owner", "admin", "member", "employee", "agent_only"]) {
+test("managed policy exposes brokered workspace actions by account role", () => {
+  for (const role of ["owner", "admin"]) {
     const policy = managedAuthorityPolicy(role);
     assert.equal(policy.canManageCommunities, false);
-    assert.equal(policy.canManageMembership, false);
-    assert.equal(policy.canManageChannels, false);
+    assert.equal(policy.canManageMembership, true);
+    assert.equal(policy.canManageChannels, true);
     assert.equal(policy.canManageAgents, false);
     assert.equal(policy.canBrowseAgents, false);
-    assert.equal(policy.canViewMembers, false);
-    assert.equal(policy.canStartDirectMessages, false);
+    assert.equal(policy.canStartDirectMessages, true);
+    assert.equal(policy.canViewMembers, true);
+  }
+
+  for (const role of ["member", "employee"]) {
+    const policy = managedAuthorityPolicy(role);
+    assert.equal(policy.canManageMembership, false);
+    assert.equal(policy.canManageChannels, true);
+    assert.equal(policy.canBrowseAgents, false);
+    assert.equal(policy.canStartDirectMessages, true);
+    assert.equal(policy.canViewMembers, true);
   }
 });
 
 test("agent-only policy also closes people and private-room discovery", () => {
   const policy = managedAuthorityPolicy("agent_only");
   assert.equal(policy.canBrowsePeople, false);
+  assert.equal(policy.canBrowseAgents, false);
   assert.equal(policy.canBrowsePrivateRooms, false);
+  assert.equal(policy.canStartDirectMessages, false);
+  assert.equal(policy.canViewMembers, false);
 });

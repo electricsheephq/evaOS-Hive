@@ -234,7 +234,7 @@ export function AppSidebar({
   onStarChannel,
   onUnstarChannel,
 }: AppSidebarProps) {
-  const { policy } = useEvaosTeamsAuthority();
+  const { managed, policy } = useEvaosTeamsAuthority();
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
   const { status: updateStatus } = useUpdaterContext();
   const canShowSidebarUpdateCard = shouldShowSidebarUpdateCard(updateStatus);
@@ -380,12 +380,10 @@ export function AppSidebar({
     useDeleteChannelDialog((channel) => {
       if (channel.id === selectedChannelId) onSelectHome();
     });
-  const deleteChannel = policy.canManageChannels
-    ? requestDeleteChannel
-    : undefined;
-  const leaveChannel = policy.canManageMembership
-    ? requestLeaveChannel
-    : undefined;
+  const deleteChannel =
+    !managed && policy.canManageChannels ? requestDeleteChannel : undefined;
+  const leaveChannel =
+    !managed && policy.canManageMembership ? requestLeaveChannel : undefined;
 
   const streamChannels = React.useMemo(
     () => channels.filter((channel) => channel.channelType === "stream"),
@@ -707,7 +705,7 @@ export function AppSidebar({
                           handleCreateSectionForChannel
                         }
                         onCreateChannel={
-                          policy.canManageChannels
+                          policy.canManageChannels && onBrowseChannels
                             ? () => handleCreateChannelInSection(section.id)
                             : undefined
                         }
@@ -738,9 +736,15 @@ export function AppSidebar({
                       }
                       actionsTestId="section-actions-channels"
                       listTestId="stream-list"
-                      quickCreateLabel="Browse channels"
-                      onQuickCreateClick={() => onBrowseChannels?.()}
-                      showQuickCreate
+                      quickCreateLabel={
+                        managed ? "New channel" : "Browse channels"
+                      }
+                      onQuickCreateClick={
+                        managed
+                          ? handleOpenCreateChannel
+                          : () => onBrowseChannels?.()
+                      }
+                      showQuickCreate={managed || Boolean(onBrowseChannels)}
                       onMarkAllRead={onMarkAllChannelsRead}
                       onMarkChannelRead={onMarkChannelRead}
                       onMarkChannelUnread={onMarkChannelUnread}
@@ -780,7 +784,7 @@ export function AppSidebar({
                       actionsTestId="section-actions-forums"
                       listTestId="forum-list"
                       onCreateClick={
-                        policy.canManageChannels
+                        !managed && policy.canManageChannels
                           ? () => openCreateDialog("forum")
                           : undefined
                       }

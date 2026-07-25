@@ -102,7 +102,7 @@ export function AppShell() {
   useWebviewScrollBoundaryLock();
 
   const communitiesHook = useCommunities();
-  const { policy } = useEvaosTeamsAuthority();
+  const { managed, policy } = useEvaosTeamsAuthority();
   const hasCommunityRail = communitiesHook.communities.length > 1;
   const addCommunityDialog = useAddCommunityDialogState();
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
@@ -692,12 +692,13 @@ export function AppShell() {
             markAllChannelsRead,
             markChannelRead,
             markChannelUnread,
-            openBrowseChannels: policy.canManageMembership
-              ? handleOpenBrowseChannels
-              : () => {},
+            openBrowseChannels:
+              !managed && policy.canManageMembership
+                ? handleOpenBrowseChannels
+                : () => {},
             openCreateChannel: handleOpenCreateChannel,
             openChannelManagement: (channelId?: string) => {
-              if (!policy.canManageChannels) return;
+              if (managed || !policy.canManageChannels) return;
               setManagedChannelId(
                 typeof channelId === "string" ? channelId : null,
               );
@@ -851,7 +852,7 @@ export function AppShell() {
                           onMarkChannelRead={markChannelRead}
                           onMarkChannelUnread={markChannelUnread}
                           onBrowseChannels={
-                            policy.canManageMembership
+                            !managed && policy.canManageMembership
                               ? handleOpenBrowseChannels
                               : undefined
                           }
@@ -944,20 +945,20 @@ export function AppShell() {
                       }
                       onBrowseChannelJoin={handleBrowseChannelJoin}
                       onBrowseChannelCreate={
-                        policy.canManageChannels
+                        !managed && policy.canManageChannels
                           ? handleBrowseChannelCreate
                           : undefined
                       }
                       onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                       onChannelManagementOpenChange={(open) => {
-                        if (!policy.canManageChannels) return;
+                        if (managed || !policy.canManageChannels) return;
                         setIsChannelManagementOpen(open);
                         if (!open) {
                           setManagedChannelId(null);
                         }
                       }}
                       onDeleteActiveChannel={() => {
-                        if (!policy.canManageChannels) return;
+                        if (managed || !policy.canManageChannels) return;
                         setIsChannelManagementOpen(false);
                         setManagedChannelId(null);
                         void goHome({ replace: true });

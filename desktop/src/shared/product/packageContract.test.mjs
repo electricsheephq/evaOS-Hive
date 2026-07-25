@@ -78,7 +78,7 @@ test("managed package uses the approved Hive identity and Beekeeper icons", asyn
         ),
       ),
     ),
-    "3fd81eca5f8d171f6969efc798ffe5e83be896d88a52abb1e2bbc5c010749640",
+    "e59bc1de9e346d8ab4052a7099d91fb34271d4b4cece9c83421f797326afc630",
   );
 });
 
