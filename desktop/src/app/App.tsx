@@ -20,9 +20,11 @@ import { deriveShellRoute } from "@/app/AppShell.helpers";
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { useReloadShortcut } from "@/app/useReloadShortcut";
 import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkeys";
+import { EvaosTeamsAuthGate } from "@/features/evaosTeams/EvaosTeamsAuthGate";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
 import {
+  CommunityOnboardingProvider,
   type FirstCommunityPage,
   useCommunityOnboarding,
   markCommunityOnboardingComplete,
@@ -42,6 +44,8 @@ import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
 import { useCommunityInit } from "@/features/communities/useCommunityInit";
 import { useNestNotifications } from "@/features/communities/useNestNotifications";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { CommunitiesProvider } from "@/features/communities/useCommunities";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   loadCommunityDestination,
   markPendingCommunityRestore,
@@ -63,6 +67,8 @@ import {
   listenForDeepLinks,
 } from "@/shared/deep-link";
 import { cn } from "@/shared/lib/cn";
+import { ProductMark } from "@/shared/product/ProductMark";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
 import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
 import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
@@ -143,6 +149,14 @@ function BeeLoader({
   className?: string;
   tintClassName?: string;
 }) {
+  if (desktopProductPolicy().managed) {
+    return (
+      <ProductMark
+        className={cn("relative block h-auto", className)}
+        imageClassName={cn("relative block h-auto rounded-[22%]", className)}
+      />
+    );
+  }
   return (
     <div className={cn("relative", tintClassName, className)}>
       <BuzzMark className="block h-auto w-full" />
@@ -171,7 +185,14 @@ function AppLoadingGate() {
       <StartupWindowDragRegion />
       <ThemeGrainientBackground />
       <span className="sr-only">{LOADING_TEXT}</span>
-      <FlappingBee className="relative z-10 h-auto w-28" />
+      {desktopProductPolicy().managed ? (
+        <ProductMark
+          className="relative z-10 h-auto w-28"
+          imageClassName="relative z-10 h-28 w-28 rounded-[22%]"
+        />
+      ) : (
+        <FlappingBee className="relative z-10 h-auto w-28" />
+      )}
     </div>
   );
 }
@@ -671,9 +692,12 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
   );
 }
 
-export function App() {
-  useReloadShortcut();
-  useInitialRenderReady();
+function NativeBuzzApp() {
+  const authority = useEvaosTeamsAuthority();
+  return <NativeBuzzRuntime key={authority.cacheKey} />;
+}
+
+function NativeBuzzRuntime() {
   const [sharedIdentity, setSharedIdentity] = useState<boolean | null>(null);
   const [queryClient] = useState(createBuzzQueryClient);
 
@@ -689,8 +713,22 @@ export function App() {
   if (sharedIdentity === null) return <AppLoadingGate />;
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <MachineBootstrap sharedIdentity={sharedIdentity} />
-    </QueryClientProvider>
+    <CommunitiesProvider>
+      <QueryClientProvider client={queryClient}>
+        <MachineBootstrap sharedIdentity={sharedIdentity} />
+      </QueryClientProvider>
+    </CommunitiesProvider>
+  );
+}
+
+export function App() {
+  useReloadShortcut();
+  useInitialRenderReady();
+  return (
+    <EvaosTeamsAuthGate>
+      <CommunityOnboardingProvider>
+        <NativeBuzzApp />
+      </CommunityOnboardingProvider>
+    </EvaosTeamsAuthGate>
   );
 }

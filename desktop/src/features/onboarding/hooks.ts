@@ -20,6 +20,7 @@ import { ensureWelcomeCanvas } from "@/features/onboarding/welcomeCanvas";
 import { ensureWelcomeTeam } from "@/features/onboarding/welcomeGuide";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel } from "@/shared/api/types";
 import {
@@ -469,6 +470,7 @@ export function useFirstRunOnboardingGate({
 
 export function useAppOnboardingState(isSharedIdentity: boolean) {
   const queryClient = useQueryClient();
+  const { managed } = useEvaosTeamsAuthority();
   const { activeCommunity } = useCommunities();
   const identityQuery = useIdentityQuery();
   const identity = identityQuery.data;
@@ -523,7 +525,7 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
   );
   const requestStarterChannels = React.useCallback(
     (focus: boolean): Promise<ChannelInitResult> => {
-      if (!currentPubkey || !starterChannelsCommunityScope) {
+      if (managed || !currentPubkey || !starterChannelsCommunityScope) {
         return Promise.resolve({ ok: true });
       }
 
@@ -572,12 +574,13 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
       );
       return promise;
     },
-    [currentPubkey, queryClient, starterChannelsCommunityScope],
+    [currentPubkey, managed, queryClient, starterChannelsCommunityScope],
   );
 
   React.useEffect(() => {
     if (
       onboardingGate.stage !== "ready" ||
+      managed ||
       !currentPubkey ||
       !starterChannelsCommunityScope ||
       !readOnboardingCompletion(currentPubkey) ||
@@ -589,6 +592,7 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
     void requestStarterChannels(false);
   }, [
     currentPubkey,
+    managed,
     onboardingGate.stage,
     requestStarterChannels,
     starterChannelsCommunityScope,

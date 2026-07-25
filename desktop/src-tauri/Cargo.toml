@@ -22,6 +22,10 @@ mesh-llm = ["dep:iroh", "dep:mesh-llm-sdk", "dep:mesh-llm-host-runtime", "dep:me
 # OS keyring backing for desktop secret storage (nsec private keys). When
 # disabled, secrets fall back to 0o600 files. On by default for real builds.
 system-keyring = ["dep:keyring"]
+# Electric-only Hive identity-broker variant. This is deliberately a
+# compile-time boundary: managed key custody must not be switchable by an
+# inherited environment variable at runtime.
+evaos-teams-managed = ["system-keyring"]
 
 [build-dependencies]
 base64 = "0.22"

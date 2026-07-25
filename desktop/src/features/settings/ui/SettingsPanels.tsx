@@ -8,6 +8,7 @@ import {
   ChevronDown,
   Cpu,
   Download,
+  Info,
   FlaskConical,
   Keyboard,
   LayoutTemplate,
@@ -37,6 +38,7 @@ import {
   type ThreadViewMode,
 } from "@/features/channels/lib/threadViewModePreference";
 import { cn } from "@/shared/lib/cn";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -84,6 +86,9 @@ import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
+import { EvaosTeamsAboutCard } from "@/features/evaosTeams/EvaosTeamsAboutCard";
+import { HiveWorkspaceSettingsCard } from "@/features/evaosTeams/HiveWorkspaceSettingsCard";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 export type SettingsSection =
   | "profile"
@@ -100,7 +105,8 @@ export type SettingsSection =
   | "custom-emoji"
   | "local-archive"
   | "mobile"
-  | "updates";
+  | "updates"
+  | "about";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
@@ -120,6 +126,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "local-archive",
   "mobile",
   "updates",
+  "about",
 ];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -231,9 +238,18 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     label: "Updates",
     icon: Download,
   },
+  {
+    value: "about",
+    label: "About",
+    icon: Info,
+  },
 ];
 
 function formatThemeLabel(name: string): string {
+  if (desktopProductPolicy().managed) {
+    if (name === "buzz") return "Classic";
+    if (name === "buzz-dark") return "Classic Dark";
+  }
   return name
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -518,7 +534,7 @@ function ThemeSettingsCard() {
     >
       <SettingsSectionHeader
         title="Appearance"
-        description="Choose a theme for Buzz."
+        description={`Choose a theme for ${desktopProductPolicy().productName}.`}
       />
 
       {/* Mode selector: System / Light / Dark */}
@@ -831,7 +847,7 @@ export function renderSettingsSection(
       return <HostedCommunitiesSettingsCard />;
     case "community-members":
       return (
-        <CommunityMembersSettingsCard currentPubkey={props.currentPubkey} />
+        <WorkspaceAccessSettingsPanel currentPubkey={props.currentPubkey} />
       );
     case "moderation":
       return <ModerationQueueCard />;
@@ -843,9 +859,24 @@ export function renderSettingsSection(
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":
       return <UpdateChecker />;
+    case "about":
+      return <EvaosTeamsAboutCard />;
     default: {
       const exhaustiveCheck: never = section;
       return exhaustiveCheck;
     }
   }
+}
+
+function WorkspaceAccessSettingsPanel({
+  currentPubkey,
+}: {
+  currentPubkey?: string;
+}) {
+  const authority = useEvaosTeamsAuthority();
+  return authority.managed ? (
+    <HiveWorkspaceSettingsCard />
+  ) : (
+    <CommunityMembersSettingsCard currentPubkey={currentPubkey} />
+  );
 }

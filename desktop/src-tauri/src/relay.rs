@@ -104,7 +104,7 @@ pub fn build_nip98_auth_header(
     body: &[u8],
     state: &AppState,
 ) -> Result<String, String> {
-    let keys = state.keys.lock().map_err(|error| error.to_string())?;
+    let keys = state.signing_keys()?;
     build_nip98_auth_header_for_keys(&keys, method, url, body)
 }
 

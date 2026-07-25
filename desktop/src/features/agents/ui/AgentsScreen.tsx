@@ -21,6 +21,8 @@ import {
 import { useHistorySearchState } from "@/shared/hooks/useHistorySearchState";
 import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
+import { ManagedAgentsView } from "@/features/agents/ui/ManagedAgentsView";
 
 const AgentsView = React.lazy(async () => {
   const module = await import("@/features/agents/ui/AgentsView");
@@ -39,6 +41,11 @@ const AGENTS_PROFILE_SEARCH_KEYS = [
 ] as const;
 
 export function AgentsScreen() {
+  const { managed } = useEvaosTeamsAuthority();
+  return managed ? <ManagedAgentsView /> : <NativeAgentsScreen />;
+}
+
+function NativeAgentsScreen() {
   const identityQuery = useIdentityQuery();
   const personasQuery = usePersonasQuery();
   const { applyPatch, values } = useHistorySearchState(

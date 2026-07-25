@@ -2,6 +2,7 @@ import * as React from "react";
 
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
+import { rendererContentPersistenceAllowed } from "@/shared/product/managedRendererPersistence";
 
 // ── Store reactivity ─────────────────────────────────────────────────────────
 // `useSyncExternalStore` requires a stable subscribe/getSnapshot pair.
@@ -150,12 +151,22 @@ export function clearAllDrafts(): void {
 // and only flush to localStorage on writes.
 
 let _memCache: Map<string, DraftState> | null = null;
+let _memCachePersistenceAllowed: boolean | null = null;
 
 function readStore(): Map<string, DraftState> {
+  const persistenceAllowed = rendererContentPersistenceAllowed();
+  if (_memCachePersistenceAllowed !== persistenceAllowed) {
+    _memCache = null;
+    _memCachePersistenceAllowed = persistenceAllowed;
+  }
   if (_memCache !== null) return _memCache;
 
   const map = new Map<string, DraftState>();
   if (!currentPubkey) {
+    _memCache = map;
+    return map;
+  }
+  if (!persistenceAllowed) {
     _memCache = map;
     return map;
   }
@@ -252,7 +263,7 @@ function isValidDraftState(v: unknown): v is DraftState {
 }
 
 function flushStore(map: Map<string, DraftState>): boolean {
-  if (!currentPubkey) return false;
+  if (!currentPubkey || !rendererContentPersistenceAllowed()) return false;
   const obj: StoredDrafts = {};
   for (const [k, v] of map) {
     obj[k] = v;

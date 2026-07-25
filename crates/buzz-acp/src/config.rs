@@ -341,6 +341,10 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_CONFIG", default_value = "./buzz-acp.toml")]
     pub config: PathBuf,
 
+    /// Durable channel-to-ACP-session mapping file. Defaults beside --config.
+    #[arg(long, env = "BUZZ_ACP_SESSION_STORE")]
+    pub session_store: Option<PathBuf>,
+
     #[arg(long, env = "BUZZ_ACP_DEDUP", default_value = "queue", value_enum)]
     pub dedup: DedupMode,
 
@@ -510,6 +514,7 @@ pub struct Config {
     pub channels_override: Option<Vec<String>>,
     pub no_mention_filter: bool,
     pub config_path: PathBuf,
+    pub session_store_path: PathBuf,
     pub context_message_limit: u32,
     /// Maximum turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
@@ -958,6 +963,9 @@ impl Config {
 
         validate_multiple_event_handling(args.multiple_event_handling, args.dedup)?;
 
+        let session_store_path = args
+            .session_store
+            .unwrap_or_else(|| args.config.with_extension("sessions.json"));
         let config = Config {
             keys,
             relay_url: args.relay_url,
@@ -986,6 +994,7 @@ impl Config {
             channels_override: args.channels,
             no_mention_filter: args.no_mention_filter,
             config_path: args.config,
+            session_store_path,
             context_message_limit: args.context_message_limit,
             max_turns_per_session: args.max_turns_per_session,
             presence_enabled: !args.no_presence,
@@ -1355,6 +1364,7 @@ mod tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
+            session_store_path: PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,

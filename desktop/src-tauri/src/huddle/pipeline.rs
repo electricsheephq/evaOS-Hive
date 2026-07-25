@@ -9,6 +9,7 @@ use std::sync::{
 };
 
 use nostr::JsonUtil;
+use tauri::Manager;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
@@ -16,9 +17,32 @@ use crate::events;
 
 use super::models;
 use super::relay_api::{self, fetch_channel_members, parse_channel_uuid};
-use super::state::{HuddlePhase, VoiceInputMode};
+use super::state::{HuddlePhase, HuddleState, VoiceInputMode};
 use super::stt;
 use super::tts;
+
+#[derive(Clone, Copy)]
+struct AudioConnectGuard {
+    huddle_generation: u64,
+    access_generation: u64,
+}
+
+fn audio_connect_is_current(
+    huddle: &HuddleState,
+    ephemeral_channel_id: &str,
+    guard: AudioConnectGuard,
+    access_generation: u64,
+    authorized: bool,
+    expires_at: i64,
+    now: i64,
+) -> bool {
+    !matches!(huddle.phase, HuddlePhase::Idle | HuddlePhase::Leaving)
+        && huddle.ephemeral_channel_id.as_deref() == Some(ephemeral_channel_id)
+        && huddle.session_generation.load(Ordering::Acquire) == guard.huddle_generation
+        && access_generation == guard.access_generation
+        && authorized
+        && expires_at > now
+}
 
 pub(crate) async fn post_connect_setup(
     state: &AppState,
@@ -50,15 +74,53 @@ pub(crate) async fn post_connect_setup(
 
     // Connect audio relay WebSocket (Opus encode/decode pipeline).
     // This is the core audio path — failure is fatal for the huddle.
-    let parent_id = {
+    let (parent_id, guard) = {
+        let _transition = state
+            .evaos_teams_access_transition
+            .lock()
+            .map_err(|error| error.to_string())?;
         let hs = state.huddle()?;
-        hs.parent_channel_id.clone()
+        let now = chrono::Utc::now().timestamp();
+        if !state.evaos_teams_authorized.load(Ordering::Acquire)
+            || state.evaos_teams_expires_at.load(Ordering::Acquire) <= now
+        {
+            return Err("managed access expired before audio connection".to_string());
+        }
+        (
+            hs.parent_channel_id.clone(),
+            AudioConnectGuard {
+                huddle_generation: hs.session_generation.load(Ordering::Acquire),
+                access_generation: state.evaos_teams_access_generation.load(Ordering::Acquire),
+            },
+        )
     };
     let (cancel, pcm_tx) =
         relay_api::connect_audio_relay(ephemeral_channel_id, parent_id.as_deref(), state).await?;
     {
+        // Serialize the terminal re-check and handle install with entitlement
+        // refresh/expiry. A network handshake that finishes after expiry,
+        // refresh, leave, or reset must not resurrect audio authority.
+        let _transition = state
+            .evaos_teams_access_transition
+            .lock()
+            .map_err(|error| error.to_string())?;
         let mut hs = state.huddle()?;
-        hs.audio_ws_cancel = Some(cancel);
+        let still_current = audio_connect_is_current(
+            &hs,
+            ephemeral_channel_id,
+            guard,
+            state.evaos_teams_access_generation.load(Ordering::Acquire),
+            state.evaos_teams_authorized.load(Ordering::Acquire),
+            state.evaos_teams_expires_at.load(Ordering::Acquire),
+            chrono::Utc::now().timestamp(),
+        );
+        if !still_current {
+            cancel.cancel();
+            return Err("huddle or managed access ended while audio was connecting".to_string());
+        }
+        if let Some(old_cancel) = hs.audio_ws_cancel.replace(cancel) {
+            old_cancel.cancel();
+        }
         hs.audio_relay_pcm_tx = Some(pcm_tx);
     }
 
@@ -270,9 +332,14 @@ pub(crate) fn spawn_transcription_task(
     let spawned_gen = session_generation.load(Ordering::Acquire);
 
     let http_client = state.http_client.clone();
-    let keys = match state.keys.lock() {
-        Ok(k) => k.clone(),
-        Err(_) => return,
+    let app_handle = match state
+        .app_handle
+        .lock()
+        .ok()
+        .and_then(|handle| handle.clone())
+    {
+        Some(handle) => handle,
+        None => return,
     };
     let relay_base_url = crate::relay::relay_api_base_url_with_override(state);
 
@@ -310,6 +377,13 @@ pub(crate) fn spawn_transcription_task(
             // the kind event and build NIP-98 auth after the wait so both
             // timestamps are fresh — single clean order: wait → sign → auth → send.
             crate::relay_admission::wait_for_rate_limit().await;
+            let keys = match app_handle.state::<AppState>().signing_keys() {
+                Ok(keys) => keys,
+                Err(error) => {
+                    eprintln!("buzz-desktop: STT signing stopped: {error}");
+                    break;
+                }
+            };
             let event = match builder.sign_with_keys(&keys) {
                 Ok(e) => e,
                 Err(e) => {
@@ -356,4 +430,95 @@ pub(crate) fn spawn_transcription_task(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active_huddle() -> HuddleState {
+        HuddleState {
+            phase: HuddlePhase::Connecting,
+            ephemeral_channel_id: Some("ephemeral-channel".to_string()),
+            ..HuddleState::default()
+        }
+    }
+
+    #[test]
+    fn audio_connect_guard_accepts_only_the_same_live_huddle_and_access_generation() {
+        let huddle = active_huddle();
+        let guard = AudioConnectGuard {
+            huddle_generation: 0,
+            access_generation: 7,
+        };
+        assert!(audio_connect_is_current(
+            &huddle,
+            "ephemeral-channel",
+            guard,
+            7,
+            true,
+            101,
+            100,
+        ));
+
+        assert!(!audio_connect_is_current(
+            &huddle,
+            "ephemeral-channel",
+            guard,
+            8,
+            true,
+            101,
+            100,
+        ));
+        assert!(!audio_connect_is_current(
+            &huddle,
+            "ephemeral-channel",
+            guard,
+            7,
+            false,
+            101,
+            100,
+        ));
+        assert!(!audio_connect_is_current(
+            &huddle,
+            "ephemeral-channel",
+            guard,
+            7,
+            true,
+            100,
+            100,
+        ));
+    }
+
+    #[test]
+    fn audio_connect_guard_rejects_reset_or_replaced_huddle() {
+        let mut huddle = active_huddle();
+        let guard = AudioConnectGuard {
+            huddle_generation: 0,
+            access_generation: 7,
+        };
+
+        huddle.session_generation.fetch_add(1, Ordering::Release);
+        assert!(!audio_connect_is_current(
+            &huddle,
+            "ephemeral-channel",
+            guard,
+            7,
+            true,
+            101,
+            100,
+        ));
+
+        huddle.session_generation.store(0, Ordering::Release);
+        huddle.reset_preserving_generation();
+        assert!(!audio_connect_is_current(
+            &huddle,
+            "ephemeral-channel",
+            guard,
+            7,
+            true,
+            101,
+            100,
+        ));
+    }
 }

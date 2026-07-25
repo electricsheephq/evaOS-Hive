@@ -37,10 +37,6 @@ import {
 import { PreventSleepProvider } from "@/features/agents/usePreventSleep";
 import { requestOpenCreateAgent } from "@/features/agents/openCreateAgentEvent";
 import { useAgentsDataRefresh } from "@/features/agents/lib/useAgentsDataRefresh";
-import { useManagedAgentRuntimeReconciliation } from "@/features/agents/useManagedAgentRuntimeReconciliation";
-import { useAutoRestartPolicy } from "@/features/agents/lib/useAutoRestartPolicy";
-import { usePersonaSync } from "@/features/agents/lib/usePersonaSync";
-import { useAgentObserverIngestion } from "@/features/agents/useAgentObserverIngestion";
 import { AgentManagementDialogs } from "@/features/agents/ui/AgentManagementDialogs";
 import { RequestedAgentCreateDialogs } from "@/features/agents/ui/RequestedAgentCreateDialogs";
 import {
@@ -74,11 +70,19 @@ import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
 import { useChannelStars } from "@/features/sidebar/lib/useChannelStars";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
+  canSearchEvaosTeamsAuthority,
+  isEvaosTeamsViewAllowed,
+  requireEvaosTeamsAuthority,
+  useEvaosTeamsAuthority,
+} from "@/features/evaosTeams/authority";
+import { useManagedRuntimeAuthority } from "@/features/evaosTeams/useManagedRuntimeAuthority";
+import {
   consumePendingCommunityRestore,
   loadCommunityDestination,
   saveCommunityDestination,
 } from "@/features/communities/communityNavigationStorage";
 import { useAddCommunityDialogState } from "@/features/communities/addCommunityPrefill";
+import { joinHiveChannel } from "@/features/evaosTeams/api";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -100,13 +104,13 @@ const LazySettingsScreen = React.lazy(async () => {
   const module = await import("@/features/settings/ui/SettingsScreen");
   return { default: module.SettingsScreen };
 });
-
 export function AppShell() {
   useWebviewZoomShortcuts();
   useTauriWindowDrag();
   useWebviewScrollBoundaryLock();
 
   const communitiesHook = useCommunities();
+  const { managed, policy } = useEvaosTeamsAuthority();
   const hasCommunityRail = communitiesHook.communities.length > 1;
   const addCommunityDialog = useAddCommunityDialogState();
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
@@ -121,7 +125,6 @@ export function AppShell() {
   const mainInsetRef = React.useRef<HTMLElement>(null);
   const location = useLocation();
   const queryClient = useQueryClient();
-  useManagedAgentRuntimeReconciliation(communitiesHook.communities); // sync storage snapshot
   const {
     goAgents,
     goChannel,
@@ -140,6 +143,12 @@ export function AppShell() {
     () => deriveShellRoute(location.pathname),
     [location.pathname],
   );
+  const selectedViewAllowed = isEvaosTeamsViewAllowed(selectedView, policy);
+  React.useEffect(() => {
+    if (!selectedViewAllowed) {
+      void goHome({ replace: true });
+    }
+  }, [goHome, selectedViewAllowed]);
   const {
     removeCommunity: handleRemoveCommunity,
     switchCommunity: handleSwitchCommunity,
@@ -167,18 +176,11 @@ export function AppShell() {
   const { starredChannelIds, starChannel, unstarChannel } = useChannelStars(
     identityQuery.data?.pubkey,
   );
-  usePersonaSync(identityQuery.data?.pubkey);
+  useManagedRuntimeAuthority(
+    communitiesHook.communities,
+    identityQuery.data?.pubkey,
+  );
   useAgentsDataRefresh();
-  // Chunk F: auto-restart drifted idle agents (per-agent opt-out, default ON).
-  useAutoRestartPolicy();
-  // Owner-global observer ingestion: receives + decrypts agent observer
-  // frames and keeps derived active-turn liveness in sync app-wide, so no
-  // individual screen/panel has to mount its own bridge for ingestion.
-  // Intentionally mounted without a `startupReady`/identity guard: before
-  // `currentPubkey` resolves the hook ingests managed agents only, and
-  // relay-owned agents join automatically once identity arrives. Adding a
-  // guard here would drop managed-agent coverage during startup.
-  useAgentObserverIngestion();
   // Kind 24200 is relay-ephemeral, so reconciliation runs eagerly (not
   // deferred) and unconditionally repairs the DB subscription on internal
   // builds — otherwise frames emitted before the listener opens are lost.
@@ -469,16 +471,25 @@ export function AppShell() {
     getCreateSuccess,
   } = useChannelBrowserDialog(() => void refetchChannels());
   const handleOpenSearch = React.useCallback(() => {
+    if (!canSearchEvaosTeamsAuthority(policy)) return;
     setSearchFocusRequest((request) => request + 1);
     void refetchChannels();
-  }, [refetchChannels]);
+  }, [policy, refetchChannels]);
 
   const handleBrowseChannelJoin = React.useCallback(
     async (channelId: string) => {
-      await joinChannel(channelId);
+      requireEvaosTeamsAuthority(
+        policy.canJoinPublicChannels,
+        "Managed channel membership is controlled by ElectricSheep.",
+      );
+      if (managed) {
+        await joinHiveChannel(channelId);
+      } else {
+        await joinChannel(channelId);
+      }
       await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
     },
-    [queryClient],
+    [managed, policy.canJoinPublicChannels, queryClient],
   );
 
   const handleCreateChannel = React.useCallback(
@@ -498,6 +509,10 @@ export function AppShell() {
       },
       onCreated?: (channelId: string) => void,
     ) => {
+      requireEvaosTeamsAuthority(
+        policy.canManageChannels,
+        "Managed channels are controlled by ElectricSheep.",
+      );
       const createdChannel = await createChannelMutation.mutateAsync({
         name,
         description,
@@ -511,7 +526,13 @@ export function AppShell() {
       onCreated?.(createdChannel.id);
       void applyAgents(templateId, createdChannel.id);
     },
-    [applyAgents, applyCanvas, createChannelMutation, goChannel],
+    [
+      applyAgents,
+      applyCanvas,
+      createChannelMutation,
+      goChannel,
+      policy.canManageChannels,
+    ],
   );
 
   const handleCreateForum = React.useCallback(
@@ -528,6 +549,10 @@ export function AppShell() {
       ttlSeconds?: number;
       templateId?: string;
     }) => {
+      requireEvaosTeamsAuthority(
+        policy.canManageChannels,
+        "Managed channels are controlled by ElectricSheep.",
+      );
       const createdForum = await createForumMutation.mutateAsync({
         name,
         description,
@@ -540,7 +565,13 @@ export function AppShell() {
       await goChannel(createdForum.id);
       void applyAgents(templateId, createdForum.id);
     },
-    [applyAgents, applyCanvas, createForumMutation, goChannel],
+    [
+      applyAgents,
+      applyCanvas,
+      createForumMutation,
+      goChannel,
+      policy.canManageChannels,
+    ],
   );
 
   // The channel browser can create either a stream or a forum depending on
@@ -620,14 +651,12 @@ export function AppShell() {
   // Dispatch `buzz://message` deep links into the router.
   useMessageDeepLinks();
 
-  const handleOpenNewDm = React.useCallback(
-    () => void goNewMessage(),
-    [goNewMessage],
-  );
-  const handleOpenCreateChannel = React.useCallback(
-    () => setIsCreateChannelOpen(true),
-    [],
-  );
+  const handleOpenNewDm = React.useCallback(() => {
+    if (policy.canStartDirectMessages) void goNewMessage();
+  }, [goNewMessage, policy.canStartDirectMessages]);
+  const handleOpenCreateChannel = React.useCallback(() => {
+    if (policy.canManageChannels) setIsCreateChannelOpen(true);
+  }, [policy.canManageChannels]);
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
@@ -712,9 +741,12 @@ export function AppShell() {
             markAllChannelsRead,
             markChannelRead,
             markChannelUnread,
-            openBrowseChannels: handleOpenBrowseChannels,
+            openBrowseChannels: policy.canBrowsePrivateRooms
+              ? handleOpenBrowseChannels
+              : () => {},
             openCreateChannel: handleOpenCreateChannel,
             openChannelManagement: (channelId?: string) => {
+              if (!policy.canManageChannels) return;
               setManagedChannelId(
                 typeof channelId === "string" ? channelId : null,
               );
@@ -847,14 +879,21 @@ export function AppShell() {
                           onNewMessage={handleOpenNewDm}
                           onBackgroundClick={requestFocusedThreadClose}
                           onCreateChannelOpenChange={setIsCreateChannelOpen}
-                          onOpenAddCommunity={addCommunityDialog.openDialog}
+                          onOpenAddCommunity={
+                            policy.canManageCommunities
+                              ? addCommunityDialog.openDialog
+                              : () => {}
+                          }
                           onSendFeedback={() => setIsSendFeedbackOpen(true)}
                           onUpdateCommunity={communitiesHook.updateCommunity}
                           onRemoveCommunity={(id) =>
                             void handleRemoveCommunity(id)
                           }
                           onSwitchCommunity={handleSwitchCommunity}
-                          onCreateAgent={() => requestOpenCreateAgent()}
+                          onCreateAgent={() => {
+                            if (policy.canManageAgents)
+                              requestOpenCreateAgent();
+                          }}
                           selfPresenceStatus={presenceSession.currentStatus}
                           communities={communitiesHook.communities}
                           onCreateChannel={handleCreateChannel}
@@ -863,7 +902,11 @@ export function AppShell() {
                           onMarkAllChannelsRead={markAllChannelsRead}
                           onMarkChannelRead={markChannelRead}
                           onMarkChannelUnread={markChannelUnread}
-                          onBrowseChannels={handleOpenBrowseChannels}
+                          onBrowseChannels={
+                            policy.canBrowsePrivateRooms
+                              ? handleOpenBrowseChannels
+                              : undefined
+                          }
                           onOpenDm={async ({ pubkeys }) => {
                             const directMessage =
                               await openDmMutation.mutateAsync({
@@ -923,7 +966,7 @@ export function AppShell() {
                             style={chromeCssVarDefaults as React.CSSProperties}
                           >
                             <BuzzTheme.ContentSurface>
-                              <Outlet />
+                              {selectedViewAllowed ? <Outlet /> : null}
                             </BuzzTheme.ContentSurface>
                           </SidebarInset>
                         </MainInsetProvider>
@@ -935,8 +978,12 @@ export function AppShell() {
                         />
                       </div>
                     )}
-                    <RequestedAgentCreateDialogs />
-                    <AgentManagementDialogs />
+                    {policy.canManageAgents ? (
+                      <>
+                        <RequestedAgentCreateDialogs />
+                        <AgentManagementDialogs />
+                      </>
+                    ) : null}
                     <AppShellOverlays
                       activeChannel={managedChannel}
                       browseDialogType={browseDialogType}
@@ -948,15 +995,21 @@ export function AppShell() {
                         createForumMutation.isPending
                       }
                       onBrowseChannelJoin={handleBrowseChannelJoin}
-                      onBrowseChannelCreate={handleBrowseChannelCreate}
+                      onBrowseChannelCreate={
+                        policy.canManageChannels
+                          ? handleBrowseChannelCreate
+                          : undefined
+                      }
                       onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                       onChannelManagementOpenChange={(open) => {
+                        if (!policy.canManageChannels) return;
                         setIsChannelManagementOpen(open);
                         if (!open) {
                           setManagedChannelId(null);
                         }
                       }}
                       onDeleteActiveChannel={() => {
+                        if (!policy.canManageChannels) return;
                         setIsChannelManagementOpen(false);
                         setManagedChannelId(null);
                         void goHome({ replace: true });

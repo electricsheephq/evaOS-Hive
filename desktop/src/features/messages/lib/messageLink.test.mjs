@@ -7,6 +7,10 @@ import {
   parseMessageLink,
   resolveMessageLinkRenderTarget,
 } from "./messageLink.ts";
+import {
+  installDesktopProductPolicy,
+  resetDesktopProductPolicyForTests,
+} from "@/shared/product/productIdentity";
 
 const CHANNEL = "f570339f-8f8a-4e08-a779-8d954aa44109";
 const MESSAGE =
@@ -94,7 +98,7 @@ test("parseMessageLink rejects malformed URL strings", () => {
   assert.equal(r.ok === false && r.reason, "invalid-url");
 });
 
-test("parseMessageLink accepts legacy buzz://message links", () => {
+test("native product accepts buzz://message and rejects managed scheme", () => {
   const r = parseMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`);
   assert.equal(r.ok, true);
   assert.deepEqual(r.ok && r.value, {
@@ -102,18 +106,58 @@ test("parseMessageLink accepts legacy buzz://message links", () => {
     messageId: MESSAGE,
     threadRootId: null,
   });
+  assert.equal(
+    parseMessageLink(`evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`)
+      .ok,
+    false,
+  );
 });
 
-test("isMessageLink matches buzz://message and legacy buzz://message", () => {
+test("managed product accepts evaos-teams://message and rejects native scheme", () => {
+  try {
+    installDesktopProductPolicy({
+      managed: true,
+      productName: "Hive",
+      version: "0.4.26-es.1",
+      bundleIdentifier: "com.electricsheephq.evaos.teams",
+      deepLinkScheme: "evaos-teams",
+      artifactName: "Hive-0.4.26-es.1-arm64.dmg",
+      updateChannel: "managed-beta",
+      updaterEnabled: false,
+      upstreamHostedServicesEnabled: false,
+      originAttribution:
+        "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
+    });
+    const url = buildMessageLink({
+      channelId: CHANNEL,
+      messageId: MESSAGE,
+    });
+    assert.equal(url, `evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`);
+    assert.equal(parseMessageLink(url).ok, true);
+    assert.equal(isMessageLink(url), true);
+    assert.equal(
+      parseMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`).ok,
+      false,
+    );
+    assert.equal(
+      isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
+      false,
+    );
+  } finally {
+    resetDesktopProductPolicyForTests();
+  }
+});
+
+test("isMessageLink matches only the active native product scheme", () => {
   assert.equal(
-    isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
-    true,
+    isMessageLink(`evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`),
+    false,
   );
   assert.equal(
     isMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`),
     true,
   );
-  assert.equal(isMessageLink("buzz://connect?relay=wss://x"), false);
+  assert.equal(isMessageLink("evaos-teams://connect?relay=wss://x"), false);
   assert.equal(isMessageLink("buzz://connect?relay=wss://x"), false);
   assert.equal(isMessageLink("https://example.com"), false);
   assert.equal(isMessageLink(undefined), false);

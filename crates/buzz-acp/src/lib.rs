@@ -9,6 +9,7 @@ mod pool;
 mod pool_lifecycle;
 mod queue;
 mod relay;
+mod session_store;
 mod setup_mode;
 mod usage;
 
@@ -43,6 +44,7 @@ use pool::{
 use pool_lifecycle::PoolLifecycle;
 use queue::{CancelReason, EventQueue, FlushBatch, QueuedEvent, ThreadTags};
 use relay::{HarnessRelay, RelayEventPublisher};
+use session_store::{SessionScope, SessionStore};
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -834,12 +836,27 @@ async fn publish_relay_observer_event(
 /// Maximum age (seconds) for an observer control frame to be considered fresh.
 const OBSERVER_CONTROL_FRESHNESS_SECS: i64 = 300;
 
+fn clear_mapping_for_control(session_store: &SessionStore, channel_id: Uuid, action: &str) -> bool {
+    match session_store.remove(channel_id) {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::error!(
+                target: "session_store",
+                channel = %channel_id,
+                "{action} rejected because the durable mapping could not be cleared: {error}"
+            );
+            false
+        }
+    }
+}
+
 fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
     event: nostr::Event,
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
     owner_pubkey_hex: &str,
+    session_store: &SessionStore,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
     if let Err(e) = buzz_core::verify_event(&event) {
@@ -883,7 +900,7 @@ fn handle_relay_observer_control_event(
             handle_cancel_turn_control(&payload, pool, observer);
         }
         Some("switch_model") => {
-            handle_switch_model_control(&payload, pool, observer);
+            handle_switch_model_control(&payload, pool, observer, session_store);
         }
         _ => {
             tracing::debug!(payload = %payload, "ignoring unknown observer control frame");
@@ -941,6 +958,7 @@ fn handle_switch_model_control(
     payload: &serde_json::Value,
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
+    session_store: &SessionStore,
 ) {
     let Some(channel_id) = payload
         .get("channelId")
@@ -967,20 +985,23 @@ fn handle_switch_model_control(
         // Busy path: deliver over the oneshot. `false` means the oneshot was
         // already consumed this turn (a prior cancel/interrupt) — the turn is
         // already ending, so the switch cannot land on it.
-        if signal_in_flight_task(
+        match deliver_durable_control(
             pool,
+            session_store,
             channel_id,
             ControlSignal::SwitchModel(model_id.to_string()),
+            "model switch",
         ) {
-            "sent"
-        } else {
-            "turn_ending"
+            DurableControlDelivery::Sent => "sent",
+            DurableControlDelivery::NotDelivered => "turn_ending",
+            DurableControlDelivery::PersistenceError => "persistence_error",
         }
     } else {
         // Idle path: validate against the cached catalog before invalidating.
-        match pool.switch_idle_agent_model(channel_id, model_id) {
+        match pool.switch_idle_agent_model(channel_id, model_id, session_store) {
             IdleSwitchResult::Switched => "switched",
             IdleSwitchResult::UnsupportedModel => "unsupported_model",
+            IdleSwitchResult::PersistenceError => "persistence_error",
             IdleSwitchResult::NoIdleAgent => "no_active_turn",
         }
     };
@@ -1140,10 +1161,9 @@ fn any_respawn_in_flight(crash_history: &[SlotCircuit]) -> bool {
 /// Result of a background respawn task.
 struct RespawnResult {
     index: usize,
-    /// Tuple: (initialized client, protocol version, supports_goose_steer).
-    /// The third element is always `true` — the supervisor uses
-    /// try-and-tolerate for the steer extension.
-    result: Result<(AcpClient, u32, String)>,
+    /// Tuple: initialized client, protocol version, normalized agent name,
+    /// and ACP session-load capability.
+    result: Result<(AcpClient, u32, String, bool)>,
 }
 
 /// Outcome of a non-cancelling steer attempt, forwarded from a per-attempt
@@ -1187,7 +1207,7 @@ impl RespawnGuard {
     /// Send the result and disarm the guard. Uses `try_send` (sync) so there
     /// is no await boundary between marking `sent` and actually enqueueing —
     /// cancellation cannot slip between the two.
-    fn send(mut self, result: Result<(AcpClient, u32, String)>) {
+    fn send(mut self, result: Result<(AcpClient, u32, String, bool)>) {
         // Invariant: try_send succeeds because the channel capacity equals the
         // slot count, and respawn_in_flight guarantees at most one outstanding
         // result per slot. If this ever fails, the channel sizing or the
@@ -1526,6 +1546,15 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
+    let session_store = Arc::new(SessionStore::open(
+        config.session_store_path.clone(),
+        SessionScope::new(
+            &config.relay_url,
+            &pubkey_hex,
+            &config.agent_command,
+            &config.agent_args,
+        ),
+    ));
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -1560,6 +1589,7 @@ async fn tokio_main() -> Result<()> {
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
         relay_url: config.relay_url.clone(),
+        session_store,
     });
 
     if !config.memory_enabled {
@@ -1785,7 +1815,7 @@ async fn tokio_main() -> Result<()> {
         while let Ok(rr) = respawn_rx.try_recv() {
             crash_history[rr.index].respawn_in_flight = false;
             match rr.result {
-                Ok((acp, protocol_version, agent_name)) => {
+                Ok((acp, protocol_version, agent_name, load_session_supported)) => {
                     let agent = OwnedAgent {
                         index: rr.index,
                         acp,
@@ -1796,6 +1826,7 @@ async fn tokio_main() -> Result<()> {
                         agent_name,
                         goose_system_prompt_supported: None,
                         protocol_version,
+                        load_session_supported,
                     };
                     pool.return_agent(agent);
                     tracing::info!(agent = rr.index, "respawn complete");
@@ -1889,7 +1920,14 @@ async fn tokio_main() -> Result<()> {
                     match control_event {
                         Some(event) => {
                             if let Some(ref owner_hex) = owner_cache.pubkey {
-                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex);
+                                handle_relay_observer_control_event(
+                                    &config.keys,
+                                    event,
+                                    &mut pool,
+                                    observer.as_ref(),
+                                    owner_hex,
+                                    &ctx.session_store,
+                                );
                             } else {
                                 tracing::warn!("observer control frame received but no owner resolved — dropping");
                             }
@@ -1993,6 +2031,13 @@ async fn tokio_main() -> Result<()> {
                                     } else {
                                         0
                                     };
+                                    if let Err(error) = ctx.session_store.remove(ch) {
+                                        tracing::warn!(
+                                            target: "session_store",
+                                            channel = %ch,
+                                            "failed to remove mapping after channel removal: {error}"
+                                        );
+                                    }
                                     // Track removed channels so checked-out agents get
                                     // their sessions stripped when they return to the pool.
                                     removed_channels.insert(ch);
@@ -2108,17 +2153,40 @@ async fn tokio_main() -> Result<()> {
                             if is_rotate {
                                 if let Some(owner) = owner_cache.get() {
                                     if buzz_event.event.pubkey.to_hex() == *owner {
-                                        let fired = signal_in_flight_task(
-                                            &mut pool,
-                                            buzz_event.channel_id,
-                                            ControlSignal::Rotate,
-                                        );
-                                        if fired {
-                                            tracing::info!(
-                                                channel_id = %buzz_event.channel_id,
-                                                "!rotate received — cancelling in-flight turn and rotating session"
-                                            );
+                                        let turn_in_flight = pool
+                                            .task_map()
+                                            .values()
+                                            .any(|m| m.channel_id == Some(buzz_event.channel_id));
+                                        if turn_in_flight {
+                                            match deliver_durable_control(
+                                                &mut pool,
+                                                &ctx.session_store,
+                                                buzz_event.channel_id,
+                                                ControlSignal::Rotate,
+                                                "!rotate",
+                                            ) {
+                                                DurableControlDelivery::Sent => {
+                                                    tracing::info!(
+                                                        channel_id = %buzz_event.channel_id,
+                                                        "!rotate received — cancelling in-flight turn and rotating session"
+                                                    );
+                                                }
+                                                DurableControlDelivery::NotDelivered => {
+                                                    tracing::info!(
+                                                        channel_id = %buzz_event.channel_id,
+                                                        "!rotate received while the in-flight turn was already ending"
+                                                    );
+                                                }
+                                                DurableControlDelivery::PersistenceError => {}
+                                            }
                                         } else {
+                                            if !clear_mapping_for_control(
+                                                &ctx.session_store,
+                                                buzz_event.channel_id,
+                                                "!rotate",
+                                            ) {
+                                                continue;
+                                            }
                                             let invalidated = pool.invalidate_channel_sessions(buzz_event.channel_id);
                                             tracing::info!(
                                                 channel_id = %buzz_event.channel_id,
@@ -2355,6 +2423,10 @@ async fn tokio_main() -> Result<()> {
                 if let PromptSource::Channel(ch) = &result.source {
                     typing_channels.remove(ch);
                 }
+                // A checked-out task may have created and persisted a session
+                // after its channel was removed. Delete again at the return
+                // boundary so that late write cannot survive restart/re-add.
+                remove_returned_agent_mappings(&removed_channels, &ctx.session_store);
                 if handle_prompt_result(
                     &mut pool,
                     &mut queue,
@@ -2665,7 +2737,7 @@ async fn tokio_main() -> Result<()> {
     // Drain any respawn results that completed before the abort. Explicitly
     // shut down returned agents instead of relying on AcpClient::Drop.
     while let Ok(rr) = respawn_rx.try_recv() {
-        if let Ok((mut acp, _, _)) = rr.result {
+        if let Ok((mut acp, _, _, _)) = rr.result {
             acp.shutdown().await;
             tracing::debug!(agent = rr.index, "reaped respawned agent on shutdown");
         }
@@ -2768,12 +2840,65 @@ fn signal_in_flight_task(
 
     if let Some(meta) = entry {
         if let Some(tx) = meta.control_tx.take() {
-            tracing::info!(channel = %channel_id, ?mode, "control signal sent to in-flight task");
-            let _ = tx.send(mode);
-            return true;
+            return match tx.send(mode) {
+                Ok(()) => {
+                    tracing::info!(
+                        channel = %channel_id,
+                        "control signal sent to in-flight task"
+                    );
+                    true
+                }
+                Err(mode) => {
+                    tracing::debug!(
+                        channel = %channel_id,
+                        ?mode,
+                        "in-flight task control receiver was already closed"
+                    );
+                    false
+                }
+            };
         }
     }
     false
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DurableControlDelivery {
+    Sent,
+    NotDelivered,
+    PersistenceError,
+}
+
+/// Clear the durable session mapping before delivering a reset-like control.
+///
+/// If the task-map entry is stale and the oneshot receiver has already closed,
+/// restore the prior mapping so a failed delivery cannot silently lose restart
+/// continuity.
+fn deliver_durable_control(
+    pool: &mut AgentPool,
+    session_store: &SessionStore,
+    channel_id: Uuid,
+    mode: ControlSignal,
+    action: &str,
+) -> DurableControlDelivery {
+    let previous_session_id = session_store.get(channel_id);
+    if !clear_mapping_for_control(session_store, channel_id, action) {
+        return DurableControlDelivery::PersistenceError;
+    }
+    if signal_in_flight_task(pool, channel_id, mode) {
+        return DurableControlDelivery::Sent;
+    }
+    if let Some(session_id) = previous_session_id {
+        if let Err(error) = session_store.record(channel_id, session_id) {
+            tracing::error!(
+                target: "session_store",
+                channel = %channel_id,
+                "{action} was not delivered and the prior durable mapping could not be restored: {error}"
+            );
+            return DurableControlDelivery::PersistenceError;
+        }
+    }
+    DurableControlDelivery::NotDelivered
 }
 
 /// Attempt the non-cancelling (ACP) steer for a freshly-queued event.
@@ -3027,6 +3152,18 @@ fn spawn_failure_notice(
         tokio::spawn(async move {
             pool::post_failure_notice(&rest, channel_id, &thread_tags, &content).await;
         });
+    }
+}
+
+fn remove_returned_agent_mappings(removed_channels: &HashSet<Uuid>, session_store: &SessionStore) {
+    for channel_id in removed_channels {
+        if let Err(error) = session_store.remove(*channel_id) {
+            tracing::error!(
+                target: "session_store",
+                channel = %channel_id,
+                "failed to remove late ACP session mapping for removed channel: {error}"
+            );
+        }
     }
 }
 
@@ -3694,6 +3831,14 @@ fn normalized_agent_name(init_result: &serde_json::Value) -> String {
         .to_ascii_lowercase()
 }
 
+fn supports_session_load(init_result: &serde_json::Value) -> bool {
+    init_result
+        .get("agentCapabilities")
+        .and_then(|capabilities| capabilities.get("loadSession"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 async fn shutdown_agent_slots(slots: &mut [Option<OwnedAgent>]) {
     for slot in slots {
         if let Some(mut agent) = slot.take() {
@@ -3792,6 +3937,7 @@ async fn initialize_agent_pool(
                             }),
                         );
                         let agent_name = normalized_agent_name(&init_result);
+                        let load_session_supported = supports_session_load(&init_result);
                         agent_slots.push(Some(OwnedAgent {
                             index: i,
                             acp,
@@ -3802,6 +3948,7 @@ async fn initialize_agent_pool(
                             agent_name,
                             goose_system_prompt_supported: None,
                             protocol_version,
+                            load_session_supported,
                         }));
                     }
                     Ok(Err(e)) => {
@@ -3852,7 +3999,7 @@ async fn spawn_and_init(
     has_generated_codex_config: bool,
     agent_index: usize,
     observer: Option<observer::ObserverHandle>,
-) -> Result<(AcpClient, u32, String)> {
+) -> Result<(AcpClient, u32, String, bool)> {
     let mut acp = AcpClient::spawn(command, args, extra_env, has_generated_codex_config)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
@@ -3870,7 +4017,8 @@ async fn spawn_and_init(
                 }),
             );
             let agent_name = normalized_agent_name(&init_result);
-            Ok((acp, protocol_version, agent_name))
+            let load_session_supported = supports_session_load(&init_result);
+            Ok((acp, protocol_version, agent_name, load_session_supported))
         }
         Err(e) => {
             // Explicitly shut down the spawned child to prevent zombie/leak.
@@ -4340,6 +4488,50 @@ mod owner_control_command_tests {
             channel_id,
             ControlSignal::Rotate
         ));
+    }
+
+    #[tokio::test]
+    async fn failed_rotate_or_model_delivery_restores_durable_mapping() {
+        for mode in [
+            ControlSignal::Rotate,
+            ControlSignal::SwitchModel("test-model".into()),
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "buzz-acp-closed-control-test-{}.json",
+                Uuid::new_v4()
+            ));
+            let store = SessionStore::open(
+                path,
+                SessionScope::new("wss://relay.example", "aabb", "hermes", &["acp".into()]),
+            );
+            let channel_id = Uuid::new_v4();
+            store
+                .record(channel_id, "persisted-session".into())
+                .unwrap();
+
+            let mut pool = AgentPool::from_slots(vec![]);
+            let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+            drop(control_rx);
+            let abort_handle = pool.join_set.spawn(async {});
+            pool.task_map_mut().insert(
+                abort_handle.id(),
+                pool::TaskMeta {
+                    agent_index: 0,
+                    channel_id: Some(channel_id),
+                    turn_id: "closed-control-turn".to_string(),
+                    recoverable_batch: None,
+                    control_tx: Some(control_tx),
+                    steer_tx: None,
+                },
+            );
+
+            assert_eq!(
+                deliver_durable_control(&mut pool, &store, channel_id, mode, "test control"),
+                DurableControlDelivery::NotDelivered
+            );
+            assert_eq!(store.get(channel_id).as_deref(), Some("persisted-session"));
+            store.cleanup_test_files();
+        }
     }
 }
 
@@ -4967,6 +5159,7 @@ mod build_mcp_servers_tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
+            session_store_path: std::path::PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,
@@ -5133,6 +5326,7 @@ mod error_outcome_emission_tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
+            session_store_path: std::path::PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,
@@ -5169,6 +5363,60 @@ mod error_outcome_emission_tests {
         );
     }
 
+    #[test]
+    fn detects_session_load_capability_from_initialize_result() {
+        assert!(supports_session_load(&serde_json::json!({
+            "agentCapabilities": { "loadSession": true }
+        })));
+        assert!(!supports_session_load(&serde_json::json!({
+            "agentCapabilities": { "loadSession": false }
+        })));
+        assert!(!supports_session_load(&serde_json::json!({})));
+    }
+
+    fn test_session_store_at(path: std::path::PathBuf) -> SessionStore {
+        SessionStore::open(
+            path,
+            SessionScope::new("wss://relay.example", "aabb", "hermes", &["acp".into()]),
+        )
+    }
+
+    #[test]
+    fn returned_agent_cleanup_removes_late_membership_race_mapping() {
+        let path = std::env::temp_dir().join(format!(
+            "buzz-acp-returned-agent-test-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = test_session_store_at(path);
+        let removed_channel = Uuid::new_v4();
+        store
+            .record(removed_channel, "late-session".into())
+            .unwrap();
+        let removed = HashSet::from([removed_channel]);
+
+        remove_returned_agent_mappings(&removed, &store);
+
+        assert_eq!(store.get(removed_channel), None);
+        store.cleanup_test_files();
+    }
+
+    #[test]
+    fn control_mapping_clear_fails_closed_on_store_error() {
+        let path =
+            std::env::temp_dir().join(format!("buzz-acp-control-store-error-{}", Uuid::new_v4()));
+        std::fs::create_dir(&path).unwrap();
+        let store = test_session_store_at(path.clone());
+
+        assert!(!clear_mapping_for_control(
+            &store,
+            Uuid::new_v4(),
+            "!rotate"
+        ));
+
+        store.cleanup_test_files();
+        let _ = std::fs::remove_dir(path);
+    }
+
     /// Spawn a real but inert agent subprocess (`cat`) so the error paths have
     /// an `OwnedAgent` to move into respawn or return to the pool. The error
     /// branches never talk to the subprocess.
@@ -5187,6 +5435,7 @@ mod error_outcome_emission_tests {
             // Error branches under test never read this; 1 is the legacy
             // non-systemPrompt path, the simplest valid value.
             protocol_version: 1,
+            load_session_supported: false,
         }
     }
 

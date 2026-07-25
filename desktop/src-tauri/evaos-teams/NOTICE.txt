@@ -1,0 +1,12 @@
+Hive
+Copyright 2026 Electric Sheep
+
+Hive includes software from Buzz by Block, used under the Apache License 2.0.
+
+The complete Apache License 2.0 text is bundled as
+licenses/Buzz-Apache-2.0.txt. Existing Buzz and third-party notices remain
+applicable to their respective source and binary components.
+
+The Beekeeper icon is provided by Electric Sheep for the managed Hive product.
+This source configuration is internal-canary evidence, not approval of final
+public-release distribution.

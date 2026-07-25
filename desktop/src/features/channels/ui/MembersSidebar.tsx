@@ -14,6 +14,7 @@ import {
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   useFlattenedUserSearchResults,
   useInfiniteUserSearchQuery,
@@ -132,7 +133,12 @@ type MembersSidebarProps = {
   relayUrl?: string;
 };
 
-export function MembersSidebar({
+export function MembersSidebar({ ...props }: MembersSidebarProps) {
+  const { policy } = useEvaosTeamsAuthority();
+  return policy.canViewMembers ? <ManagedMembersSidebar {...props} /> : null;
+}
+
+function ManagedMembersSidebar({
   channel,
   currentPubkey,
   open,
@@ -140,9 +146,11 @@ export function MembersSidebar({
   onViewActivity,
   relayUrl,
 }: MembersSidebarProps) {
+  const authority = useEvaosTeamsAuthority();
+  const { managed } = authority;
   const channelId = channel?.id ?? null;
   const managedAgentRuntimesQuery = useManagedAgentRuntimesQuery({
-    enabled: open,
+    enabled: open && !managed,
   });
   const queryClient = useQueryClient();
   const searchInputRef = React.useRef<HTMLInputElement>(null);
@@ -433,8 +441,14 @@ export function MembersSidebar({
     normalizedSearchQuery,
   ]);
 
+  const canBrokerMembers =
+    managed &&
+    (authority.entitlement?.role === "owner" ||
+      authority.entitlement?.role === "admin");
   const canManageMembers =
-    selfMember?.role === "owner" || selfMember?.role === "admin";
+    canBrokerMembers ||
+    selfMember?.role === "owner" ||
+    selfMember?.role === "admin";
 
   const {
     canModerate,
@@ -469,13 +483,14 @@ export function MembersSidebar({
   const canRemoveMember = React.useCallback(
     (member: ChannelMember) => {
       return (
+        (canBrokerMembers && member.pubkey !== currentPubkey) ||
         (selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
         (selfMember?.role === "owner" && member.role !== "owner") ||
         Boolean(selfMember && isMyBot(member)) ||
         member.pubkey === currentPubkey
       );
     },
-    [currentPubkey, isMyBot, selfMember],
+    [canBrokerMembers, currentPubkey, isMyBot, selfMember],
   );
   const removableManagedBots = React.useMemo(
     () =>
@@ -616,8 +631,12 @@ export function MembersSidebar({
     return (
       <div className="content-visibility-auto" key={member.pubkey}>
         <MembersSidebarMemberCard
-          canChangeRole={canManageMembers && member.pubkey !== currentPubkey}
-          canModerate={canModerate && member.pubkey !== currentPubkey}
+          canChangeRole={
+            !managed && canManageMembers && member.pubkey !== currentPubkey
+          }
+          canModerate={
+            !managed && canModerate && member.pubkey !== currentPubkey
+          }
           canRemoveMember={canRemoveMember(member)}
           isActionPending={
             isActionPending ||
@@ -640,7 +659,9 @@ export function MembersSidebar({
           onChangeRole={(m, role) => {
             void changeRoleMutation.mutateAsync({ pubkey: m.pubkey, role });
           }}
-          onEditRespondTo={memberIsBot ? setEditRespondToAgent : undefined}
+          onEditRespondTo={
+            !managed && memberIsBot ? setEditRespondToAgent : undefined
+          }
           onManagedAgentAction={(agent) => {
             void handleAgentLifecycleAction(agent, managedAgentRuntime);
           }}

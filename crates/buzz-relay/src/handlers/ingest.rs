@@ -1555,10 +1555,27 @@ async fn ingest_event_inner(
         )));
     }
 
+    // Server-owned policy is resolved from the host-bound community, never
+    // from event tags. Run this after identity/scope checks and before any
+    // command routing, storage, or side effect.
+    let collaboration_guard = super::collaboration_policy::enforce(tenant, state, &event)
+        .await
+        .map_err(IngestError::Rejected)?;
+    let control_plane_authorized = collaboration_guard.as_ref().is_some_and(|guard| {
+        guard.authority().policy == buzz_db::CollaborationPolicy::ControlPlane
+    });
+
     // Command kinds are routed AFTER signature verification, timestamp check,
     // pubkey/auth match, and scope validation — never before.
     if buzz_core::kind::is_command_kind(kind_u32) {
-        return super::command_executor::handle_command(tenant, state, event, auth).await;
+        return super::command_executor::handle_command(
+            tenant,
+            state,
+            event,
+            auth,
+            control_plane_authorized,
+        )
+        .await;
     }
 
     // Product feedback is sidecarred directly into its private deployment table.
@@ -1929,9 +1946,15 @@ async fn ingest_event_inner(
     }
 
     if crate::handlers::side_effects::is_admin_kind(kind_u32) {
-        crate::handlers::side_effects::validate_admin_event(tenant, kind_u32, &event, state)
-            .await
-            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        crate::handlers::side_effects::validate_admin_event(
+            tenant,
+            kind_u32,
+            &event,
+            state,
+            control_plane_authorized,
+        )
+        .await
+        .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
 
     // Processed here (verify consent, mutate archived_identities, emit the
@@ -2458,9 +2481,14 @@ async fn ingest_event_inner(
     }
 
     if crate::handlers::side_effects::is_side_effect_kind(kind_u32) {
-        if let Err(e) =
-            crate::handlers::side_effects::handle_side_effects(tenant, kind_u32, &event, state)
-                .await
+        if let Err(e) = crate::handlers::side_effects::handle_side_effects(
+            tenant,
+            kind_u32,
+            &event,
+            state,
+            control_plane_authorized,
+        )
+        .await
         {
             warn!(event_id = %event_id_hex, kind = kind_u32, "Side effect failed: {e}");
         }

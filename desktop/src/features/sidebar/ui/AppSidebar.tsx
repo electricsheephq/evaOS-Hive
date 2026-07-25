@@ -54,6 +54,7 @@ import {
 import { useDeferredModalOpen } from "@/shared/ui/deferredModalOpen";
 import { SidebarUpdateCard } from "@/features/settings/SidebarUpdateCard";
 import { useUpdaterContext } from "@/features/settings/hooks/UpdaterProvider";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import { shouldShowSidebarUpdateCard } from "@/features/settings/sidebarUpdateCardVisibility";
 import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
 import type {
@@ -237,6 +238,7 @@ export function AppSidebar({
   onStarChannel,
   onUnstarChannel,
 }: AppSidebarProps) {
+  const { policy } = useEvaosTeamsAuthority();
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
   const { status: updateStatus } = useUpdaterContext();
   const canShowSidebarUpdateCard = shouldShowSidebarUpdateCard(updateStatus);
@@ -382,6 +384,12 @@ export function AppSidebar({
     useDeleteChannelDialog((channel) => {
       if (channel.id === selectedChannelId) onSelectHome();
     });
+  const deleteChannel = policy.canManageChannels
+    ? requestDeleteChannel
+    : undefined;
+  const leaveChannel = policy.canJoinPublicChannels
+    ? requestLeaveChannel
+    : undefined;
 
   const streamChannels = React.useMemo(
     () => channels.filter((channel) => channel.channelType === "stream"),
@@ -654,8 +662,8 @@ export function AppSidebar({
                       starredChannelIds={starredChannelIds}
                       onStarChannel={onStarChannel}
                       onUnstarChannel={onUnstarChannel}
-                      onDeleteChannel={requestDeleteChannel}
-                      onLeaveChannel={requestLeaveChannel}
+                      onDeleteChannel={deleteChannel}
+                      onLeaveChannel={leaveChannel}
                     />
                   ) : null}
                   <SidebarDndContext
@@ -711,8 +719,10 @@ export function AppSidebar({
                         onCreateSectionForChannel={
                           handleCreateSectionForChannel
                         }
-                        onCreateChannel={() =>
-                          handleCreateChannelInSection(section.id)
+                        onCreateChannel={
+                          policy.canManageChannels && onBrowseChannels
+                            ? () => handleCreateChannelInSection(section.id)
+                            : undefined
                         }
                         onRenameSection={() => setRenameSectionTarget(section)}
                         onDeleteSection={() => setDeleteSectionTarget(section)}
@@ -724,8 +734,8 @@ export function AppSidebar({
                         starredChannelIds={starredChannelIds}
                         onStarChannel={onStarChannel}
                         onUnstarChannel={onUnstarChannel}
-                        onDeleteChannel={requestDeleteChannel}
-                        onLeaveChannel={requestLeaveChannel}
+                        onDeleteChannel={deleteChannel}
+                        onLeaveChannel={leaveChannel}
                       />
                     ))}
                     <ChannelGroupSection
@@ -743,7 +753,7 @@ export function AppSidebar({
                       listTestId="stream-list"
                       quickCreateLabel="Browse channels"
                       onQuickCreateClick={() => onBrowseChannels?.()}
-                      showQuickCreate
+                      showQuickCreate={Boolean(onBrowseChannels)}
                       onMarkAllRead={onMarkAllChannelsRead}
                       onMarkChannelRead={onMarkChannelRead}
                       onMarkChannelUnread={onMarkChannelUnread}
@@ -764,8 +774,8 @@ export function AppSidebar({
                       starredChannelIds={starredChannelIds}
                       onStarChannel={onStarChannel}
                       onUnstarChannel={onUnstarChannel}
-                      onDeleteChannel={requestDeleteChannel}
-                      onLeaveChannel={requestLeaveChannel}
+                      onDeleteChannel={deleteChannel}
+                      onLeaveChannel={leaveChannel}
                     />
                   </SidebarDndContext>
                   <FeatureGate feature="forum">
@@ -782,7 +792,11 @@ export function AppSidebar({
                       }
                       actionsTestId="section-actions-forums"
                       listTestId="forum-list"
-                      onCreateClick={() => openCreateDialog("forum")}
+                      onCreateClick={
+                        policy.canManageChannels
+                          ? () => openCreateDialog("forum")
+                          : undefined
+                      }
                       onMarkAllRead={onMarkAllChannelsRead}
                       onMarkChannelRead={onMarkChannelRead}
                       onMarkChannelUnread={onMarkChannelUnread}
@@ -795,53 +809,55 @@ export function AppSidebar({
                       mutedChannelIds={mutedChannelIds}
                       onMuteChannel={onMuteChannel}
                       onUnmuteChannel={onUnmuteChannel}
-                      onDeleteChannel={requestDeleteChannel}
+                      onDeleteChannel={deleteChannel}
                     />
                   </FeatureGate>
-                  <SidebarSection
-                    action={
-                      <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
-                        <SectionQuickAction
-                          label="New message"
-                          onClick={onNewMessage}
-                          testId="section-actions-dms-quick-create"
-                        />
-                        <SectionActionsMenu
-                          sectionLabel="direct messages"
-                          testId="section-actions-dms"
-                          onOpenChange={setDmActionsMenuOpen}
-                          onNewMessage={onNewMessage}
-                          sortMode={sortModeFor("dms")}
-                          onSortModeChange={(mode) =>
-                            setSortModeFor("dms", mode)
-                          }
-                        />
-                      </div>
-                    }
-                    dmParticipantsByChannelId={dmParticipantsByChannelId}
-                    isCollapsed={collapsedGroups.directMessages}
-                    isActiveChannel={selectedView === "channel"}
-                    activeWorkingByChannelId={activeWorkingByChannelId}
-                    items={sortedDirectMessages}
-                    channelLabels={dmChannelLabels}
-                    onHideDm={onHideDm}
-                    onMarkChannelRead={onMarkChannelRead}
-                    onMarkChannelUnread={onMarkChannelUnread}
-                    onSelectChannel={onSelectChannel}
-                    onToggleCollapsed={() =>
-                      toggleCollapsedGroup("directMessages")
-                    }
-                    presenceByChannelId={dmPresenceByChannelId}
-                    selectedChannelId={selectedChannelId}
-                    testId="dm-list"
-                    title="Direct messages"
-                    sectionActionsOpen={dmActionsMenuOpen}
-                    unreadChannelCounts={unreadChannelCounts}
-                    unreadChannelIds={unreadChannelIds}
-                    mutedChannelIds={mutedChannelIds}
-                    onMuteChannel={onMuteChannel}
-                    onUnmuteChannel={onUnmuteChannel}
-                  />
+                  {policy.canBrowsePrivateRooms ? (
+                    <SidebarSection
+                      action={
+                        <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+                          <SectionQuickAction
+                            label="New message"
+                            onClick={onNewMessage}
+                            testId="section-actions-dms-quick-create"
+                          />
+                          <SectionActionsMenu
+                            sectionLabel="direct messages"
+                            testId="section-actions-dms"
+                            onOpenChange={setDmActionsMenuOpen}
+                            onNewMessage={onNewMessage}
+                            sortMode={sortModeFor("dms")}
+                            onSortModeChange={(mode) =>
+                              setSortModeFor("dms", mode)
+                            }
+                          />
+                        </div>
+                      }
+                      dmParticipantsByChannelId={dmParticipantsByChannelId}
+                      isCollapsed={collapsedGroups.directMessages}
+                      isActiveChannel={selectedView === "channel"}
+                      activeWorkingByChannelId={activeWorkingByChannelId}
+                      items={sortedDirectMessages}
+                      channelLabels={dmChannelLabels}
+                      onHideDm={onHideDm}
+                      onMarkChannelRead={onMarkChannelRead}
+                      onMarkChannelUnread={onMarkChannelUnread}
+                      onSelectChannel={onSelectChannel}
+                      onToggleCollapsed={() =>
+                        toggleCollapsedGroup("directMessages")
+                      }
+                      presenceByChannelId={dmPresenceByChannelId}
+                      selectedChannelId={selectedChannelId}
+                      testId="dm-list"
+                      title="Direct messages"
+                      sectionActionsOpen={dmActionsMenuOpen}
+                      unreadChannelCounts={unreadChannelCounts}
+                      unreadChannelIds={unreadChannelIds}
+                      mutedChannelIds={mutedChannelIds}
+                      onMuteChannel={onMuteChannel}
+                      onUnmuteChannel={onUnmuteChannel}
+                    />
+                  ) : null}
                 </>
               ) : null}
 

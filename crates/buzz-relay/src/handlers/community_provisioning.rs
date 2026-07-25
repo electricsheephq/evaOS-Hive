@@ -18,12 +18,19 @@
 //! ## Request shape
 //!
 //! ```json
-//! { "host": "acme.communities.buzz.xyz", "initial_owner_pubkey": "<hex>" }
+//! {
+//!   "host": "acme.communities.buzz.xyz",
+//!   "initial_owner_pubkey": "<hex>",
+//!   "collaboration_policy": "control_plane",
+//!   "create_only": true
+//! }
 //! ```
 //!
 //! `initial_owner_pubkey` is optional. When present for an existing community,
 //! it rotates that community owner through the same bootstrap path used by
 //! `RELAY_OWNER_PUBKEY`; relay operators are deployment-root authorities.
+//! `collaboration_policy` is optional and defaults to `native`; supplying it
+//! for an existing community requires an owner so both values change atomically.
 
 use std::sync::Arc;
 
@@ -51,6 +58,10 @@ pub struct ProvisionCommunityRequest {
     /// host instead of converging or rotating ownership.
     #[serde(default)]
     pub create_only: bool,
+    /// Optional server-owned collaboration authority mode. Existing callers
+    /// that omit it retain the upstream-native behavior.
+    #[serde(default)]
+    pub collaboration_policy: Option<String>,
 }
 
 /// JSON response from `POST /operator/communities`.
@@ -66,6 +77,8 @@ pub struct ProvisionCommunityResponse {
     /// Echoes the validated owner pubkey when an owner bootstrap/rotation ran.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_pubkey: Option<String>,
+    /// Effective server-owned collaboration policy.
+    pub collaboration_policy: &'static str,
 }
 
 pub(crate) fn validate_pubkey_hex(value: &str) -> Option<String> {
@@ -276,6 +289,20 @@ pub async fn provision_community(
             })
         })
         .transpose()?;
+    let requested_policy = request
+        .collaboration_policy
+        .as_deref()
+        .map(|value| {
+            value
+                .parse::<buzz_db::CollaborationPolicy>()
+                .map_err(|message| format!("invalid collaboration_policy: {message}"))
+        })
+        .transpose()?;
+    if requested_policy.is_some() && initial_owner.is_none() {
+        return Err(
+            "initial_owner_pubkey is required when collaboration_policy is supplied".to_string(),
+        );
+    }
 
     if request.create_only {
         let owner_hex = initial_owner.as_deref().ok_or_else(|| {
@@ -283,7 +310,11 @@ pub async fn provision_community(
         })?;
         let record = match state
             .db
-            .create_community_with_owner(&request.host, owner_hex)
+            .create_community_with_owner_and_policy(
+                &request.host,
+                owner_hex,
+                requested_policy.unwrap_or(buzz_db::CollaborationPolicy::Native),
+            )
             .await
             .map_err(|e| format!("failed to create community: {e}"))?
         {
@@ -312,12 +343,34 @@ pub async fn provision_community(
             host: record.host,
             status: "created",
             owner_pubkey: initial_owner,
+            collaboration_policy: requested_policy
+                .unwrap_or(buzz_db::CollaborationPolicy::Native)
+                .as_str(),
         });
     }
 
     // Legacy convergence mode remains available to deployment operators and
     // startup tooling. Clients provisioning on behalf of end users must use
     // create_only so an existing owner can never be rotated by a create race.
+    if let Some(policy) = requested_policy {
+        let owner_hex = initial_owner
+            .as_deref()
+            .expect("validated above: policy requires initial owner");
+        let record = state
+            .db
+            .ensure_community_with_owner_and_policy(&request.host, owner_hex, policy)
+            .await
+            .map_err(|e| format!("failed to converge community owner/policy: {e}"))?;
+        publish_membership_snapshot_if_required(state, record.id, &record.host).await;
+        return Ok(ProvisionCommunityResponse {
+            community_id: record.id.to_string(),
+            host: record.host,
+            status: if record.created { "created" } else { "existed" },
+            owner_pubkey: initial_owner,
+            collaboration_policy: policy.as_str(),
+        });
+    }
+
     let record = state
         .db
         .ensure_configured_community(&request.host)
@@ -333,6 +386,14 @@ pub async fn provision_community(
         publish_membership_snapshot_if_required(state, record.id, &record.host).await;
     }
 
+    let effective_policy = state
+        .db
+        .get_community_collaboration_authority(record.id)
+        .await
+        .map_err(|e| format!("failed to read community collaboration policy: {e}"))?
+        .ok_or_else(|| "community is not active".to_string())?
+        .policy;
+
     info!(
         operator = %operator_hex,
         community = %record.id,
@@ -347,6 +408,7 @@ pub async fn provision_community(
         host: record.host,
         status: if record.created { "created" } else { "existed" },
         owner_pubkey: initial_owner,
+        collaboration_policy: effective_policy.as_str(),
     })
 }
 

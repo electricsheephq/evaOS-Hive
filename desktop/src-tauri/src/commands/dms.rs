@@ -19,6 +19,9 @@ pub async fn open_dm(
     pubkeys: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<ChannelInfo, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed direct-message membership is controlled by ElectricSheep".to_string());
+    }
     // Submit a kind:41010 dm-open event; the relay replies with the channel id
     // in its OK message payload.
     let builder = events::build_dm_open(&pubkeys)?;

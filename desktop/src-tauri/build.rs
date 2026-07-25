@@ -4,7 +4,43 @@ include!("src/commands/reconnect_hook_config.rs");
 
 use base64::Engine as _;
 
+#[allow(dead_code)]
+#[path = "src/product_contract.rs"]
+mod product_contract;
+
+fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                merge_json(base.entry(key).or_insert(serde_json::Value::Null), value);
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+fn configure_managed_product() {
+    if std::env::var_os("CARGO_FEATURE_EVAOS_TEAMS_MANAGED").is_none() {
+        return;
+    }
+    let mut config = std::env::var("TAURI_CONFIG")
+        .ok()
+        .map(|value| {
+            serde_json::from_str(&value)
+                .unwrap_or_else(|error| panic!("TAURI_CONFIG is not valid JSON: {error}"))
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
+    merge_json(&mut config, product_contract::managed_tauri_overlay());
+    let config = config.to_string();
+    std::env::set_var("TAURI_CONFIG", &config);
+    // `tauri_build` reads the build-script process environment, while
+    // `tauri::generate_context!()` expands later in rustc. Propagate the same
+    // merged overlay to rustc so runtime context and bundle registration agree.
+    println!("cargo:rustc-env=TAURI_CONFIG={config}");
+}
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EVAOS_TEAMS_MANAGED");
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_URL");
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_HTTP");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");
@@ -106,7 +142,14 @@ fn main() {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    if updater_public_key.is_some() && updater_endpoint.is_some() {
+    let managed = std::env::var_os("CARGO_FEATURE_EVAOS_TEAMS_MANAGED").is_some();
+    let updater_enabled = product_contract::updater_enabled(
+        managed,
+        updater_public_key.as_deref(),
+        updater_endpoint.as_deref(),
+    )
+    .unwrap_or_else(|message| panic!("{message}"));
+    if updater_enabled {
         println!("cargo:rustc-cfg=buzz_updater_enabled");
     }
 
@@ -125,6 +168,7 @@ fn main() {
         );
     }
 
+    configure_managed_product();
     tauri_build::try_build(
         tauri_build::Attributes::new().plugin(
             "websocket",

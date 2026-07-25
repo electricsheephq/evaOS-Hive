@@ -144,12 +144,13 @@ pub async fn handle_side_effects(
     kind: u32,
     event: &Event,
     state: &Arc<AppState>,
+    control_plane_authorized: bool,
 ) -> anyhow::Result<()> {
     match kind {
         0 => handle_kind0_profile(tenant, event, state).await,
         5 => handle_standard_deletion_event(tenant, event, state).await,
-        9000 => handle_put_user(tenant, event, state).await,
-        9001 => handle_remove_user(tenant, event, state).await,
+        9000 => handle_put_user(tenant, event, state, control_plane_authorized).await,
+        9001 => handle_remove_user(tenant, event, state, control_plane_authorized).await,
         9002 => handle_edit_metadata(tenant, event, state).await,
         9005 => handle_delete_event_side_effect(tenant, event, state).await,
         9007 => handle_create_group(tenant, event, state).await,
@@ -261,6 +262,7 @@ pub async fn validate_admin_event(
     kind: u32,
     event: &Event,
     state: &Arc<AppState>,
+    control_plane_authorized: bool,
 ) -> anyhow::Result<()> {
     // CREATE_GROUP doesn't need an existing channel — skip h-tag extraction
     if kind == 9007 {
@@ -299,7 +301,7 @@ pub async fn validate_admin_event(
 
             // PUT_USER: open channels allow any authenticated user; private channels
             // require the actor to be an existing member (any role can invite).
-            if channel.visibility == "private" {
+            if channel.visibility == "private" && !control_plane_authorized {
                 let members = state.db.get_members(tenant.community(), channel_id).await?;
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
@@ -367,6 +369,9 @@ pub async fn validate_admin_event(
             // REMOVE_USER: self-remove allowed unless actor is the last owner; removing others requires owner/admin
             let target_pubkey =
                 extract_p_tag(event).ok_or_else(|| anyhow::anyhow!("missing p tag"))?;
+            if control_plane_authorized {
+                return Ok(());
+            }
             if target_pubkey == actor_bytes {
                 // Self-removal: must be an active member, and cannot be the last owner.
                 let members = state.db.get_members(tenant.community(), channel_id).await?;
@@ -510,6 +515,9 @@ pub async fn validate_admin_event(
                 k == "name" || k == "about" || k == "archived" || k == "visibility" || k == "ttl"
             });
             if has_privileged_tag {
+                if control_plane_authorized {
+                    return Ok(());
+                }
                 let members = state.db.get_members(tenant.community(), channel_id).await?;
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
@@ -633,6 +641,9 @@ pub async fn validate_admin_event(
             }
         }
         9008 => {
+            if control_plane_authorized {
+                return Ok(());
+            }
             // DELETE_GROUP: owner only, or the owning human of the channel's agent-owner.
             let members = state.db.get_members(tenant.community(), channel_id).await?;
             let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
@@ -652,6 +663,9 @@ pub async fn validate_admin_event(
             }
         }
         9022 => {
+            if control_plane_authorized {
+                return Ok(());
+            }
             // LEAVE_REQUEST: must be an active member, and cannot be the last owner.
             let members = state.db.get_members(tenant.community(), channel_id).await?;
             let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
@@ -1204,6 +1218,7 @@ async fn handle_put_user(
     tenant: &TenantContext,
     event: &Event,
     state: &Arc<AppState>,
+    control_plane_authorized: bool,
 ) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
@@ -1215,16 +1230,29 @@ async fn handle_put_user(
 
     let actor_bytes = event.pubkey.to_bytes().to_vec();
 
-    state
-        .db
-        .add_member(
-            tenant.community(),
-            channel_id,
-            &target_pubkey,
-            role,
-            Some(&actor_bytes),
-        )
-        .await?;
+    if control_plane_authorized {
+        state
+            .db
+            .add_member_as_control_identity(
+                tenant.community(),
+                channel_id,
+                &target_pubkey,
+                role,
+                &actor_bytes,
+            )
+            .await?;
+    } else {
+        state
+            .db
+            .add_member(
+                tenant.community(),
+                channel_id,
+                &target_pubkey,
+                role,
+                Some(&actor_bytes),
+            )
+            .await?;
+    }
     state.invalidate_membership(tenant, channel_id, &target_pubkey);
 
     let actor_hex = hex::encode(&actor_bytes);
@@ -1266,6 +1294,7 @@ async fn handle_remove_user(
     tenant: &TenantContext,
     event: &Event,
     state: &Arc<AppState>,
+    control_plane_authorized: bool,
 ) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
@@ -1286,10 +1315,22 @@ async fn handle_remove_user(
         }
     }
 
-    state
-        .db
-        .remove_member(tenant.community(), channel_id, &target_pubkey, &actor_bytes)
-        .await?;
+    if control_plane_authorized {
+        state
+            .db
+            .remove_member_as_control_identity(
+                tenant.community(),
+                channel_id,
+                &target_pubkey,
+                &actor_bytes,
+            )
+            .await?;
+    } else {
+        state
+            .db
+            .remove_member(tenant.community(), channel_id, &target_pubkey, &actor_bytes)
+            .await?;
+    }
     state.invalidate_membership(tenant, channel_id, &target_pubkey);
     evict_live_channel_subscriptions(tenant, state, channel_id, &target_pubkey).await;
 

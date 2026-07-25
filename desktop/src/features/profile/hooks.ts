@@ -30,6 +30,11 @@ import type {
   UsersBatchResponse,
 } from "@/shared/api/types";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
+import {
+  getHiveCollaborationState,
+  type HiveCollaborationState,
+} from "@/features/evaosTeams/api";
 import { getAvatarSnapshotUrl } from "@/shared/lib/animatedAvatar";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import {
@@ -48,6 +53,48 @@ export const profileQueryKey = ["profile"] as const;
 export const contactListQueryKey = (pubkey: string) =>
   ["contact-list", pubkey] as const;
 export const allPulseTimelinesQueryKey = ["pulse-timeline"] as const;
+
+function searchManagedHiveDirectory(
+  state: HiveCollaborationState,
+  query: string,
+  limit: number,
+): UserSearchResult[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const matches = (values: Array<string | undefined>) =>
+    normalizedQuery.length === 0 ||
+    values.some((value) => value?.toLowerCase().includes(normalizedQuery));
+  return [
+    ...state.members.flatMap((member): UserSearchResult[] =>
+      member.publicKey &&
+      matches([member.displayName, member.email, member.publicKey])
+        ? [
+            {
+              pubkey: member.publicKey,
+              displayName: member.displayName,
+              avatarUrl: null,
+              nip05Handle: null,
+              ownerPubkey: null,
+              isAgent: false,
+            },
+          ]
+        : [],
+    ),
+    ...state.agents.flatMap((agent): UserSearchResult[] =>
+      matches([agent.displayName, agent.publicKey])
+        ? [
+            {
+              pubkey: agent.publicKey,
+              displayName: agent.displayName,
+              avatarUrl: null,
+              nip05Handle: null,
+              ownerPubkey: null,
+              isAgent: true,
+            },
+          ]
+        : [],
+    ),
+  ].slice(0, limit);
+}
 
 /**
  * Persists a freshly-fetched profile to localStorage as the offline fallback.
@@ -404,16 +451,27 @@ export function useUserSearchQuery(
     limit?: number;
   },
 ) {
+  const { managed, policy } = useEvaosTeamsAuthority();
   const normalizedQuery = query.trim().toLowerCase();
   const enabled =
+    policy.canBrowsePeople &&
     (options?.enabled ?? true) &&
     (options?.allowEmpty === true || normalizedQuery.length > 0);
 
   return useQuery<UserSearchResult[]>({
     enabled,
     queryKey: ["user-search", normalizedQuery, options?.limit ?? 8],
-    queryFn: async () =>
-      (await searchUsers(normalizedQuery, options?.limit ?? 8)).users,
+    queryFn: async () => {
+      const limit = options?.limit ?? 8;
+      if (managed) {
+        return searchManagedHiveDirectory(
+          await getHiveCollaborationState(),
+          normalizedQuery,
+          limit,
+        );
+      }
+      return (await searchUsers(normalizedQuery, limit)).users;
+    },
     staleTime: 30_000,
     gcTime: 5 * 60 * 1_000,
   });
@@ -427,8 +485,10 @@ export function useInfiniteUserSearchQuery(
     limit?: number;
   },
 ) {
+  const { managed, policy } = useEvaosTeamsAuthority();
   const normalizedQuery = query.trim().toLowerCase();
   const enabled =
+    policy.canBrowsePeople &&
     (options?.enabled ?? true) &&
     (options?.allowEmpty === true || normalizedQuery.length > 0);
 
@@ -440,12 +500,24 @@ export function useInfiniteUserSearchQuery(
       normalizedQuery,
       options?.limit ?? 50,
     ],
-    queryFn: ({ pageParam }) =>
-      searchUsers(
+    queryFn: async ({ pageParam }) => {
+      const limit = options?.limit ?? 50;
+      if (managed) {
+        return {
+          users: searchManagedHiveDirectory(
+            await getHiveCollaborationState(),
+            normalizedQuery,
+            limit,
+          ),
+          nextCursor: null,
+        };
+      }
+      return searchUsers(
         normalizedQuery,
-        options?.limit ?? 50,
+        limit,
         typeof pageParam === "string" ? pageParam : null,
-      ),
+      );
+    },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     initialPageParam: null,
     staleTime: 30_000,

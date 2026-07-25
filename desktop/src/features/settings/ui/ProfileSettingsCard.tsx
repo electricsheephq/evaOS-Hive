@@ -8,6 +8,8 @@ import {
 import * as React from "react";
 import { toast } from "sonner";
 
+import { EvaosTeamsSignOutSection } from "@/features/evaosTeams/EvaosTeamsSignOutSection";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   useProfileQuery,
   useUpdateProfileMutation,
@@ -21,6 +23,7 @@ import {
   parseEmojiAvatarDataUrl,
 } from "@/features/profile/ui/ProfileAvatarEditor";
 import { cn } from "@/shared/lib/cn";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { Input } from "@/shared/ui/input";
 import { Spinner } from "@/shared/ui/spinner";
 import { Textarea } from "@/shared/ui/textarea";
@@ -218,6 +221,8 @@ export function ProfileSettingsCard({
   currentPubkey,
   fallbackDisplayName,
 }: ProfileSettingsCardProps) {
+  const authority = useEvaosTeamsAuthority();
+  const product = desktopProductPolicy();
   const shouldReduceMotion = useReducedMotion();
   const profileQuery = useProfileQuery();
   const updateProfileMutation = useUpdateProfileMutation();
@@ -569,7 +574,7 @@ export function ProfileSettingsCard({
       <div>
         <SettingsSectionHeader
           title="Profile"
-          description="Update how your name, avatar, and bio appear across Buzz."
+          description={`Update how your name, avatar, and bio appear across ${product.productName}.`}
         />
 
         <div className="space-y-3">
@@ -859,8 +864,9 @@ export function ProfileSettingsCard({
                                   Identity
                                 </h2>
                                 <p className="mt-1 text-sm font-normal text-muted-foreground">
-                                  Your keypair and NIP-05 handle are fixed for
-                                  this device.
+                                  {authority.managed
+                                    ? "Your managed public identity is fixed for this device."
+                                    : "Your keypair and NIP-05 handle are fixed for this device."}
                                 </p>
                               </div>
                               <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-[color,transform] duration-150 ease-out group-open:rotate-180 group-hover/identity:text-foreground group-focus-visible/identity:text-foreground" />
@@ -883,7 +889,7 @@ export function ProfileSettingsCard({
                                 testId="profile-nip05"
                                 value={nip05Handle}
                               />
-                              <NsecRevealRow />
+                              {authority.managed ? null : <NsecRevealRow />}
                             </div>
                           </details>
                         </div>
@@ -944,7 +950,7 @@ export function ProfileSettingsCard({
         </div>
       </div>
 
-      <SignOutSection />
+      {authority.managed ? <EvaosTeamsSignOutSection /> : <SignOutSection />}
     </section>
   );
 }

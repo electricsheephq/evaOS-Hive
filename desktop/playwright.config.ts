@@ -114,6 +114,7 @@ export default defineConfig({
         "**/nostr-bind.spec.ts",
         "**/mobile-pairing-qr.spec.ts",
         "**/profile-nsec-reveal.spec.ts",
+        "**/evaos-teams-branding.spec.ts",
         "**/signout-confirmation.spec.ts",
         "**/agent-provider-dropdowns.spec.ts",
         "**/agent-lifecycle-feedback.spec.ts",

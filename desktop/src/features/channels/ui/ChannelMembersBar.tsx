@@ -25,18 +25,77 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 type ChannelMembersBarProps = {
   channel: Channel;
   currentPubkey?: string;
   isAddBotOpen?: boolean;
   onAddBotOpenChange?: (open: boolean) => void;
-  onManageChannel: () => void;
-  onToggleMembers: () => void;
+  onManageChannel?: () => void;
+  onToggleMembers?: () => void;
   variant?: "inline" | "compact";
 };
 
-export function ChannelMembersBar({
+export function ChannelMembersBar({ ...props }: ChannelMembersBarProps) {
+  const { managed, policy } = useEvaosTeamsAuthority();
+  if (!managed) return <NativeChannelMembersBar {...props} />;
+  if (!policy.canViewMembers || !props.onToggleMembers) return null;
+
+  return props.variant === "compact" ? (
+    <div className="flex items-center gap-1">
+      <Button
+        data-testid="channel-members-trigger"
+        onClick={props.onToggleMembers}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        <Users className="h-4 w-4" />
+        <span>Members</span>
+      </Button>
+      {props.onManageChannel ? (
+        <Button
+          aria-label="Manage channel"
+          data-testid="channel-management-trigger"
+          onClick={props.onManageChannel}
+          size="icon"
+          type="button"
+          variant="outline"
+        >
+          <Settings2 className="h-4 w-4" />
+        </Button>
+      ) : null}
+    </div>
+  ) : (
+    <div className="flex items-center gap-[6px]">
+      <Button
+        aria-label="View channel members"
+        className="h-8 px-2.5"
+        data-testid="channel-members-trigger"
+        onClick={props.onToggleMembers}
+        type="button"
+        variant="outline"
+      >
+        <Users className="h-4 w-4" />
+      </Button>
+      {props.onManageChannel ? (
+        <Button
+          aria-label="Manage channel"
+          data-testid="channel-management-trigger"
+          onClick={props.onManageChannel}
+          size="icon"
+          type="button"
+          variant="outline"
+        >
+          <EllipsisVertical className="h-4 w-4" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function NativeChannelMembersBar({
   channel,
   currentPubkey,
   isAddBotOpen: isAddBotOpenProp,
@@ -45,6 +104,7 @@ export function ChannelMembersBar({
   onToggleMembers,
   variant = "inline",
 }: ChannelMembersBarProps) {
+  const authority = useEvaosTeamsAuthority();
   const [uncontrolledAddBotOpen, setUncontrolledAddBotOpen] =
     React.useState(false);
   const isAddBotOpen = isAddBotOpenProp ?? uncontrolledAddBotOpen;
@@ -59,10 +119,19 @@ export function ChannelMembersBar({
   );
   const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
   const queryClient = useQueryClient();
-  const membersQuery = useChannelMembersQuery(channel.id);
-  const providersQuery = useAvailableAcpRuntimes();
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const relayAgentsQuery = useRelayAgentsQuery();
+  const membersQuery = useChannelMembersQuery(
+    channel.id,
+    authority.policy.canViewMembers,
+  );
+  const providersQuery = useAvailableAcpRuntimes({
+    enabled: !authority.managed && authority.policy.canManageAgents,
+  });
+  const managedAgentsQuery = useManagedAgentsQuery({
+    enabled: !authority.managed && authority.policy.canManageAgents,
+  });
+  const relayAgentsQuery = useRelayAgentsQuery({
+    enabled: !authority.managed && authority.policy.canManageAgents,
+  });
   const members = membersQuery.data ?? [];
   const memberCount = membersQuery.data?.length ?? channel.memberCount;
   const providers = React.useMemo(
@@ -217,20 +286,22 @@ export function ChannelMembersBar({
     <React.Fragment>
       {controls}
 
-      <AddChannelBotDialog
-        channelId={channel.id}
-        onCreateAgent={() => {
-          requestOpenCreateAgent({
-            channelId: channel.id,
-            channelName: channel.name,
-          });
-        }}
-        onOpenChange={setIsAddBotOpen}
-        open={isAddBotOpen}
-        providers={providers}
-        providersErrorMessage={dialogErrorMessage}
-        providersLoading={providersQuery.isLoading}
-      />
+      {!authority.managed && authority.policy.canManageAgents ? (
+        <AddChannelBotDialog
+          channelId={channel.id}
+          onCreateAgent={() => {
+            requestOpenCreateAgent({
+              channelId: channel.id,
+              channelName: channel.name,
+            });
+          }}
+          onOpenChange={setIsAddBotOpen}
+          open={isAddBotOpen}
+          providers={providers}
+          providersErrorMessage={dialogErrorMessage}
+          providersLoading={providersQuery.isLoading}
+        />
+      ) : null}
     </React.Fragment>
   );
 }

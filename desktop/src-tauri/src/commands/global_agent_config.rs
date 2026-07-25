@@ -45,6 +45,7 @@ pub struct GlobalAgentConfigSaveResult {
 /// been written yet.
 #[tauri::command]
 pub fn get_global_agent_config(app: AppHandle) -> Result<GlobalAgentConfig, String> {
+    super::managed_authority::require_native_agent_authority()?;
     load_global_agent_config(&app)
 }
 
@@ -64,6 +65,7 @@ pub async fn set_global_agent_config(
     config: GlobalAgentConfig,
     app: AppHandle,
 ) -> Result<GlobalAgentConfigSaveResult, String> {
+    super::managed_authority::require_native_agent_authority()?;
     // ── Phase 1: disk write (sync, spawn_blocking) ────────────────────────
     //
     // Validate, snapshot old config, write new config, collect pre-filter

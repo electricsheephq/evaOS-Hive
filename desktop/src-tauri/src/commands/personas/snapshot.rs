@@ -317,6 +317,7 @@ pub async fn export_agent_snapshot(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    super::super::managed_authority::require_native_agent_authority()?;
     let memory_level = parse_memory_level(&memory_level)?;
     let is_png = parse_format_is_png(&format)?;
 
@@ -380,6 +381,7 @@ pub async fn encode_agent_snapshot_for_send(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<EncodedSnapshotPayload, String> {
+    super::super::managed_authority::require_native_agent_authority()?;
     let memory_level = parse_memory_level(&memory_level)?;
     let is_png = parse_format_is_png(&format)?;
 

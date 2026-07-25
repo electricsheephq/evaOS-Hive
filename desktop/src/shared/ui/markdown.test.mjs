@@ -534,6 +534,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 
 import { isMessageLink } from "../../features/messages/lib/messageLink.ts";
+import {
+  installDesktopProductPolicy,
+  resetDesktopProductPolicyForTests,
+} from "../product/productIdentity.ts";
 import remarkSpoilers from "../lib/remarkSpoilers.ts";
 
 function messageLinkUrlTransform(value, key) {
@@ -653,12 +657,37 @@ test("remarkMessageLinks: bare buzz://message URL is replaced", () => {
   assert.equal(para.children[0].data.hName, "message-link");
 });
 
-test("remarkMessageLinks: legacy bare buzz://message URL is replaced", () => {
-  const tree = runPlugin(paragraph(text("buzz://message?channel=c&id=m")));
-  const para = tree.children[0];
-  assert.equal(para.children.length, 1);
-  assert.equal(para.children[0].type, "message-link");
-  assert.equal(para.children[0].value, "buzz://message?channel=c&id=m");
+test("remarkMessageLinks: recognizes only the active product scheme", () => {
+  const nativeManagedLink = runPlugin(
+    paragraph(text("evaos-teams://message?channel=c&id=m")),
+  );
+  assert.equal(nativeManagedLink.children[0].children[0].type, "text");
+
+  try {
+    installDesktopProductPolicy({
+      managed: true,
+      productName: "Hive",
+      version: "0.4.26-es.1",
+      bundleIdentifier: "com.electricsheephq.evaos.teams",
+      deepLinkScheme: "evaos-teams",
+      artifactName: "Hive-0.4.26-es.1-arm64.dmg",
+      updateChannel: "managed-beta",
+      updaterEnabled: false,
+      upstreamHostedServicesEnabled: false,
+      originAttribution:
+        "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
+    });
+    const managedLink = runPlugin(
+      paragraph(text("evaos-teams://message?channel=c&id=m")),
+    );
+    assert.equal(managedLink.children[0].children[0].type, "message-link");
+    const managedNativeLink = runPlugin(
+      paragraph(text("buzz://message?channel=c&id=m")),
+    );
+    assert.equal(managedNativeLink.children[0].children[0].type, "text");
+  } finally {
+    resetDesktopProductPolicyForTests();
+  }
 });
 
 test("remarkMessageLinks: mid-sentence URL splits surrounding text", () => {

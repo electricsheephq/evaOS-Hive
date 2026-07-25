@@ -466,6 +466,21 @@ impl From<nostr::event::builder::Error> for RelayError {
     }
 }
 
+impl RelayError {
+    fn log_class(&self) -> &'static str {
+        match self {
+            Self::WebSocket(_) => "websocket",
+            Self::Json(_) => "json",
+            Self::AuthFailed(message) => relay_reply_class(message),
+            Self::NoAuthChallenge => "no_auth_challenge",
+            Self::ConnectionClosed => "connection_closed",
+            Self::Timeout => "timeout",
+            Self::Http(_) => "http",
+            Self::UnexpectedMessage(_) => "unexpected_message",
+        }
+    }
+}
+
 /// A parsed NIP-01 relay message.
 #[derive(Debug, Clone)]
 enum RelayMessage {
@@ -2055,8 +2070,8 @@ async fn handle_ws_message(
         Message::Text(text) => {
             let relay_msg = match parse_relay_message(&text) {
                 Ok(m) => m,
-                Err(e) => {
-                    warn!("failed to parse relay message: {e} — raw: {text}");
+                Err(_) => {
+                    warn!("failed to parse relay message");
                     return true;
                 }
             };
@@ -2191,8 +2206,10 @@ async fn handle_ws_message(
                     debug!("EOSE for subscription {subscription_id}");
                 }
                 RelayMessage::Notice { message } => {
-                    // Fix 4: NOTICE at warn level.
-                    tracing::warn!("relay NOTICE: {message}");
+                    tracing::warn!(
+                        notice_class = relay_reply_class(&message),
+                        "relay NOTICE received"
+                    );
                     // The relay sends NOTICE for rate-limited EVENT/COUNT frames.
                     if message.starts_with("rate-limited:") {
                         let secs = parse_rate_limit_retry_secs(&message).unwrap_or(0);
@@ -2251,12 +2268,10 @@ async fn handle_ws_message(
                         || message.starts_with("restricted")
                         || message.contains("auth");
                     warn!(
-                        "subscription {subscription_id} closed by relay: {message}{}",
-                        if is_auth_error {
-                            " [auth error — reconnect required]"
-                        } else {
-                            ""
-                        }
+                        subscription = %subscription_id,
+                        reply_class = relay_reply_class(&message),
+                        reconnect_required = is_auth_error,
+                        "subscription closed by relay"
                     );
 
                     if is_auth_error {
@@ -2347,7 +2362,10 @@ async fn handle_ws_message(
                     if let Err(e) =
                         send_auth_response(ws, &challenge, relay_url, keys, auth_tag).await
                     {
-                        warn!("failed to respond to mid-session AUTH challenge: {e} — triggering reconnect");
+                        warn!(
+                            error_class = e.log_class(),
+                            "failed to respond to mid-session AUTH challenge; triggering reconnect"
+                        );
                         return false;
                     }
                 }
@@ -2358,11 +2376,20 @@ async fn handle_ws_message(
                 } => {
                     if !accepted && message.starts_with("auth") {
                         // AUTH OK with accepted=false means auth was rejected.
-                        warn!("mid-session AUTH rejected (event {event_id}): {message} — triggering reconnect");
+                        warn!(
+                            event = %event_id,
+                            reply_class = relay_reply_class(&message),
+                            "mid-session AUTH rejected; triggering reconnect"
+                        );
                         return false;
                     }
                     state.acknowledge_observer_frame(&event_id);
-                    debug!("OK for event {event_id}: accepted={accepted} message={message}");
+                    debug!(
+                        event = %event_id,
+                        accepted,
+                        reply_class = relay_reply_class(&message),
+                        "relay acknowledgement received"
+                    );
                 }
             }
             true
@@ -2613,7 +2640,7 @@ async fn send_publish_event_frame(ws: &mut WsStream, event: &Event) -> bool {
     if let Ok(text) = serde_json::to_string(&msg) {
         if let Err(e) = ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await
         {
-            warn!("failed to publish event: {e}");
+            warn!(error_class = e.log_class(), "failed to publish event");
             return false;
         }
     }
@@ -2963,10 +2990,11 @@ async fn try_autonomous_reconnect(
             Err(e) if is_dns_error(&e) && dns_retry_count < MAX_DNS_FLAT_RETRIES => {
                 dns_retry_count += 1;
                 warn!(
-                    "autonomous reconnect DNS failure ({}/{}), flat retry in {:.1}s: {e}",
-                    dns_retry_count,
-                    MAX_DNS_FLAT_RETRIES,
-                    DNS_RETRY_INTERVAL.as_secs_f64()
+                    attempt = dns_retry_count,
+                    max_attempts = MAX_DNS_FLAT_RETRIES,
+                    retry_seconds = DNS_RETRY_INTERVAL.as_secs_f64(),
+                    error_class = e.log_class(),
+                    "autonomous reconnect DNS failure; retrying without consuming ladder rung"
                 );
                 if !dns_flat_sleep(cmd_rx, state, DNS_RETRY_INTERVAL).await {
                     return ReconnectOutcome::Shutdown;
@@ -2974,7 +3002,11 @@ async fn try_autonomous_reconnect(
                 continue; // retry WITHOUT incrementing attempt
             }
             Err(e) => {
-                warn!("autonomous reconnect attempt {} failed: {e}", attempt + 1);
+                warn!(
+                    attempt = attempt + 1,
+                    error_class = e.log_class(),
+                    "autonomous reconnect attempt failed"
+                );
             }
         }
 
@@ -3103,14 +3135,17 @@ async fn wait_for_reconnect(
             // This loop is unbounded (unlike the 10-retry cap in `try_autonomous_reconnect`)
             // so a reconnecting agent keeps trying across extended DNS brownouts.
             Err(e) if is_dns_error(&e) => {
-                warn!("relay reconnect DNS failure (not consuming ladder rung): {e}");
+                warn!(
+                    error_class = e.log_class(),
+                    "relay reconnect DNS failure (not consuming ladder rung)"
+                );
                 if !dns_flat_sleep(cmd_rx, state, DNS_RETRY_INTERVAL).await {
                     return ReconnectOutcome::Shutdown;
                 }
                 continue; // retry without incrementing attempt
             }
             Err(e) => {
-                warn!("relay reconnect failed: {e}");
+                warn!(error_class = e.log_class(), "relay reconnect failed");
             }
         }
 
@@ -3487,6 +3522,24 @@ fn channel_id_from_sub_id(sub_id: &str) -> Option<Uuid> {
         .and_then(|s| s.parse::<Uuid>().ok())
 }
 
+fn relay_reply_class(message: &str) -> &'static str {
+    if message.starts_with("rate-limited:") {
+        "rate_limited"
+    } else if message.starts_with("auth-required") || message.contains("auth") {
+        "authentication"
+    } else if message.starts_with("restricted") {
+        "restricted"
+    } else if message.starts_with("invalid") {
+        "invalid"
+    } else if message.starts_with("blocked") {
+        "blocked"
+    } else if message.trim().is_empty() {
+        "empty"
+    } else {
+        "other"
+    }
+}
+
 /// Per-channel CLOSED denials: the channel is forbidden but the connection is
 /// fine. Match these EXACT strings, never a `starts_with("restricted")` prefix —
 /// a prefix would also swallow connection-level `restricted: insufficient scope`,
@@ -3520,7 +3573,9 @@ fn drop_channel_on_access_denied(state: &mut BgState, sub_id: &str, message: &st
         return false;
     };
     warn!(
-        "channel {channel_id} access denied by relay: {message} — dropping subscription, keeping connection"
+        channel = %channel_id,
+        reply_class = relay_reply_class(message),
+        "channel access denied; dropping subscription and keeping connection"
     );
     state.active_subscriptions.remove(&channel_id);
     state.clear_channel_state(&channel_id);
@@ -3536,20 +3591,20 @@ pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError
     let msg_type = arr
         .first()
         .and_then(|v| v.as_str())
-        .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?;
+        .ok_or_else(|| RelayError::UnexpectedMessage("missing relay message type".to_string()))?;
 
     match msg_type {
         "EVENT" => {
             let sub_id = arr
                 .get(1)
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
+                .ok_or_else(|| {
+                    RelayError::UnexpectedMessage("EVENT missing subscription id".to_string())
+                })?
                 .to_string();
-            let event: Event = serde_json::from_value(
-                arr.get(2)
-                    .cloned()
-                    .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?,
-            )?;
+            let event: Event = serde_json::from_value(arr.get(2).cloned().ok_or_else(|| {
+                RelayError::UnexpectedMessage("EVENT missing event".to_string())
+            })?)?;
             Ok(RelayMessage::Event {
                 subscription_id: sub_id,
                 event: Box::new(event),
@@ -3559,7 +3614,7 @@ pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError
             let event_id = arr
                 .get(1)
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
+                .ok_or_else(|| RelayError::UnexpectedMessage("OK missing event id".to_string()))?
                 .to_string();
             let accepted = arr.get(2).and_then(|v| v.as_bool()).unwrap_or(false);
             let message = arr
@@ -3577,7 +3632,9 @@ pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError
             let sub_id = arr
                 .get(1)
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
+                .ok_or_else(|| {
+                    RelayError::UnexpectedMessage("EOSE missing subscription id".to_string())
+                })?
                 .to_string();
             Ok(RelayMessage::Eose {
                 subscription_id: sub_id,
@@ -3587,7 +3644,9 @@ pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError
             let sub_id = arr
                 .get(1)
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
+                .ok_or_else(|| {
+                    RelayError::UnexpectedMessage("CLOSED missing subscription id".to_string())
+                })?
                 .to_string();
             let message = arr
                 .get(2)
@@ -3611,13 +3670,13 @@ pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError
             let challenge = arr
                 .get(1)
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| RelayError::UnexpectedMessage(text.to_string()))?
+                .ok_or_else(|| RelayError::UnexpectedMessage("AUTH missing challenge".to_string()))?
                 .to_string();
             Ok(RelayMessage::Auth { challenge })
         }
-        other => Err(RelayError::UnexpectedMessage(format!(
-            "unknown message type: {other}"
-        ))),
+        _ => Err(RelayError::UnexpectedMessage(
+            "unknown message type".to_string(),
+        )),
     }
 }
 
@@ -3806,11 +3865,18 @@ where
         match op().await {
             Ok(v) => return Ok(v),
             Err(e) if is_terminal_connect_error(&e) => {
-                warn!("initial relay connect failed with terminal error: {e}");
+                warn!(
+                    error_class = e.log_class(),
+                    "initial relay connect failed with terminal error"
+                );
                 return Err(e);
             }
             Err(e) => {
-                warn!("initial relay connect attempt {attempt} failed: {e}");
+                warn!(
+                    attempt,
+                    error_class = e.log_class(),
+                    "initial relay connect attempt failed"
+                );
                 last_err = Some(e);
             }
         }
@@ -4265,15 +4331,33 @@ mod tests {
 
     #[test]
     fn parse_unknown_type_returns_error() {
-        let text = r#"["UNKNOWN","data"]"#;
+        let text = r#"["UNKNOWN","private message must not enter diagnostics"]"#;
         let result = parse_relay_message(text);
         assert!(result.is_err());
         match result.unwrap_err() {
             RelayError::UnexpectedMessage(msg) => {
                 assert!(msg.contains("unknown message type"));
+                assert!(!msg.contains("private message"));
             }
             e => panic!("expected UnexpectedMessage, got {e:?}"),
         }
+    }
+
+    #[test]
+    fn relay_reply_classes_do_not_copy_remote_text() {
+        assert_eq!(
+            relay_reply_class("rate-limited: retry in 5s"),
+            "rate_limited"
+        );
+        assert_eq!(
+            relay_reply_class("secret-bearing arbitrary relay reply"),
+            "other"
+        );
+        assert!(!relay_reply_class("secret-bearing arbitrary relay reply").contains("secret"));
+        let auth_error =
+            RelayError::AuthFailed("sentinel-provider-credential from relay".to_string());
+        assert_eq!(auth_error.log_class(), "other");
+        assert!(!auth_error.log_class().contains("sentinel"));
     }
 
     #[test]

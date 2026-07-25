@@ -28,6 +28,7 @@ import type { AcpRuntime, ChannelType, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
 import { MENTION_REFERENCE_TAG } from "@/shared/lib/resolveMentionNames";
 import { buildCustomEmojiTags } from "@/shared/lib/customEmojiTags";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 type PendingNonMemberMentionSend = {
   capturedChannelId: string | null;
@@ -165,6 +166,7 @@ export function useMentionSendFlow({
   onSuccessfulExplicitAgentAudience,
   resolvePostSendContent,
 }: UseMentionSendFlowOptions) {
+  const { managed } = useEvaosTeamsAuthority();
   const [pendingNonMemberSend, setPendingNonMemberSend] =
     React.useState<PendingNonMemberMentionSend | null>(null);
   const [nonMemberPromptError, setNonMemberPromptError] = React.useState<
@@ -311,6 +313,15 @@ export function useMentionSendFlow({
           pubkeys: [] as string[],
         };
       }
+      if (managed) {
+        return {
+          errors: [
+            "Managed agents are assigned by ElectricSheep and cannot be created from a mention.",
+          ],
+          agents: [] as ManagedAgent[],
+          pubkeys: [] as string[],
+        };
+      }
 
       const runtimes = await getAvailableRuntimes();
       const defaultRuntime = runtimes[0] ?? null;
@@ -382,6 +393,7 @@ export function useMentionSendFlow({
       getAvailableRuntimes,
       mentions.extractMentionPersonas,
       mentions.registerMentionPubkey,
+      managed,
       onPrepareSendChannel,
       provisionPersonaAgentMutation,
     ],
@@ -824,7 +836,9 @@ export function useMentionSendFlow({
 
     setNonMemberPromptError(null);
     void (async () => {
-      const managedAgentsByPubkey = await getManagedAgentsByPubkey();
+      const managedAgentsByPubkey = managed
+        ? new Map<string, ManagedAgent>()
+        : await getManagedAgentsByPubkey();
       const peoplePubkeys: string[] = [];
       const relayAgentPubkeys: string[] = [];
 
@@ -885,6 +899,7 @@ export function useMentionSendFlow({
     completeSend,
     getManagedAgentsByPubkey,
     mentions.isAgentPubkey,
+    managed,
     pendingNonMemberSend,
   ]);
 

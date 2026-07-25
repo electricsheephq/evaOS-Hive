@@ -13,6 +13,9 @@ use crate::{
 
 #[tauri::command]
 pub fn set_agent_managed_profiles(enabled: bool, state: State<'_, AppState>) {
+    if super::managed_authority::require_native_agent_authority().is_err() {
+        return;
+    }
     state
         .managed_agent_profile_reconcile_enabled
         .store(!enabled, Ordering::Release);
@@ -24,6 +27,7 @@ pub async fn set_managed_agent_start_on_app_launch(
     start_on_app_launch: bool,
     app: AppHandle,
 ) -> Result<ManagedAgentSummary, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let _store_guard = state
@@ -69,6 +73,7 @@ pub async fn set_managed_agent_auto_restart(
     auto_restart_on_config_change: bool,
     app: AppHandle,
 ) -> Result<ManagedAgentSummary, String> {
+    super::managed_authority::require_native_agent_authority()?;
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let _store_guard = state

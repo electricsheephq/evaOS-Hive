@@ -36,6 +36,20 @@ import {
   readChannelSnapshot,
   writeChannelSnapshot,
 } from "@/features/channels/channelSnapshot";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
+import {
+  addHiveRoomParticipant,
+  archiveHiveChannel,
+  createHiveChannel,
+  deleteHiveChannel,
+  getHiveCollaborationState,
+  joinHiveChannel,
+  leaveHiveChannel,
+  openHiveDm,
+  removeHiveRoomParticipant,
+  unarchiveHiveChannel,
+  updateHiveChannel,
+} from "@/features/evaosTeams/api";
 
 export const channelsQueryKey = ["channels"] as const;
 const channelDetailQueryKey = (channelId: string) =>
@@ -65,6 +79,37 @@ function sortChannels(channels: Channel[]) {
 
     return left.name.localeCompare(right.name);
   });
+}
+
+async function waitForManagedChannel(
+  channelId: string,
+  attempts = 20,
+): Promise<Channel> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const channel = (await getChannels()).find(
+      (candidate) => candidate.id === channelId,
+    );
+    if (channel) return channel;
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+  throw new Error(
+    "Hive created the channel, but the relay has not projected it yet. Refresh in a moment.",
+  );
+}
+
+async function waitForManagedChannelDetails(
+  channelId: string,
+  matches: (channel: ChannelDetail) => boolean,
+  attempts = 20,
+): Promise<ChannelDetail> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const channel = await getChannelDetails(channelId);
+    if (matches(channel)) return channel;
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+  throw new Error(
+    "Hive accepted the channel change, but the relay has not projected it yet. Refresh in a moment.",
+  );
 }
 
 export type CachedChannelMember = {
@@ -189,6 +234,7 @@ function setChannelArchivedState(
 
 export function useChannelsQuery(options?: { enabled?: boolean }) {
   const { activeCommunity } = useCommunities();
+  const authority = useEvaosTeamsAuthority();
   const relayUrl = activeCommunity?.relayUrl ?? null;
 
   return useQuery({
@@ -196,7 +242,7 @@ export function useChannelsQuery(options?: { enabled?: boolean }) {
     queryKey: channelsQueryKey,
     queryFn: async () => {
       const channels = sortChannels(await getChannels());
-      if (relayUrl) {
+      if (relayUrl && !authority.managed) {
         writeChannelSnapshot(relayUrl, channels);
       }
       return channels;
@@ -204,12 +250,13 @@ export function useChannelsQuery(options?: { enabled?: boolean }) {
     // Paint the sidebar instantly from the last-known list for this relay, then
     // revalidate. initialDataUpdatedAt:0 marks the seed as already-stale so the
     // background refetch still fires immediately.
-    initialData: relayUrl
-      ? () => {
-          const snapshot = readChannelSnapshot(relayUrl);
-          return snapshot ? sortChannels(snapshot) : undefined;
-        }
-      : undefined,
+    initialData:
+      relayUrl && !authority.managed
+        ? () => {
+            const snapshot = readChannelSnapshot(relayUrl);
+            return snapshot ? sortChannels(snapshot) : undefined;
+          }
+        : undefined,
     initialDataUpdatedAt: 0,
     staleTime: 60_000,
     refetchInterval: 60_000,
@@ -219,9 +266,20 @@ export function useChannelsQuery(options?: { enabled?: boolean }) {
 
 export function useCreateChannelMutation() {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
-    mutationFn: (input: CreateChannelInput) => createChannel(input),
+    mutationFn: async (input: CreateChannelInput) => {
+      if (!authority.managed) return createChannel(input);
+      const result = await createHiveChannel({
+        name: input.name,
+        description: input.description,
+        channelType: input.channelType,
+        visibility: input.visibility,
+        ttlSeconds: input.ttlSeconds,
+      });
+      return waitForManagedChannel(result.roomId);
+    },
     onSuccess: (createdChannel) => {
       queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
         upsertCachedChannel(current, createdChannel),
@@ -241,9 +299,19 @@ export function useCreateChannelMutation() {
 
 export function useOpenDmMutation() {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
-    mutationFn: (input: OpenDmInput) => openDm(input),
+    mutationFn: async (input: OpenDmInput) => {
+      if (!authority.managed) return openDm(input);
+      if (input.pubkeys.length < 1 || input.pubkeys.length > 8) {
+        throw new Error(
+          "Start a managed direct message with between one and eight teammates.",
+        );
+      }
+      const result = await openHiveDm(input.pubkeys);
+      return waitForManagedChannel(result.roomId);
+    },
     onSuccess: (openedChannel) => {
       queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
         upsertCachedChannel(current, openedChannel),
@@ -323,8 +391,9 @@ export function useChannelMembersQuery(
   channelId: string | null,
   enabled = true,
 ) {
+  const { policy } = useEvaosTeamsAuthority();
   return useQuery({
-    enabled: enabled && channelId !== null,
+    enabled: policy.canViewMembers && enabled && channelId !== null,
     queryKey: ["channels", channelId ?? "none", "members"],
     queryFn: async () => {
       if (!channelId) {
@@ -339,6 +408,7 @@ export function useChannelMembersQuery(
 
 export function useUpdateChannelMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
     mutationFn: (input: Omit<UpdateChannelInput, "channelId">) => {
@@ -346,7 +416,22 @@ export function useUpdateChannelMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return updateChannel({ ...input, channelId });
+      if (!authority.managed) {
+        return updateChannel({ ...input, channelId });
+      }
+      return updateHiveChannel(channelId, input).then(() =>
+        waitForManagedChannelDetails(
+          channelId,
+          (channel) =>
+            (input.name === undefined || channel.name === input.name.trim()) &&
+            (input.description === undefined ||
+              channel.description === input.description.trim()) &&
+            (input.visibility === undefined ||
+              channel.visibility === input.visibility) &&
+            (input.ttlSeconds === undefined ||
+              channel.ttlSeconds === input.ttlSeconds),
+        ),
+      );
     },
     onMutate: () => ({ channelId }),
     onSuccess: (updatedChannel) => {
@@ -418,6 +503,7 @@ export function useSetChannelPurposeMutation(channelId: string | null) {
 
 export function useArchiveChannelMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
     mutationFn: async () => {
@@ -425,7 +511,8 @@ export function useArchiveChannelMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      await archiveChannel(channelId);
+      if (authority.managed) await archiveHiveChannel(channelId);
+      else await archiveChannel(channelId);
     },
     onSuccess: () => {
       if (!channelId) {
@@ -442,6 +529,7 @@ export function useArchiveChannelMutation(channelId: string | null) {
 
 export function useUnarchiveChannelMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
     mutationFn: async () => {
@@ -449,7 +537,8 @@ export function useUnarchiveChannelMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      await unarchiveChannel(channelId);
+      if (authority.managed) await unarchiveHiveChannel(channelId);
+      else await unarchiveChannel(channelId);
     },
     onSuccess: () => {
       if (!channelId) {
@@ -466,6 +555,7 @@ export function useUnarchiveChannelMutation(channelId: string | null) {
 
 export function useDeleteChannelMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
     mutationFn: async () => {
@@ -473,7 +563,8 @@ export function useDeleteChannelMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      await deleteChannel(channelId);
+      if (authority.managed) await deleteHiveChannel(channelId);
+      else await deleteChannel(channelId);
     },
     onSuccess: () => {
       if (!channelId) {
@@ -502,9 +593,10 @@ export function useDeleteChannelMutation(channelId: string | null) {
 
 export function useAddChannelMembersMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
-    mutationFn: (
+    mutationFn: async (
       input: Omit<AddChannelMembersInput, "channelId"> & {
         channelId?: string;
       },
@@ -515,7 +607,30 @@ export function useAddChannelMembersMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return addChannelMembers({ ...rest, channelId: effectiveChannelId });
+      if (!authority.managed) {
+        return addChannelMembers({ ...rest, channelId: effectiveChannelId });
+      }
+      const added: string[] = [];
+      const errors: Array<{ pubkey: string; error: string }> = [];
+      for (const pubkey of rest.pubkeys) {
+        try {
+          await addHiveRoomParticipant(
+            effectiveChannelId,
+            pubkey,
+            rest.role === "bot" ? "agent" : "human",
+          );
+          added.push(pubkey);
+        } catch (error) {
+          errors.push({
+            pubkey,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Participant could not be added.",
+          });
+        }
+      }
+      return { added, errors };
     },
     onSettled: async (_data, _err, variables) => {
       // Invalidate the effective channel (the one actually mutated) not the
@@ -528,6 +643,7 @@ export function useAddChannelMembersMutation(channelId: string | null) {
 
 export function useRemoveChannelMemberMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
     mutationFn: async (pubkey: string) => {
@@ -535,7 +651,17 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      await removeChannelMember(channelId, pubkey);
+      if (!authority.managed) {
+        await removeChannelMember(channelId, pubkey);
+        return;
+      }
+      const collaboration = await getHiveCollaborationState();
+      const participantKind = collaboration.agents.some(
+        (agent) => agent.publicKey.toLowerCase() === pubkey.toLowerCase(),
+      )
+        ? "agent"
+        : "human";
+      await removeHiveRoomParticipant(channelId, pubkey, participantKind);
     },
     onSettled: async () => {
       await Promise.all([
@@ -549,6 +675,7 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
 
 export function useJoinChannelMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
     mutationFn: async () => {
@@ -556,7 +683,11 @@ export function useJoinChannelMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      await joinChannel(channelId);
+      if (authority.managed) {
+        await joinHiveChannel(channelId);
+      } else {
+        await joinChannel(channelId);
+      }
     },
     onSettled: async () => {
       await invalidateChannelState(queryClient, channelId);
@@ -566,6 +697,7 @@ export function useJoinChannelMutation(channelId: string | null) {
 
 export function useLeaveChannelMutation(channelId: string | null) {
   const queryClient = useQueryClient();
+  const authority = useEvaosTeamsAuthority();
 
   return useMutation({
     mutationFn: async () => {
@@ -573,7 +705,8 @@ export function useLeaveChannelMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      await leaveChannel(channelId);
+      if (authority.managed) await leaveHiveChannel(channelId);
+      else await leaveChannel(channelId);
     },
     onSettled: async () => {
       await invalidateChannelState(queryClient, channelId);

@@ -33,6 +33,7 @@ use uuid::Uuid;
 use buzz_auth::generate_challenge;
 use buzz_core::tenant::TenantContext;
 use buzz_db::channel::MemberRole;
+use buzz_db::CollaborationPolicy;
 
 use buzz_core::StoredEvent;
 use buzz_pubsub::EventTopic;
@@ -59,6 +60,10 @@ const MAX_MISSED_PONGS: u8 = 3;
 
 /// Auth timeout.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn automatic_huddle_mutation_allowed(policy: CollaborationPolicy) -> bool {
+    policy == CollaborationPolicy::Native
+}
 
 /// WebSocket upgrade handler for `/huddle/:channel_id/audio`.
 pub async fn ws_audio_handler(
@@ -831,32 +836,49 @@ async fn handle_active_audio_connection(
 
     let room_emptied;
     if should_auto_end {
-        info!(channel_id = %channel_id, "audio room empty — auto-ending huddle");
-
-        match state
+        let collaboration_guard = state
             .db
-            .archive_channel(tenant.community(), channel_id)
-            .await
-        {
+            .lock_community_collaboration_policy(tenant.community())
+            .await;
+        match collaboration_guard {
             Err(e) => {
-                warn!(channel_id = %channel_id, "auto-archive failed, huddle stays alive: {e}");
+                warn!(channel_id = %channel_id, "collaboration policy check failed; huddle stays alive: {e}");
                 room.clear_ended();
                 room_emptied = false;
             }
-            Ok(()) => {
-                room_emptied = state
-                    .audio_rooms
-                    .cleanup_if_empty(tenant.community(), channel_id);
+            Ok(guard) if !automatic_huddle_mutation_allowed(guard.authority().policy) => {
+                info!(channel_id = %channel_id, "control-plane huddle awaits explicit archive");
+                room.clear_ended();
+                room_emptied = false;
+            }
+            Ok(_guard) => {
+                info!(channel_id = %channel_id, "audio room empty — auto-ending huddle");
+                match state
+                    .db
+                    .archive_channel(tenant.community(), channel_id)
+                    .await
+                {
+                    Err(e) => {
+                        warn!(channel_id = %channel_id, "auto-archive failed, huddle stays alive: {e}");
+                        room.clear_ended();
+                        room_emptied = false;
+                    }
+                    Ok(()) => {
+                        room_emptied = state
+                            .audio_rooms
+                            .cleanup_if_empty(tenant.community(), channel_id);
 
-                emit_participant_event(
-                    &state,
-                    &tenant,
-                    Kind::Custom(48103),
-                    channel_id,
-                    parent_id_for_event,
-                    &pubkey_hex,
-                )
-                .await;
+                        emit_participant_event(
+                            &state,
+                            &tenant,
+                            Kind::Custom(48103),
+                            channel_id,
+                            parent_id_for_event,
+                            &pubkey_hex,
+                        )
+                        .await;
+                    }
+                }
             }
         }
     } else {
@@ -1214,6 +1236,14 @@ async fn ensure_membership(
             .map_err(|e| format!("db error: {e}"))?;
 
         if parent_member {
+            let collaboration_guard = state
+                .db
+                .lock_community_collaboration_policy(tenant.community())
+                .await
+                .map_err(|e| format!("collaboration policy check failed: {e}"))?;
+            if !automatic_huddle_mutation_allowed(collaboration_guard.authority().policy) {
+                return Err("membership is managed by the community control identity".into());
+            }
             state
                 .db
                 .add_member(
@@ -1427,4 +1457,13 @@ mod tests {
             "oversized messages must be rejected by the WebSocket parser before the handler sees them"
         );
     }
+}
+#[test]
+fn automatic_huddle_membership_and_archive_are_native_only() {
+    assert!(automatic_huddle_mutation_allowed(
+        CollaborationPolicy::Native
+    ));
+    assert!(!automatic_huddle_mutation_allowed(
+        CollaborationPolicy::ControlPlane
+    ));
 }

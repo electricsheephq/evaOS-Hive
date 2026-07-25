@@ -86,6 +86,7 @@ import {
   useChannelModerationCapabilities,
 } from "./ChannelManagementModerationActions";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 
 type ChannelManagementSheetProps = {
   channel: Channel | null;
@@ -109,6 +110,7 @@ export function ChannelManagementSheet({
   transparentChrome = false,
 }: ChannelManagementSheetProps) {
   const { isDark } = useTheme();
+  const authority = useEvaosTeamsAuthority();
   const isSplitLayout = layout === "split";
   const auxiliaryPanelMode = getAuxiliaryPanelMode(
     isSplitLayout,
@@ -138,8 +140,19 @@ export function ChannelManagementSheet({
     members.find((member) => member.pubkey === currentPubkey) ?? null;
   const hasResolvedMembership = membersQuery.data !== undefined;
 
-  const { canDeleteChannel, canManageChannel } =
-    useChannelModerationCapabilities(membersQuery.data, currentPubkey, open);
+  const moderationCapabilities = useChannelModerationCapabilities(
+    membersQuery.data,
+    currentPubkey,
+    open,
+  );
+  const canBrokerChannelLifecycle =
+    authority.managed &&
+    (authority.entitlement?.role === "owner" ||
+      authority.entitlement?.role === "admin");
+  const canDeleteChannel =
+    canBrokerChannelLifecycle || moderationCapabilities.canDeleteChannel;
+  const canManageChannel =
+    canBrokerChannelLifecycle || moderationCapabilities.canManageChannel;
   const canEditNarrative =
     canManageChannel && selfMember !== null && detail?.channelType !== "dm";
   const isArchived =

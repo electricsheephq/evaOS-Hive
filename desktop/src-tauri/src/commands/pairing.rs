@@ -60,6 +60,10 @@ impl PairingHandle {
     }
 }
 
+fn pairing_identity_export_allowed() -> bool {
+    !cfg!(feature = "evaos-teams-managed")
+}
+
 /// Start a NIP-AB pairing session as the source device.
 ///
 /// Creates a `PairingSession`, connects to the relay, and returns the
@@ -71,6 +75,12 @@ pub async fn start_pairing(
     state: State<'_, AppState>,
     pairing: State<'_, PairingHandle>,
 ) -> Result<String, String> {
+    if !pairing_identity_export_allowed() {
+        return Err(
+            "Device pairing is unavailable in Hive because managed identities cannot be exported"
+                .to_string(),
+        );
+    }
     if let Some(token) = pairing.cancel.lock().map_err(|e| e.to_string())?.take() {
         token.cancel();
     }
@@ -530,9 +540,18 @@ where
 #[cfg(test)]
 mod pairing_relay_tests {
     use super::{
-        pairing_relay_from_nip11, probe_pairing_relay, resolve_pairing_relay_url, PairingRelay,
+        pairing_identity_export_allowed, pairing_relay_from_nip11, probe_pairing_relay,
+        resolve_pairing_relay_url, PairingRelay,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn managed_build_never_exports_identity_through_pairing() {
+        assert_eq!(
+            pairing_identity_export_allowed(),
+            !cfg!(feature = "evaos-teams-managed")
+        );
+    }
 
     #[tokio::test]
     async fn live_nip11_probe_discovers_configured_pairing_relay() {

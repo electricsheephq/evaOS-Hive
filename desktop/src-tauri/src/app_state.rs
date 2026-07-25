@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::Write,
     sync::{
-        atomic::{AtomicBool, AtomicU16},
+        atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicU64},
         Arc, Mutex,
     },
 };
@@ -15,6 +15,8 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::huddle::HuddleState;
 use crate::managed_agents::config_bridge::SessionConfigCache;
 use crate::managed_agents::{ManagedAgentPairRuntime, ManagedAgentRuntimeKey};
+mod signing;
+
 pub struct AppState {
     pub keys: Mutex<Keys>,
     pub http_client: reqwest::Client,
@@ -90,6 +92,7 @@ pub struct AppState {
     /// a newer imported key during concurrent calls. Deliberately separate from
     /// `keys` so readers (signing, get_identity, etc.) are not blocked during
     /// keyring I/O.
+    #[cfg_attr(feature = "evaos-teams-managed", allow(dead_code))]
     pub identity_mutation: Mutex<()>,
     /// Set when the boot-time Phase 2 reset attempted a wipe but verification
     /// failed. The sentinel is preserved so the next relaunch retries. All
@@ -99,6 +102,17 @@ pub struct AppState {
     /// Ordering: written once in `setup()` with `Ordering::Release`; read in
     /// `get_identity` with `Ordering::Acquire`.
     pub reset_failed: AtomicBool,
+    /// Whether the Electric broker currently authorizes managed signing.
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
+    pub evaos_teams_authorized: AtomicBool,
+    /// Broker-provided managed signing deadline; native uses `i64::MAX`.
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
+    pub evaos_teams_expires_at: AtomicI64,
+    /// Serializes managed entitlement install, refresh, expiry, and revoke.
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
+    pub evaos_teams_access_transition: Arc<Mutex<()>>,
+    #[cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code))]
+    pub evaos_teams_access_generation: Arc<AtomicU64>,
     /// Cached ACP session config from running agents, keyed by canonical
     /// `(agent pubkey, relay URL)` runtime identity.
     /// Populated when the harness emits `session_config_captured` observer events.
@@ -176,6 +190,7 @@ pub fn build_media_fetch_client() -> reqwest::Result<reqwest::Client> {
 pub fn build_app_state() -> AppState {
     // Env var takes precedence (dev/CI). If absent, resolve_persisted_identity()
     // in setup() will replace the ephemeral placeholder with a persisted key.
+    #[cfg(not(feature = "evaos-teams-managed"))]
     let keys = match identity_from_env() {
         Some(keys) => {
             eprintln!(
@@ -186,6 +201,8 @@ pub fn build_app_state() -> AppState {
         }
         None => Keys::generate(),
     };
+    #[cfg(feature = "evaos-teams-managed")]
+    let keys = Keys::generate();
 
     AppState {
         keys: Mutex::new(keys),
@@ -220,6 +237,14 @@ pub fn build_app_state() -> AppState {
         keyring_locked: AtomicBool::new(false),
         identity_lost: AtomicBool::new(false),
         reset_failed: AtomicBool::new(false),
+        evaos_teams_authorized: AtomicBool::new(!cfg!(feature = "evaos-teams-managed")),
+        evaos_teams_expires_at: AtomicI64::new(if cfg!(feature = "evaos-teams-managed") {
+            0
+        } else {
+            i64::MAX
+        }),
+        evaos_teams_access_transition: Arc::new(Mutex::new(())),
+        evaos_teams_access_generation: Arc::new(AtomicU64::new(0)),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]
@@ -285,32 +310,6 @@ impl AppState {
         if let Ok(mut set) = self.pending_owned_channels.lock() {
             set.remove(&(my_pubkey.to_string(), channel_id.to_string()));
         }
-    }
-
-    /// Return the active identity keys if they are in a signable state.
-    ///
-    /// Returns `Err` when the identity is in a lost state (`identity_lost`
-    /// — ephemeral key, user must re-import their nsec) or when the keyring
-    /// is locked (`keyring_locked` — key is held in a keyring that is
-    /// unavailable this boot). All signing and publish commands must call
-    /// this instead of locking `state.keys` directly, so that recovery mode
-    /// blocks publishing under an invalid or inaccessible identity.
-    pub fn signing_keys(&self) -> Result<Keys, String> {
-        if self
-            .identity_lost
-            .load(std::sync::atomic::Ordering::Acquire)
-            || self
-                .keyring_locked
-                .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Err("identity is in recovery mode; event signing is disabled \
-                 until the identity is restored and Buzz is relaunched"
-                .to_string());
-        }
-        self.keys
-            .lock()
-            .map_err(|e| e.to_string())
-            .map(|k| k.clone())
     }
 
     /// Emit the current huddle state to the frontend via Tauri event.
@@ -883,6 +882,7 @@ fn persist_imported_identity_impl(
 
 /// Public entry point binding [`persist_imported_identity_impl`] to the shared
 /// [`crate::secret_store::SecretStore`]. See the impl for the persistence policy.
+#[cfg_attr(feature = "evaos-teams-managed", allow(dead_code))]
 pub(crate) fn persist_imported_identity(
     store: &crate::secret_store::SecretStore,
     keys: &Keys,

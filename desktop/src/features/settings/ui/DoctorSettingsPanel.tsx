@@ -332,7 +332,8 @@ function RuntimeRow({
 
   const canConnectAccount =
     runtime.availability === "available" &&
-    runtime.authStatus.status === "logged_out";
+    (runtime.authStatus.status === "logged_out" ||
+      runtime.authStatus.status === "checked_on_launch");
   const authMethodsQuery = useAcpAuthMethodsQuery(runtime.id, {
     enabled: canConnectAccount,
   });

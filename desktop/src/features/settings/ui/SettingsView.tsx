@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { useMyRelayMembershipLookupQuery } from "@/features/community-members/hooks";
+import { useEvaosTeamsAuthority } from "@/features/evaosTeams/authority";
 import {
   canManageCommunityMembers,
   shouldWarnMissingMembershipSnapshot,
@@ -69,7 +70,14 @@ const settingsNavGroups: Array<{
   },
   {
     label: "App",
-    sections: ["agents", "compute", "experimental", "mobile", "updates"],
+    sections: [
+      "agents",
+      "compute",
+      "experimental",
+      "mobile",
+      "updates",
+      "about",
+    ],
   },
 ];
 
@@ -125,11 +133,31 @@ export function SettingsView({
   onSetSoundForSlot,
   section,
 }: SettingsViewProps) {
+  const authority = useEvaosTeamsAuthority();
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const featureState = useFeatureSnapshot();
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
+      if (
+        authority.managed &&
+        [
+          "agents",
+          "channel-templates",
+          "compute",
+          "experimental",
+          "hosted-communities",
+          "moderation",
+          "custom-emoji",
+          "local-archive",
+          "mobile",
+        ].includes(s.value)
+      ) {
+        return false;
+      }
+      if (!authority.managed && s.value === "about") {
+        return false;
+      }
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).
@@ -146,7 +174,13 @@ export function SettingsView({
       }
       return true;
     });
-  }, [myMembershipQuery.data, featureState]);
+  }, [authority, myMembershipQuery.data, featureState]);
+
+  const effectiveSection = visibleSections.some(
+    (entry) => entry.value === section,
+  )
+    ? section
+    : (visibleSections[0]?.value ?? "appearance");
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);
@@ -236,7 +270,7 @@ export function SettingsView({
         </SidebarHeader>
 
         <SidebarContent>
-          {myMembershipQuery.isPending ? (
+          {!authority.managed && myMembershipQuery.isPending ? (
             <div
               className="mx-3 flex items-center gap-2 rounded-md border border-sidebar-border px-3 py-2 text-xs text-sidebar-foreground/70"
               data-testid="community-access-loading"
@@ -245,7 +279,7 @@ export function SettingsView({
               Checking invite permissions…
             </div>
           ) : null}
-          {myMembershipQuery.isError ? (
+          {!authority.managed && myMembershipQuery.isError ? (
             <div
               className="mx-3 space-y-2 rounded-md border border-destructive/40 px-3 py-2 text-xs text-sidebar-foreground"
               data-testid="community-access-error"
@@ -264,7 +298,8 @@ export function SettingsView({
               </button>
             </div>
           ) : null}
-          {shouldWarnMissingMembershipSnapshot(myMembershipQuery.data) ? (
+          {!authority.managed &&
+          shouldWarnMissingMembershipSnapshot(myMembershipQuery.data) ? (
             <div
               className="mx-3 flex items-start gap-2 rounded-md border border-amber-500/40 px-3 py-2 text-xs text-sidebar-foreground"
               data-testid="community-access-snapshot-missing"
@@ -281,7 +316,7 @@ export function SettingsView({
                 <SidebarMenu aria-label={`${group.label} settings sections`}>
                   {group.sections.map((entry) => (
                     <SettingsSectionButton
-                      active={entry.value === section}
+                      active={entry.value === effectiveSection}
                       key={entry.value}
                       onSelect={onSectionChange}
                       section={entry}
@@ -330,9 +365,9 @@ export function SettingsView({
           >
             <div
               className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4"
-              data-testid={`settings-panel-${section}`}
+              data-testid={`settings-panel-${effectiveSection}`}
             >
-              {renderSettingsSection(section, {
+              {renderSettingsSection(effectiveSection, {
                 currentPubkey,
                 fallbackDisplayName,
                 isUpdatingDesktopNotifications,

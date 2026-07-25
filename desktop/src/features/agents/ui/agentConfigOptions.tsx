@@ -418,12 +418,29 @@ export function formatRuntimeOptionLabel(runtime: AcpRuntimeCatalogEntry) {
       ? " (adapter missing)"
       : runtime.availability === "adapter_outdated"
         ? " (adapter outdated)"
-        : runtime.availability === "cli_missing"
-          ? " (CLI missing)"
-          : runtime.availability === "not_installed"
-            ? " (not installed)"
-            : "";
+        : runtime.availability === "dependency_missing"
+          ? " (setup needed)"
+          : runtime.availability === "cli_missing"
+            ? " (CLI missing)"
+            : runtime.availability === "not_installed"
+              ? " (not installed)"
+              : "";
   return `${runtime.label}${suffix}`;
+}
+
+export function runtimeUnavailableMessage(runtime: AcpRuntimeCatalogEntry) {
+  switch (runtime.availability) {
+    case "adapter_missing":
+      return `${runtime.label} CLI is installed but the ACP adapter is missing.`;
+    case "adapter_outdated":
+      return `${runtime.label} ACP adapter is outdated — reinstall to continue.`;
+    case "dependency_missing":
+      return `${runtime.label} is installed but its ACP dependencies need setup.`;
+    case "cli_missing":
+      return `${runtime.label} ACP adapter is installed but the CLI is missing.`;
+    default:
+      return `${runtime.label} is not installed.`;
+  }
 }
 
 function runtimeAvailabilitySortRank(
@@ -433,6 +450,8 @@ function runtimeAvailabilitySortRank(
     case "available":
       return 0;
     case "cli_missing":
+      return 1;
+    case "dependency_missing":
       return 1;
     case "not_installed":
       return 2;

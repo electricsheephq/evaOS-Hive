@@ -105,6 +105,7 @@ pub fn put_managed_agent_runtime_lifecycle(
     payload: super::ManagedAgentRuntimeLifecycleObserverPayload,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
+    crate::commands::managed_authority::require_native_agent_authority()?;
     let key = observer_lifecycle_key(&outer_pubkey, &payload)?;
     let state = app.state::<AppState>();
     let records = load_managed_agents(&app)?;
@@ -141,6 +142,7 @@ pub fn put_managed_agent_runtime_lifecycle(
 pub fn list_managed_agent_runtimes(
     app: AppHandle,
 ) -> Result<Vec<ManagedAgentRuntimeStatus>, String> {
+    crate::commands::managed_authority::require_native_agent_authority()?;
     // This command is polled whenever the members sidebar opens and refetched
     // on every status event — load the per-row status inputs once, outside
     // the locks, instead of hitting disk per row while holding them.
@@ -224,6 +226,7 @@ pub(crate) fn start_managed_agent_runtime_pair_lazy(
     relay_url: String,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
+    crate::commands::managed_authority::require_native_agent_authority()?;
     start_pair(pubkey, relay_url, true, None, app)
 }
 
@@ -382,6 +385,7 @@ pub fn restart_managed_agent_runtime(
     relay_url: String,
     app: AppHandle,
 ) -> Result<ManagedAgentRuntimeStatus, String> {
+    crate::commands::managed_authority::require_native_agent_authority()?;
     stop_managed_agent_runtime(pubkey.clone(), relay_url.clone(), app.clone())?;
     start_pair(pubkey, relay_url, true, None, app)
 }
@@ -461,6 +465,7 @@ pub async fn reconcile_managed_agent_runtimes(
     communities: Vec<super::ManagedAgentCommunityTarget>,
     app: AppHandle,
 ) -> Result<Vec<ManagedAgentRuntimeStatus>, String> {
+    crate::commands::managed_authority::require_native_agent_authority()?;
     use futures_util::{stream, StreamExt};
 
     let records = load_managed_agents(&app)?;

@@ -1,4 +1,11 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -9,6 +16,8 @@ use tokio_tungstenite::{
     tungstenite::protocol::{frame::coding::CloseCode, CloseFrame, Message},
 };
 use tokio_util::sync::CancellationToken;
+
+use crate::app_state::AppState;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,9 +85,24 @@ struct SendRequest {
 }
 
 struct ConnectionHandle {
+    #[cfg(feature = "evaos-teams-managed")]
+    url: String,
     sender: mpsc::Sender<SendRequest>,
     cancel: CancellationToken,
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+}
+
+#[derive(Clone)]
+struct ManagedConnectionAuthority {
+    generation: Arc<AtomicU64>,
+    expected_generation: u64,
+    transition: Arc<std::sync::Mutex<()>>,
+}
+
+impl ManagedConnectionAuthority {
+    fn is_current(&self) -> bool {
+        self.generation.load(AtomicOrdering::Acquire) == self.expected_generation
+    }
 }
 
 #[derive(Clone)]
@@ -119,12 +143,23 @@ impl WebSocketManager {
             Self::disconnect_handle(handle).await;
         }
     }
+
+    #[cfg(feature = "evaos-teams-managed")]
+    async fn connection_url(&self, id: Id) -> Result<String, String> {
+        self.connections
+            .lock()
+            .await
+            .get(&id)
+            .map(|handle| handle.url.clone())
+            .ok_or_else(|| format!("WebSocket connection {id} not found"))
+    }
 }
 
 async fn open_connection(
     manager: &WebSocketManager,
     url: &str,
     on_message: Channel<serde_json::Value>,
+    managed_authority: Option<ManagedConnectionAuthority>,
 ) -> Result<Id, String> {
     let connect_cancel = manager.connect_cancel.lock().await.clone();
     let (socket, _) = tokio::select! {
@@ -140,6 +175,12 @@ async fn open_connection(
     if connect_cancel.is_cancelled() {
         return Err("WebSocket connection cancelled".to_string());
     }
+    if managed_authority
+        .as_ref()
+        .is_some_and(|authority| !authority.is_current())
+    {
+        return Err("Managed relay authorization changed during connection".to_string());
+    }
 
     let id = loop {
         let candidate = uuid::Uuid::new_v4().as_u128() as u32;
@@ -150,6 +191,8 @@ async fn open_connection(
     let (sender, receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
     let cancel = CancellationToken::new();
     let handle = Arc::new(ConnectionHandle {
+        #[cfg(feature = "evaos-teams-managed")]
+        url: url.to_string(),
         sender,
         cancel: cancel.clone(),
         task: Mutex::new(None),
@@ -165,6 +208,7 @@ async fn open_connection(
         cancel,
         on_message,
         task_manager,
+        managed_authority,
     ));
     *task_slot = Some(task);
     drop(task_slot);
@@ -172,14 +216,83 @@ async fn open_connection(
     Ok(id)
 }
 
+#[cfg(any(test, feature = "evaos-teams-managed"))]
+fn validate_managed_websocket_request(
+    authorized: bool,
+    allowed_relay: Option<&str>,
+    requested_relay: &str,
+) -> Result<(), String> {
+    if !authorized {
+        return Err("Managed relay access is not authorized".to_string());
+    }
+    let allowed_relay = allowed_relay.ok_or_else(|| "Managed relay is unavailable".to_string())?;
+
+    fn parse_exact_origin(value: &str) -> Result<url::Url, String> {
+        let parsed =
+            url::Url::parse(value).map_err(|_| "Managed relay URL is invalid".to_string())?;
+        if !matches!(parsed.scheme(), "ws" | "wss")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || parsed.path() != "/"
+        {
+            return Err("Managed relay URL must be a credential-free WebSocket origin".to_string());
+        }
+        Ok(parsed)
+    }
+
+    let allowed = parse_exact_origin(allowed_relay)?;
+    let requested = parse_exact_origin(requested_relay)?;
+    if requested != allowed {
+        return Err("Managed relay must match the active entitlement".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn connect(
     manager: tauri::State<'_, WebSocketManager>,
+    state: tauri::State<'_, AppState>,
     url: String,
     on_message: Channel<serde_json::Value>,
     _config: Option<serde_json::Value>,
 ) -> Result<Id, String> {
-    open_connection(manager.inner(), &url, on_message).await
+    let managed_authority;
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        // `signing_keys` rechecks expiry and revokes stale capability state.
+        state.signing_keys()?;
+        let expected_generation = {
+            let _transition = state
+                .evaos_teams_access_transition
+                .lock()
+                .map_err(|error| error.to_string())?;
+            let authorized = state.evaos_teams_authorized.load(AtomicOrdering::Acquire);
+            let allowed_relay = state
+                .relay_url_override
+                .lock()
+                .map_err(|error| error.to_string())?
+                .clone();
+            validate_managed_websocket_request(authorized, allowed_relay.as_deref(), &url)?;
+            state
+                .evaos_teams_access_generation
+                .load(AtomicOrdering::Acquire)
+        };
+        managed_authority = Some(ManagedConnectionAuthority {
+            generation: state.evaos_teams_access_generation.clone(),
+            expected_generation,
+            transition: state.evaos_teams_access_transition.clone(),
+        });
+    }
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    {
+        let _ = state;
+        managed_authority = None;
+    }
+
+    open_connection(manager.inner(), &url, on_message, managed_authority).await
 }
 
 async fn send_message(
@@ -215,9 +328,31 @@ async fn send_message(
 #[tauri::command]
 async fn send(
     manager: tauri::State<'_, WebSocketManager>,
+    state: tauri::State<'_, AppState>,
     id: Id,
     message: WebSocketMessage,
 ) -> Result<(), String> {
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        // A connection opened under an earlier entitlement cannot be reused
+        // after revoke, expiry, or a community switch.
+        state.signing_keys()?;
+        let allowed_relay = state
+            .relay_url_override
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clone();
+        let connection_url = manager.connection_url(id).await?;
+        if let Err(error) =
+            validate_managed_websocket_request(true, allowed_relay.as_deref(), &connection_url)
+        {
+            manager.disconnect(id).await;
+            return Err(error);
+        }
+    }
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    let _ = state;
+
     send_message(manager.inner(), id, message).await
 }
 
@@ -251,6 +386,7 @@ async fn run_connection<S>(
     cancel: CancellationToken,
     on_message: Channel<serde_json::Value>,
     manager: WebSocketManager,
+    managed_authority: Option<ManagedConnectionAuthority>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -282,15 +418,44 @@ async fn run_connection<S>(
                     Some(Err(error)) => OutboundMessage::Error(error.to_string()),
                     None => OutboundMessage::Close(None),
                 };
-                let terminal = matches!(message, OutboundMessage::Close(_) | OutboundMessage::Error(_));
-                if let Ok(value) = serde_json::to_value(message) {
-                    let _ = on_message.send(value);
+                if !deliver_inbound_message(managed_authority.as_ref(), &on_message, message) {
+                    break;
                 }
-                if terminal { break; }
             }
         }
     }
     manager.remove(id).await;
+}
+
+fn deliver_inbound_message(
+    managed_authority: Option<&ManagedConnectionAuthority>,
+    on_message: &Channel<serde_json::Value>,
+    message: OutboundMessage,
+) -> bool {
+    // A managed authority transition cannot change the generation between this
+    // validation and the renderer enqueue. Native Buzz passes `None` and keeps
+    // its existing lock-free behavior.
+    let _transition = managed_authority.map(|authority| {
+        authority
+            .transition
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    });
+    if managed_authority.is_some_and(|authority| !authority.is_current()) {
+        if let Ok(value) = serde_json::to_value(OutboundMessage::Close(None)) {
+            let _ = on_message.send(value);
+        }
+        return false;
+    }
+
+    let terminal = matches!(
+        message,
+        OutboundMessage::Close(_) | OutboundMessage::Error(_)
+    );
+    if let Ok(value) = serde_json::to_value(message) {
+        let _ = on_message.send(value);
+    }
+    !terminal
 }
 
 fn outbound_message(message: Message) -> OutboundMessage {
@@ -337,6 +502,39 @@ mod tests {
         Channel::new(|_: InvokeResponseBody| Ok(()))
     }
 
+    #[test]
+    fn managed_websocket_requires_the_exact_authorized_credential_free_origin() {
+        assert!(validate_managed_websocket_request(
+            true,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com/",
+        )
+        .is_ok());
+        for requested in [
+            "wss://attacker.example.com/",
+            "wss://user:password@relay.example.com/",
+            "wss://relay.example.com/other",
+            "wss://relay.example.com/?tenant=other",
+            "https://relay.example.com/",
+        ] {
+            assert!(
+                validate_managed_websocket_request(
+                    true,
+                    Some("wss://relay.example.com"),
+                    requested
+                )
+                .is_err(),
+                "{requested} must be rejected"
+            );
+        }
+        assert!(validate_managed_websocket_request(
+            false,
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com/",
+        )
+        .is_err());
+    }
+
     #[tokio::test]
     async fn secure_websocket_reaches_tls_without_panicking() {
         install_crypto_provider();
@@ -374,7 +572,7 @@ mod tests {
         });
 
         let manager = WebSocketManager::default();
-        let id = open_connection(&manager, &format!("ws://{address}"), silent_channel())
+        let id = open_connection(&manager, &format!("ws://{address}"), silent_channel(), None)
             .await
             .unwrap();
         send_message(&manager, id, WebSocketMessage::Text("live-probe".into()))
@@ -406,6 +604,8 @@ mod tests {
         );
         let (sender, receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
         let handle = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(None),
@@ -418,6 +618,7 @@ mod tests {
             handle.cancel.clone(),
             silent_channel(),
             manager.clone(),
+            None,
         ));
         *handle.task.lock().await = Some(task);
 
@@ -446,6 +647,8 @@ mod tests {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (sender, _receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
         let handle = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(Some(tauri::async_runtime::spawn(async move {
@@ -468,11 +671,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn entitlement_generation_change_drops_inbound_before_delivery() {
+        let manager = WebSocketManager::default();
+        let (client_io, server_io) = duplex(1024);
+        let (client, mut server) = tokio::join!(
+            WebSocketStream::from_raw_socket(client_io, Role::Client, None),
+            WebSocketStream::from_raw_socket(server_io, Role::Server, None),
+        );
+        let (sender, receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
+        let terminal_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let terminal_messages_for_channel = terminal_messages.clone();
+        let channel = Channel::new(move |body: InvokeResponseBody| {
+            if let InvokeResponseBody::Json(json) = body {
+                terminal_messages_for_channel.lock().unwrap().push(json);
+            }
+            Ok(())
+        });
+        let generation = Arc::new(AtomicU64::new(7));
+        let authority = ManagedConnectionAuthority {
+            generation: generation.clone(),
+            expected_generation: 7,
+            transition: Arc::new(std::sync::Mutex::new(())),
+        };
+        let handle = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
+            sender,
+            cancel: CancellationToken::new(),
+            task: Mutex::new(None),
+        });
+        manager.connections.lock().await.insert(9, handle.clone());
+        let task = tauri::async_runtime::spawn(run_connection(
+            9,
+            client,
+            receiver,
+            handle.cancel.clone(),
+            channel,
+            manager.clone(),
+            Some(authority),
+        ));
+        *handle.task.lock().await = Some(task);
+
+        generation.fetch_add(1, Ordering::AcqRel);
+        server
+            .send(Message::Text("sentinel-cross-tenant-event".into()))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while manager.connections.lock().await.contains_key(&9) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stale managed socket must close after entitlement transition");
+        let terminal_messages = terminal_messages.lock().unwrap();
+        assert_eq!(
+            terminal_messages.len(),
+            1,
+            "stale managed socket must emit one terminal callback"
+        );
+        let terminal: serde_json::Value =
+            serde_json::from_str(&terminal_messages[0]).expect("terminal callback must be JSON");
+        assert_eq!(terminal["type"], "Close");
+        assert!(
+            !terminal_messages[0].contains("sentinel-cross-tenant-event"),
+            "stale managed content must not reach the renderer"
+        );
+    }
+
+    #[test]
+    fn entitlement_transition_serializes_validation_and_renderer_delivery() {
+        let generation = Arc::new(AtomicU64::new(11));
+        let transition = Arc::new(std::sync::Mutex::new(()));
+        let authority = ManagedConnectionAuthority {
+            generation: generation.clone(),
+            expected_generation: 11,
+            transition: transition.clone(),
+        };
+        let delivered = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let delivered_for_channel = delivered.clone();
+        let channel = Channel::new(move |body: InvokeResponseBody| {
+            if let InvokeResponseBody::Json(json) = body {
+                delivered_for_channel.lock().unwrap().push(json);
+            }
+            Ok(())
+        });
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let barrier_for_delivery = barrier.clone();
+        let guard = transition.lock().unwrap();
+        let delivery = std::thread::spawn(move || {
+            barrier_for_delivery.wait();
+            deliver_inbound_message(
+                Some(&authority),
+                &channel,
+                OutboundMessage::Text("sentinel-cross-authority-content".to_string()),
+            )
+        });
+
+        barrier.wait();
+        generation.fetch_add(1, Ordering::AcqRel);
+        drop(guard);
+
+        assert!(!delivery.join().unwrap());
+        let delivered = delivered.lock().unwrap();
+        assert_eq!(delivered.len(), 1);
+        let terminal: serde_json::Value =
+            serde_json::from_str(&delivered[0]).expect("terminal callback must be JSON");
+        assert_eq!(terminal["type"], "Close");
+        assert!(!delivered[0].contains("sentinel-cross-authority-content"));
+    }
+
+    #[tokio::test]
     async fn teardown_gate_stays_closed_until_tasks_stop() {
         let manager = WebSocketManager::default();
         let gate = manager.connect_cancel.lock().await;
         let (sender, _receiver) = mpsc::channel(SEND_QUEUE_CAPACITY);
         let handle = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(Some(tauri::async_runtime::spawn(async {
@@ -510,6 +826,8 @@ mod tests {
             .await
             .unwrap();
         let blocked = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender: blocked_sender,
             cancel: CancellationToken::new(),
             task: Mutex::new(None),
@@ -518,6 +836,8 @@ mod tests {
 
         let (healthy_sender, mut healthy_receiver) = mpsc::channel(1);
         let healthy = Arc::new(ConnectionHandle {
+            #[cfg(feature = "evaos-teams-managed")]
+            url: "ws://localhost/".to_string(),
             sender: healthy_sender.clone(),
             cancel: CancellationToken::new(),
             task: Mutex::new(None),

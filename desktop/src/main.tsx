@@ -6,13 +6,16 @@ import "@fontsource-variable/inter/wght.css";
 import "@/shared/styles/globals.css";
 import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
 import { migrateLegacyCommunityStorageBeforeRender } from "@/features/communities/legacyCommunityStorage";
-import { CommunitiesProvider } from "@/features/communities/useCommunities";
-import { CommunityOnboardingProvider } from "@/features/onboarding/communityOnboarding";
 import { ThemeProvider } from "@/shared/theme/ThemeProvider";
 import { EmojiBurstProvider } from "@/shared/ui/EmojiBurstProvider";
 import { PoofBurstProvider } from "@/shared/ui/PoofBurstProvider";
 import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
+import { clearManagedSensitiveRendererState } from "@/shared/product/managedRendererPersistence";
+import {
+  desktopProductPolicy,
+  loadDesktopProductPolicy,
+} from "@/shared/product/productIdentity";
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;
@@ -72,23 +75,19 @@ function configureDevE2eBridgeFromUrl() {
 function renderApp() {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <CommunitiesProvider>
-        <CommunityOnboardingProvider>
-          <ThemeProvider defaultTheme="buzz">
-            <TooltipProvider delayDuration={300}>
-              <EmojiBurstProvider>
-                <PoofBurstProvider>
-                  <UpdaterProvider>
-                    <App />
-                    <NostrBindConsentDialog />
-                  </UpdaterProvider>
-                  <Toaster />
-                </PoofBurstProvider>
-              </EmojiBurstProvider>
-            </TooltipProvider>
-          </ThemeProvider>
-        </CommunityOnboardingProvider>
-      </CommunitiesProvider>
+      <ThemeProvider defaultTheme="buzz">
+        <TooltipProvider delayDuration={300}>
+          <EmojiBurstProvider>
+            <PoofBurstProvider>
+              <UpdaterProvider>
+                <App />
+                <NostrBindConsentDialog />
+              </UpdaterProvider>
+              <Toaster />
+            </PoofBurstProvider>
+          </EmojiBurstProvider>
+        </TooltipProvider>
+      </ThemeProvider>
     </React.StrictMode>,
   );
 }
@@ -111,7 +110,11 @@ async function bootstrap() {
   resetDevWebviewStateFromUrl();
   configureDevE2eBridgeFromUrl();
   await installE2eBridgeIfConfigured();
-  await migrateLegacyCommunityStorageBeforeRender();
+  await loadDesktopProductPolicy();
+  clearManagedSensitiveRendererState();
+  if (!desktopProductPolicy().managed) {
+    await migrateLegacyCommunityStorageBeforeRender();
+  }
   renderApp();
 }
 

@@ -345,6 +345,19 @@ function RuntimeDetails({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {
     );
   }
 
+  if (runtime.availability === "dependency_missing") {
+    return (
+      <>
+        <p className="text-xs leading-4 text-white">
+          Runtime detected; ACP dependencies need setup.
+        </p>
+        <p className="mt-1 text-xs leading-4 text-white">
+          {runtime.installHint}
+        </p>
+      </>
+    );
+  }
+
   if (runtime.availability === "cli_missing") {
     return (
       <>

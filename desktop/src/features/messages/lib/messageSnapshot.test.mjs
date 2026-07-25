@@ -8,6 +8,24 @@ import {
   removeMessageSnapshotsForRelay,
   writeMessageSnapshot,
 } from "./messageSnapshot.ts";
+import {
+  installDesktopProductPolicy,
+  resetDesktopProductPolicyForTests,
+} from "@/shared/product/productIdentity.ts";
+
+const managedPolicy = {
+  managed: true,
+  productName: "Hive",
+  version: "0.4.26-es.1",
+  bundleIdentifier: "com.electricsheephq.evaos.teams",
+  deepLinkScheme: "evaos-teams",
+  artifactName: "Hive-0.4.26-es.1-arm64.dmg",
+  updateChannel: "managed-beta",
+  updaterEnabled: false,
+  upstreamHostedServicesEnabled: false,
+  originAttribution:
+    "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
+};
 
 if (typeof globalThis.window === "undefined") {
   const storage = new Map();
@@ -92,6 +110,33 @@ test("write with only pending events persists nothing", () => {
   clearRelay();
   writeMessageSnapshot(RELAY, "chan-1", [makeEvent({ pending: true })]);
   assert.equal(readMessageSnapshot(RELAY, "chan-1"), null);
+});
+
+test("managed mode never reads or writes full relay event snapshots", () => {
+  const key = messageSnapshotKey(RELAY, "managed-room");
+  window.localStorage.setItem(
+    key,
+    JSON.stringify({
+      version: 1,
+      updatedAt: 1,
+      events: [makeEvent({ content: "preexisting managed message" })],
+    }),
+  );
+
+  try {
+    installDesktopProductPolicy(managedPolicy);
+    assert.equal(readMessageSnapshot(RELAY, "managed-room"), null);
+    writeMessageSnapshot(RELAY, "managed-room", [
+      makeEvent({ content: "new managed message" }),
+    ]);
+    assert.match(
+      window.localStorage.getItem(key),
+      /preexisting managed message/,
+    );
+  } finally {
+    resetDesktopProductPolicyForTests();
+    window.localStorage.removeItem(key);
+  }
 });
 
 test("snapshot keeps only the newest slice of a long timeline", () => {

@@ -62,9 +62,10 @@ pub(crate) use readiness::{
     agent_readiness, resolve_effective_agent_env, AgentReadiness, Requirement,
 };
 pub use relay_mesh::*;
+pub use repos::resolve_repos_at_boot;
+#[cfg(not(feature = "evaos-teams-managed"))]
 pub use repos::{
-    effective_repos_dir, ensure_repos_symlink, resolve_repos_at_boot, validate_repos_dir,
-    write_persisted_repos_dir,
+    effective_repos_dir, ensure_repos_symlink, validate_repos_dir, write_persisted_repos_dir,
 };
 pub use restore::*;
 pub use runtime::*;

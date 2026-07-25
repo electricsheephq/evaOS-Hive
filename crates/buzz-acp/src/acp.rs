@@ -108,6 +108,24 @@ pub enum AcpError {
     AgentError { code: i64, message: String },
 }
 
+impl AcpError {
+    /// Stable, content-free category for service logs.
+    pub(crate) fn log_class(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "io",
+            Self::Json(_) => "json",
+            Self::AgentExited => "agent_exited",
+            Self::IdleTimeout(_) => "idle_timeout",
+            Self::HardTimeout { .. } => "hard_timeout",
+            Self::CancelDrainTimeout(_) => "cancel_drain_timeout",
+            Self::Timeout(_) => "request_timeout",
+            Self::WriteTimeout(_) => "write_timeout",
+            Self::Protocol(_) => "protocol",
+            Self::AgentError { .. } => "agent_error",
+        }
+    }
+}
+
 /// Build an [`AcpError::AgentError`] from a JSON-RPC error object,
 /// preserving the numeric code. When the `message` field is missing or
 /// non-string, fall back to the full JSON object so provider-specific
@@ -130,6 +148,61 @@ fn build_initialize_params() -> serde_json::Value {
             "version": env!("CARGO_PKG_VERSION")
         },
     })
+}
+
+/// Content-free metadata for ACP wire diagnostics.
+///
+/// Method names and string IDs are agent-controlled, so only known method
+/// classes and numeric IDs are exposed. Payloads remain available to the
+/// in-process observer but never enter service logs.
+fn wire_log_metadata(
+    message: &serde_json::Value,
+    byte_count: usize,
+) -> (&'static str, Option<u64>, usize) {
+    let method_class = match message.get("method").and_then(|value| value.as_str()) {
+        Some("initialize") => "initialize",
+        Some("session/new") => "session_new",
+        Some("session/load") => "session_load",
+        Some("session/prompt") => "session_prompt",
+        Some("session/cancel") => "session_cancel",
+        Some("session/update") => "session_update",
+        Some("session/request_permission") => "session_request_permission",
+        Some("_goose/unstable/session/update") => "goose_session_update",
+        Some("_goose/unstable/session/steer") => "goose_session_steer",
+        Some(_) => "other_method",
+        None if message.get("id").is_some() => "response",
+        None => "other",
+    };
+    let numeric_id = message.get("id").and_then(|value| value.as_u64());
+    (method_class, numeric_id, byte_count)
+}
+
+fn log_wire_message(direction: &'static str, message: &serde_json::Value, byte_count: usize) {
+    let (method_class, numeric_id, byte_count) = wire_log_metadata(message, byte_count);
+    tracing::debug!(
+        target: "acp::wire",
+        direction,
+        method_class,
+        numeric_id,
+        byte_count,
+        "ACP wire message"
+    );
+}
+
+fn initialize_log_metadata(result: &serde_json::Value) -> (usize, usize, usize) {
+    let capability_count = result
+        .get("agentCapabilities")
+        .and_then(serde_json::Value::as_object)
+        .map_or(0, serde_json::Map::len);
+    let auth_method_count = result
+        .get("authMethods")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    (
+        capability_count,
+        auth_method_count,
+        result.to_string().len(),
+    )
 }
 
 /// ACP client that owns an agent subprocess and communicates over its stdio.
@@ -541,7 +614,14 @@ impl AcpClient {
         // on ACP v2 ahead of the upstream ACP RFD. Revisit when that RFD merges.
         let params = build_initialize_params();
         let result = self.send_request("initialize", params).await?;
-        tracing::debug!(target: "acp::init", "initialize response: {result}");
+        let (capability_count, auth_method_count, byte_count) = initialize_log_metadata(&result);
+        tracing::debug!(
+            target: "acp::init",
+            capability_count,
+            auth_method_count,
+            byte_count,
+            "ACP initialization complete"
+        );
         Ok(result)
     }
 
@@ -599,6 +679,25 @@ impl AcpClient {
             .session_new_full(cwd, mcp_servers, system_prompt)
             .await?
             .session_id)
+    }
+
+    /// Load an existing ACP session. Callers must first verify that initialize
+    /// advertised `agentCapabilities.loadSession`.
+    pub async fn session_load(
+        &mut self,
+        session_id: &str,
+        cwd: &str,
+        mcp_servers: Vec<McpServer>,
+    ) -> Result<serde_json::Value, AcpError> {
+        self.send_request(
+            "session/load",
+            serde_json::json!({
+                "sessionId": session_id,
+                "cwd": cwd,
+                "mcpServers": mcp_servers,
+            }),
+        )
+        .await
     }
 
     /// Send Goose's custom system-prompt request after `session/new`.
@@ -700,7 +799,7 @@ impl AcpClient {
             "params": params,
         });
 
-        tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&msg).unwrap_or_default());
+        log_wire_message("outbound", &msg, msg.to_string().len());
         if let Err(e) = self.write_ndjson(&msg).await {
             self.last_prompt_id = None;
             self.current_hard_deadline = None;
@@ -991,7 +1090,7 @@ impl AcpClient {
             "params": params,
         });
 
-        tracing::debug!(target: "acp::wire", "→ {}", &serde_json::to_string(&msg).unwrap_or_default());
+        log_wire_message("outbound", &msg, msg.to_string().len());
 
         // Wrap write + read in a single timeout so a hung agent can't block forever.
         // We cannot use an async block that borrows `self` mutably across two awaits
@@ -1056,7 +1155,7 @@ impl AcpClient {
             "params": params,
         });
 
-        tracing::debug!(target: "acp::wire", "→ (notification) {}", &serde_json::to_string(&msg).unwrap_or_default());
+        log_wire_message("outbound", &msg, msg.to_string().len());
         self.write_ndjson(&msg).await?;
         Ok(())
     }
@@ -1097,26 +1196,26 @@ impl AcpClient {
                 continue;
             }
 
-            // Only log and reset idle after we have a valid non-empty line.
-            tracing::debug!(target: "acp::wire", "← {trimmed}");
-
             let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
                 Err(e) => {
                     self.observe(
                         "acp_parse_error",
                         serde_json::json!({
-                            "line": trimmed,
-                            "error": e.to_string(),
+                            "byte_count": trimmed.len(),
+                            "error_class": format!("{:?}", e.classify()),
                         }),
                     );
                     tracing::warn!(
                         target: "acp::wire",
-                        "failed to parse line as JSON: {e} — skipping"
+                        byte_count = trimmed.len(),
+                        error_class = ?e.classify(),
+                        "failed to parse ACP JSON; skipping"
                     );
                     continue;
                 }
             };
+            log_wire_message("inbound", &msg, trimmed.len());
             self.observe("acp_read", msg.clone());
 
             // Check if this is a response to our expected request (has matching id
@@ -1157,7 +1256,10 @@ impl AcpClient {
                             // agent process is dead and continuing would hang.
                             self.write_ndjson(&err_resp).await?;
                         }
-                        tracing::debug!(target: "acp::wire", "ignoring unknown method: {other}");
+                        tracing::debug!(
+                            target: "acp::wire",
+                            "ignoring unknown ACP method"
+                        );
                     }
                 }
             }
@@ -1313,18 +1415,15 @@ impl AcpClient {
                                 "method": "_goose/unstable/session/steer",
                                 "params": params,
                             });
-                            tracing::debug!(
-                                target: "acp::wire",
-                                "→ {}",
-                                serde_json::to_string(&msg).unwrap_or_default()
-                            );
+                            log_wire_message("outbound", &msg, msg.to_string().len());
                             match self.write_ndjson(&msg).await {
                                 Ok(()) => {
                                     pending_steer = Some((id, req.ack_tx));
                                 }
                                 Err(e) => {
                                     tracing::warn!(
-                                        "goose-native steer write failed: {e} — releasing withheld event"
+                                        error_class = e.log_class(),
+                                        "goose-native steer write failed; releasing withheld event"
                                     );
                                     let _ = req.ack_tx.send(crate::pool::SteerAck::Err(
                                         crate::pool::SteerError::Transport(e.to_string()),
@@ -1392,25 +1491,26 @@ impl AcpClient {
                         continue;
                     }
 
-                    tracing::debug!(target: "acp::wire", "← {trimmed}");
-
                     let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                         Ok(v) => v,
                         Err(e) => {
                             self.observe(
                                 "acp_parse_error",
                                 serde_json::json!({
-                                    "line": trimmed,
-                                    "error": e.to_string(),
+                                    "byte_count": trimmed.len(),
+                                    "error_class": format!("{:?}", e.classify()),
                                 }),
                             );
                             tracing::warn!(
                                 target: "acp::wire",
-                                "failed to parse line as JSON: {e} — skipping"
+                                byte_count = trimmed.len(),
+                                error_class = ?e.classify(),
+                                "failed to parse ACP JSON; skipping"
                             );
                             continue;
                         }
                     };
+                    log_wire_message("inbound", &msg, trimmed.len());
                     self.observe("acp_read", msg.clone());
 
                     let activity_now = Instant::now();
@@ -1504,7 +1604,10 @@ impl AcpClient {
                                     // agent process is dead and continuing would hang.
                                     self.write_ndjson(&err_resp).await?;
                                 }
-                                tracing::debug!(target: "acp::wire", "ignoring unknown method: {other}");
+                                tracing::debug!(
+                                    target: "acp::wire",
+                                    "ignoring unknown ACP method"
+                                );
                             }
                         }
                     }
@@ -1533,30 +1636,19 @@ impl AcpClient {
 
         match update_type {
             "agent_message_chunk" => {
-                if let Some(text) = update["content"]["text"].as_str() {
-                    tracing::info!(target: "acp::stream", "{text}");
-                }
+                let bytes = update["content"]["text"]
+                    .as_str()
+                    .map(str::len)
+                    .unwrap_or_default();
+                tracing::debug!(target: "acp::stream", bytes, "agent message chunk received");
                 false
             }
             "tool_call" => {
-                let title = update
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let kind = update
-                    .get("kind")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                tracing::info!(target: "acp::tool", "tool_call: {title} ({kind})");
+                tracing::info!(target: "acp::tool", "tool call started");
                 true
             }
             "tool_call_update" => {
-                let tool_id = update
-                    .get("toolCallId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                tracing::info!(target: "acp::tool", "tool_call_update: {tool_id} → {status}");
+                tracing::info!(target: "acp::tool", "tool call updated");
                 false
             }
             "plan" => {
@@ -1564,23 +1656,24 @@ impl AcpClient {
                 false
             }
             "agent_thought_chunk" => {
-                if let Some(text) = update["content"]["text"].as_str() {
-                    tracing::debug!(target: "acp::thought", "{text}");
-                }
+                let bytes = update["content"]["text"]
+                    .as_str()
+                    .map(str::len)
+                    .unwrap_or_default();
+                tracing::debug!(target: "acp::thought", bytes, "agent thought chunk received");
                 false
             }
             "available_commands_update" => {
                 // Advertised slash commands (ACP slash-commands extension).
-                // Logged for observability; UI surfacing is a follow-up.
-                let names: Vec<&str> = update["availableCommands"]
+                // Log only the count; command names can reveal private tools.
+                let count = update["availableCommands"]
                     .as_array()
-                    .map(|cmds| cmds.iter().filter_map(|c| c["name"].as_str()).collect())
+                    .map(Vec::len)
                     .unwrap_or_default();
                 tracing::info!(
                     target: "acp::update",
-                    "available_commands_update: {} commands [{}]",
-                    names.len(),
-                    names.join(", ")
+                    count,
+                    "available commands updated"
                 );
                 false
             }
@@ -1603,7 +1696,7 @@ impl AcpClient {
                         Some(serde_json::Value::String(run_id)) => {
                             tracing::debug!(
                                 target: "acp::update",
-                                "session_info_update: activeRunId={run_id}"
+                                "session info reports an active run"
                             );
                             self.active_run_id = Some(run_id.clone());
                         }
@@ -1621,8 +1714,8 @@ impl AcpClient {
                 false
             }
             "keepalive" => false,
-            other => {
-                tracing::debug!(target: "acp::update", "session/update: {other}");
+            _ => {
+                tracing::debug!(target: "acp::update", "unrecognized session update");
                 false
             }
         }
@@ -3051,6 +3144,40 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn session_load_uses_standard_acp_request_shape() {
+        let script = r#"
+            read -t 2 REQ
+            echo '{"jsonrpc":"2.0","id":0,"result":{"loaded":true,"_receivedRequest":'"$REQ"'}}'
+            sleep 1
+        "#;
+        let mut client = spawn_script(script).await;
+        let result = client
+            .session_load(
+                "ses_persisted",
+                "/tmp/workspace",
+                vec![McpServer {
+                    name: "buzz".into(),
+                    command: "buzz-mcp".into(),
+                    args: vec!["--stdio".into()],
+                    env: vec![],
+                }],
+            )
+            .await
+            .expect("session/load should succeed");
+
+        let received = &result["_receivedRequest"];
+        assert_eq!(received["method"], "session/load");
+        assert_eq!(received["params"]["sessionId"], "ses_persisted");
+        assert_eq!(received["params"]["cwd"], "/tmp/workspace");
+        assert_eq!(received["params"]["mcpServers"][0]["name"], "buzz");
+        assert_eq!(received["params"]["mcpServers"][0]["command"], "buzz-mcp");
+        assert_eq!(
+            received["params"]["mcpServers"][0]["args"],
+            serde_json::json!(["--stdio"])
+        );
+    }
+
     // ── Goose-native steer scaffold (PR follow-up to #1160) ──────────────
 
     /// Helper: spawn an inert `cat` subprocess so we have a real AcpClient
@@ -3481,6 +3608,85 @@ mod tests {
             }
             other => panic!("expected AgentError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn error_log_class_never_copies_provider_or_protocol_detail() {
+        let provider = AcpError::AgentError {
+            code: -32000,
+            message: "provider credential and prompt text".to_string(),
+        };
+        let protocol = AcpError::Protocol("raw tool result".to_string());
+        assert_eq!(provider.log_class(), "agent_error");
+        assert_eq!(protocol.log_class(), "protocol");
+        assert!(!provider.log_class().contains("credential"));
+        assert!(!protocol.log_class().contains("tool result"));
+    }
+
+    #[test]
+    fn wire_log_metadata_never_copies_prompts_tool_results_or_credentials() {
+        let outbound = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "session/new",
+            "params": {
+                "systemPrompt": "sentinel-system-prompt",
+                "mcpServers": [{
+                    "name": "sentinel-server",
+                    "command": "sentinel-command",
+                    "args": ["sentinel-tool-result"],
+                    "env": [{"name": "TOKEN", "value": "sentinel-provider-credential"}]
+                }]
+            }
+        });
+        let (method_class, numeric_id, byte_count) =
+            wire_log_metadata(&outbound, outbound.to_string().len());
+        let rendered = format!("{method_class}:{numeric_id:?}:{byte_count}");
+        assert_eq!(method_class, "session_new");
+        assert_eq!(numeric_id, Some(42));
+        for secret in [
+            "sentinel-system-prompt",
+            "sentinel-tool-result",
+            "sentinel-provider-credential",
+            "sentinel-server",
+            "sentinel-command",
+        ] {
+            assert!(!rendered.contains(secret));
+        }
+
+        let inbound = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "sentinel-secret-string-id",
+            "method": "sentinel-secret-method",
+            "params": {"content": "sentinel-tool-result"}
+        });
+        let (method_class, numeric_id, byte_count) =
+            wire_log_metadata(&inbound, inbound.to_string().len());
+        let rendered = format!("{method_class}:{numeric_id:?}:{byte_count}");
+        assert_eq!(method_class, "other_method");
+        assert_eq!(numeric_id, None);
+        assert!(!rendered.contains("sentinel"));
+    }
+
+    #[test]
+    fn initialize_log_metadata_never_copies_auth_or_provider_content() {
+        let result = serde_json::json!({
+            "agentCapabilities": {
+                "loadSession": true,
+                "promptCapabilities": {"image": true}
+            },
+            "authMethods": [{
+                "id": "sentinel-terminal-setup",
+                "name": "sentinel-provider-credential"
+            }],
+            "provider": "sentinel-provider",
+            "detail": "sentinel-secret"
+        });
+        let (capability_count, auth_method_count, byte_count) = initialize_log_metadata(&result);
+        let rendered = format!("{capability_count}:{auth_method_count}:{byte_count}");
+        assert_eq!(capability_count, 2);
+        assert_eq!(auth_method_count, 1);
+        assert!(!rendered.contains("sentinel"));
     }
 
     // ── build_codex_config_env ────────────────────────────────────────────────

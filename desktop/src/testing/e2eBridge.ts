@@ -97,6 +97,7 @@ type MockRelayAgentSeed = {
   respondToAllowlist?: string[];
   channelNames?: string[];
   channelIds?: string[];
+  memberChannelNames?: string[];
   status?: PresenceStatus;
 };
 
@@ -134,6 +135,10 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /** Run the renderer under the managed Hive product/auth contract. */
+    evaosTeamsManaged?: boolean;
+    /** Managed auth state returned by the mock. Defaults to active. */
+    evaosTeamsPhase?: "active" | "signed_out" | "keychain_locked";
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -2050,6 +2055,38 @@ function resetMockRelayAgents(config?: E2eConfig) {
       respond_to: seed.respondTo ?? "owner-only",
       respond_to_allowlist: seed.respondToAllowlist ?? [],
     });
+
+    if (!seed.memberChannelNames?.length) {
+      continue;
+    }
+    applyMockDisplayName(seed.pubkey, seed.name);
+    mockAgentPubkeys.add(seed.pubkey);
+    mockProfiles.set(seed.pubkey, {
+      pubkey: seed.pubkey,
+      display_name: seed.name,
+      avatar_url: null,
+      about: null,
+      nip05_handle: null,
+      owner_pubkey: null,
+      is_agent: true,
+      has_profile_event: true,
+    });
+    for (const channel of mockChannels) {
+      if (
+        !seed.memberChannelNames.includes(channel.name) ||
+        channel.members.some((member) => member.pubkey === seed.pubkey)
+      ) {
+        continue;
+      }
+      channel.members.push({
+        pubkey: seed.pubkey,
+        role: "bot",
+        is_agent: true,
+        joined_at: new Date().toISOString(),
+        display_name: seed.name,
+      });
+      syncMockChannel(channel);
+    }
   }
 }
 
@@ -9255,6 +9292,26 @@ export function maybeInstallE2eTauriMocks() {
     deviceId: state === "running" ? "mock-endpoint-id" : null,
     deviceName: state === "running" ? "Mock desktop" : null,
   });
+  const managedDeniedMockCommands = new Set([
+    "search_users",
+    "list_relay_agents",
+    "list_personas",
+    "list_teams",
+    "list_managed_agents",
+    "create_managed_agent",
+    "start_managed_agent",
+    "stop_managed_agent",
+    "start_managed_agent_runtime",
+    "stop_managed_agent_runtime",
+    "create_channel",
+    "open_dm",
+    "update_channel",
+    "archive_channel",
+    "delete_channel",
+    "add_channel_members",
+    "remove_channel_member",
+    "leave_channel",
+  ]);
   const handleMockCommand = async (command: string, payload: unknown) => {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
@@ -9271,8 +9328,206 @@ export function maybeInstallE2eTauriMocks() {
       payload: loggedPayload,
     });
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
+    if (
+      activeConfig?.mock?.evaosTeamsManaged &&
+      managedDeniedMockCommands.has(command)
+    ) {
+      throw new Error(
+        `Native command ${command} is unavailable in managed Hive tests`,
+      );
+    }
 
     switch (command) {
+      case "get_desktop_product_policy":
+        return activeConfig?.mock?.evaosTeamsManaged
+          ? {
+              managed: true,
+              productName: "Hive",
+              version: "0.4.26-es.1",
+              bundleIdentifier: "com.electricsheephq.evaos.teams",
+              deepLinkScheme: "evaos-teams",
+              artifactName: "Hive-0.4.26-es.1-arm64.dmg",
+              updateChannel: "managed-beta",
+              updaterEnabled: false,
+              upstreamHostedServicesEnabled: false,
+              originAttribution:
+                "Hive by Electric Sheep. Open-source licenses and origin notices are included with the app.",
+            }
+          : {
+              managed: false,
+              productName: "Buzz",
+              version: "0.4.26",
+              bundleIdentifier: "xyz.block.buzz.app",
+              deepLinkScheme: "buzz",
+              artifactName: "",
+              updateChannel: "upstream",
+              updaterEnabled: false,
+              upstreamHostedServicesEnabled: true,
+              originAttribution:
+                "Buzz by Block, licensed under the Apache License 2.0.",
+            };
+      case "get_evaos_teams_auth_status":
+        if (activeConfig?.mock?.evaosTeamsManaged) {
+          const phase = activeConfig.mock.evaosTeamsPhase ?? "active";
+          if (phase !== "active") {
+            return {
+              managed: true,
+              phase,
+              authenticated: false,
+              keychainAvailable: phase !== "keychain_locked",
+              message:
+                phase === "keychain_locked"
+                  ? "Hive cannot read its managed identity."
+                  : undefined,
+            };
+          }
+          return {
+            managed: true,
+            phase: "active",
+            authenticated: true,
+            keychainAvailable: true,
+            entitlement: {
+              communityId: "e2e-default-community",
+              relayHost: "https://localhost:3000",
+              publicKey: identity?.pubkey ?? "deadbeef".repeat(8),
+              role: "owner",
+              assignmentStatus: "assigned",
+              reconciliationStatus: "current",
+              accessRevision: 1,
+              expiresAt: "2099-01-01T00:00:00Z",
+              refreshAfterSeconds: 3600,
+            },
+          };
+        }
+        return {
+          managed: false,
+          phase: "native",
+          authenticated: false,
+          keychainAvailable: true,
+        };
+      case "get_hive_collaboration_state":
+        return {
+          role: "owner",
+          accessRevision: 8,
+          reconciliationStatus: "current",
+          seatLimit: 1_000_000,
+          activeSeats: 4,
+          pendingSeats: 0,
+          members: [
+            {
+              membershipId: "e2e-owner-membership",
+              publicKey: identity?.pubkey ?? "deadbeef".repeat(8),
+              bindingStatus: "bound",
+              displayName: "Hive Owner",
+              email: "owner@example.com",
+              role: "owner",
+            },
+            {
+              membershipId: "e2e-benjamin-membership",
+              publicKey:
+                "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
+              bindingStatus: "bound",
+              displayName: "Benjamin",
+              email: "benjamin@example.com",
+              role: "employee",
+            },
+            {
+              membershipId: "e2e-alex-membership",
+              publicKey:
+                "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+              bindingStatus: "bound",
+              displayName: "Alex",
+              email: "alex@example.com",
+              role: "member",
+            },
+            {
+              membershipId: "e2e-pending-membership",
+              bindingStatus: "sign_in_required",
+              displayName: "Pending teammate",
+              email: "pending@example.com",
+              role: "employee",
+            },
+          ],
+          agents: [
+            {
+              agentInstanceId: "e2e-atris-agent",
+              publicKey: "a1".repeat(32),
+              displayName: "Atris",
+              runtime: "hermes",
+            },
+          ],
+          rooms: [
+            {
+              roomId: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+              name: "general",
+              channelType: "stream",
+              humanMembers: ["e2e-owner-membership", "e2e-benjamin-membership"],
+              agentInstances: [],
+            },
+          ],
+        };
+      case "create_hive_channel": {
+        const created = await handleCreateChannel(
+          {
+            name: String((payload as { name?: string })?.name ?? ""),
+            channelType: "stream",
+            visibility: "private",
+          },
+          activeConfig,
+        );
+        return {
+          roomId: created.id,
+          name: created.name,
+          channelType: "stream",
+          accessRevision: 9,
+          reconciliationStatus: "current",
+        };
+      }
+      case "open_hive_dm": {
+        const targetPublicKeys = ((payload as { targetPublicKeys?: unknown })
+          ?.targetPublicKeys ?? []) as unknown;
+        const opened = await handleOpenDm(
+          {
+            pubkeys: Array.isArray(targetPublicKeys)
+              ? targetPublicKeys.map(String)
+              : [],
+          },
+          activeConfig,
+        );
+        return {
+          roomId: opened.id,
+          name: opened.name,
+          channelType: "dm",
+          reconciliationStatus: "current",
+        };
+      }
+      case "add_hive_room_participant": {
+        const value = payload as {
+          roomId: string;
+          targetPublicKey: string;
+          participantKind: "human" | "agent";
+        };
+        await handleAddChannelMembers(
+          {
+            channelId: value.roomId,
+            pubkeys: [value.targetPublicKey],
+            role: value.participantKind === "agent" ? "bot" : "member",
+          },
+          activeConfig,
+        );
+        return {
+          roomId: value.roomId,
+          channelType: "stream",
+          accessRevision: 9,
+          reconciliationStatus: "current",
+        };
+      }
+      case "invite_hive_member":
+        return {
+          invitationId: crypto.randomUUID(),
+          expiresAt: "2099-01-01T00:00:00Z",
+          emailDispatchStatus: "sent",
+        };
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {
