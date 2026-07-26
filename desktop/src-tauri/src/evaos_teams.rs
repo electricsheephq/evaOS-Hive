@@ -21,7 +21,6 @@ use axum::{
 };
 use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp, ToBech32};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use tauri::{Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::{net::TcpListener, sync::oneshot};
@@ -29,6 +28,11 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{app_state::AppState, secret_store::SecretStore};
+#[cfg(test)]
+use device_code::device_code_challenge;
+use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
+
+mod device_code;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
@@ -332,32 +336,6 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
         status,
         code: "invalid_response".to_string(),
     })
-}
-
-fn normalize_device_code(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_uppercase)
-        .collect()
-}
-
-fn device_code_challenge(verifier: &str) -> String {
-    let value = format!("desktop-device-verifier:{verifier}");
-    hex::encode(Sha256::digest(value.as_bytes()))
-}
-
-fn dashboard_login_url(callback: &str, state: &str, code_challenge: &str) -> Result<Url, String> {
-    let mut url = Url::parse(&format!("{DASHBOARD_ORIGIN}/desktop-auth"))
-        .map_err(|error| format!("invalid dashboard URL: {error}"))?;
-    url.query_pairs_mut()
-        .append_pair("desktop_callback", callback)
-        .append_pair("desktop_auth_state", state)
-        .append_pair("desktop_code_challenge", code_challenge)
-        .append_pair("callback_scheme", "evaos-teams")
-        .append_pair("switch_account", "1")
-        .append_pair("prompt", "select_account");
-    Ok(url)
 }
 
 fn relay_websocket_url(relay_host: &str) -> Result<String, String> {
@@ -1217,14 +1195,9 @@ pub(crate) async fn start_evaos_teams_login(
             .map_err(|error| format!("could not read local sign-in callback: {error}"))?
             .port();
         let auth_state = uuid::Uuid::new_v4().simple().to_string();
-        let device_code_verifier = Zeroizing::new(format!(
-            "{}{}",
-            uuid::Uuid::new_v4().simple(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        let code_challenge = device_code_challenge(&device_code_verifier);
+        let device_code_proof = DeviceCodeProof::new();
         let callback = format!("http://127.0.0.1:{port}/auth/callback");
-        let login_url = dashboard_login_url(&callback, &auth_state, &code_challenge)?;
+        let login_url = dashboard_login_url(&callback, &auth_state, &device_code_proof.challenge)?;
         let (sender, receiver) = oneshot::channel();
         let callback_state = std::sync::Arc::new(LoginCallback {
             expected_state: auth_state,
@@ -1258,7 +1231,8 @@ pub(crate) async fn start_evaos_teams_login(
         };
         server.abort();
 
-        let claim = claim_device_code(&app_state.http_client, &code, &device_code_verifier).await?;
+        let claim =
+            claim_device_code(&app_state.http_client, &code, &device_code_proof.verifier).await?;
         let binding = get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
         let stored = managed_store().load_all_readonly()?.unwrap_or_default();
         let candidate_keys = select_login_keys(&stored, &binding)?;
