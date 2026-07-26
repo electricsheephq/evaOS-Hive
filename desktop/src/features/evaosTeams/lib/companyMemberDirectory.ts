@@ -1,4 +1,7 @@
-import type { HiveCompanyMember } from "@/features/evaosTeams/api";
+import type {
+  EvaosTeamsAuthStatus,
+  HiveCompanyMember,
+} from "@/features/evaosTeams/api";
 import type { UserSearchResult } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -60,4 +63,39 @@ export function mergeCompanyDirectorySearchResults({
       }),
     ),
   ];
+}
+
+export function retainManagedSelectedRecipients({
+  managed,
+  memberPubkeys,
+  selected,
+  settled,
+}: {
+  managed: boolean;
+  memberPubkeys: ReadonlySet<string>;
+  selected: readonly UserSearchResult[];
+  settled: boolean;
+}): UserSearchResult[] {
+  if (!managed || !settled) {
+    return [...selected];
+  }
+  return selected.filter(
+    (candidate) =>
+      candidate.isAgent || memberPubkeys.has(normalizePubkey(candidate.pubkey)),
+  );
+}
+
+export function companyDirectoryScope(
+  status: EvaosTeamsAuthStatus | null | undefined,
+): string | null {
+  const entitlement = status?.entitlement;
+  if (
+    !status?.managed ||
+    status.phase !== "active" ||
+    !entitlement?.communityId ||
+    !entitlement.publicKey
+  ) {
+    return null;
+  }
+  return `${entitlement.communityId}:${normalizePubkey(entitlement.publicKey)}`;
 }

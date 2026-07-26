@@ -131,7 +131,7 @@ export function useMentions(
     [userSearchQuery.data],
   );
   const companyDirectory = useHiveCompanyUserDirectory({
-    enabled: canSearchGlobalPeople,
+    enabled: true,
     relayUsers: userSearchResults,
   });
   const managedAgentNamesByPubkey = React.useMemo(
@@ -239,6 +239,7 @@ export function useMentions(
 
     const addCandidate = (candidate: MentionCandidate & { pubkey: string }) => {
       const pubkey = normalizePubkey(candidate.pubkey);
+      if (!companyDirectory.allows(candidate)) return;
       if (isArchivedDiscovery(pubkey)) {
         return;
       }
@@ -408,6 +409,7 @@ export function useMentions(
     activePersonaById,
     activePersonas,
     canSearchGlobalUsers,
+    companyDirectory.allows,
     companyDirectory.candidates,
     currentPubkey,
     isArchivedDiscovery,

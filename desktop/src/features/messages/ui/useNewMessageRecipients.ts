@@ -6,6 +6,7 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
+import { retainManagedSelectedRecipients } from "@/features/evaosTeams/lib/companyMemberDirectory";
 import {
   coalesceAgentAutocompleteCandidates,
   getDirectMessageAgentPubkeys,
@@ -103,6 +104,23 @@ export function useNewMessageRecipients({
     enabled: active,
     relayUsers: userSearchResults,
   });
+  React.useEffect(() => {
+    if (!active) return;
+    setSelectedUsers((current) => {
+      const retained = retainManagedSelectedRecipients({
+        managed: companyDirectory.managed,
+        memberPubkeys: companyDirectory.memberPubkeys,
+        selected: current,
+        settled: companyDirectory.settled,
+      });
+      return retained.length === current.length ? current : retained;
+    });
+  }, [
+    active,
+    companyDirectory.managed,
+    companyDirectory.memberPubkeys,
+    companyDirectory.settled,
+  ]);
   const isArchivedDiscovery = useIsArchivedPredicate();
 
   const searchResults = React.useMemo(() => {

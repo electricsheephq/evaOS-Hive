@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  companyDirectoryScope,
   companyMemberAsSearchResult,
   companyMemberPubkeys,
   isManagedDirectoryCandidate,
   mergeCompanyDirectorySearchResults,
+  retainManagedSelectedRecipients,
 } from "./companyMemberDirectory.ts";
 
 const ACTIVE = "a".repeat(64);
@@ -110,5 +112,92 @@ test("managed directory puts company names first and drops stale humans", () => 
       { pubkey: ACTIVE, displayName: "Andrew" },
       { pubkey: ACTIVE, displayName: "stale relay name" },
     ],
+  );
+});
+
+test("membership removal prunes a selected human but keeps agents", () => {
+  const staleHuman = {
+    pubkey: STALE,
+    displayName: "Removed member",
+    avatarUrl: null,
+    nip05Handle: null,
+    ownerPubkey: null,
+    isAgent: false,
+  };
+  const agent = {
+    ...staleHuman,
+    pubkey: "c".repeat(64),
+    displayName: "ATRIS",
+    isAgent: true,
+  };
+  assert.deepEqual(
+    retainManagedSelectedRecipients({
+      managed: true,
+      memberPubkeys: new Set([ACTIVE]),
+      selected: [staleHuman, agent],
+      settled: true,
+    }),
+    [agent],
+  );
+});
+
+test("selection is unchanged before settlement and in unmanaged Buzz", () => {
+  const selected = [
+    {
+      pubkey: STALE,
+      displayName: "Relay user",
+      avatarUrl: null,
+      nip05Handle: null,
+      ownerPubkey: null,
+      isAgent: false,
+    },
+  ];
+  assert.deepEqual(
+    retainManagedSelectedRecipients({
+      managed: true,
+      memberPubkeys: new Set(),
+      selected,
+      settled: false,
+    }),
+    selected,
+  );
+  assert.deepEqual(
+    retainManagedSelectedRecipients({
+      managed: false,
+      memberPubkeys: new Set(),
+      selected,
+      settled: true,
+    }),
+    selected,
+  );
+});
+
+test("managed directory cache scope changes with community or durable identity", () => {
+  const status = (communityId, publicKey) => ({
+    managed: true,
+    phase: "active",
+    authenticated: true,
+    keychainAvailable: true,
+    entitlement: {
+      communityId,
+      relayHost: "https://relay.example.invalid",
+      publicKey,
+      role: "member",
+      accessRevision: 1,
+      expiresAt: "2026-07-27T12:00:00Z",
+      refreshAfterSeconds: 300,
+    },
+  });
+  const first = companyDirectoryScope(status("company-a", ACTIVE));
+  assert.notEqual(first, companyDirectoryScope(status("company-b", ACTIVE)));
+  assert.notEqual(first, companyDirectoryScope(status("company-a", STALE)));
+  assert.equal(
+    companyDirectoryScope({
+      managed: true,
+      phase: "reauth_required",
+      authenticated: false,
+      keychainAvailable: true,
+    }),
+    null,
   );
 });
