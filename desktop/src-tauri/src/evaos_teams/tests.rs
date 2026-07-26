@@ -30,10 +30,12 @@ fn challenge(keys: &Keys) -> ChallengeResponse {
 
 #[test]
 fn login_url_is_account_selecting_and_callback_bound() {
+    let verifier = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let challenge = device_code_challenge(verifier);
     let url = dashboard_login_url(
         "http://127.0.0.1:4567/auth/callback",
         "state-12345678",
-        "AABBCCDDEEFF00112233445566778899",
+        &challenge,
     )
     .unwrap();
     let pairs: HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -42,6 +44,9 @@ fn login_url_is_account_selecting_and_callback_bound() {
     assert_eq!(pairs.get("callback_scheme").unwrap(), "evaos-teams");
     assert_eq!(pairs.get("switch_account").unwrap(), "1");
     assert_eq!(pairs.get("prompt").unwrap(), "select_account");
+    assert_eq!(pairs.get("desktop_code_challenge").unwrap(), &challenge);
+    assert_ne!(pairs.get("desktop_code_challenge").unwrap(), verifier);
+    assert!(!pairs.contains_key("fresh"));
     assert_eq!(
         pairs.get("desktop_callback").unwrap(),
         "http://127.0.0.1:4567/auth/callback"
@@ -91,8 +96,7 @@ fn altered_challenge_template_is_rejected() {
 }
 
 #[test]
-fn callback_requires_exact_state_and_normalized_code() {
-    let expected_code = "AABBCCDDEEFF00112233445566778899";
+fn callback_requires_exact_state_and_a_valid_server_code() {
     let expected_state = "state-12345678";
     let valid = HashMap::from([
         ("desktop_auth_state".to_string(), expected_state.to_string()),
@@ -102,18 +106,15 @@ fn callback_requires_exact_state_and_normalized_code() {
         ),
     ]);
     assert_eq!(
-        callback_device_code(&valid, expected_state, expected_code).unwrap(),
-        expected_code
+        callback_device_code(&valid, expected_state).unwrap(),
+        "AABBCCDDEEFF00112233445566778899"
     );
     let mut wrong_state = valid.clone();
     wrong_state.insert("desktop_auth_state".to_string(), "other-state".to_string());
-    assert!(callback_device_code(&wrong_state, expected_state, expected_code).is_err());
-    let mut wrong_code = valid;
-    wrong_code.insert(
-        "device_code".to_string(),
-        "BBBBCCDDEEFF00112233445566778899".to_string(),
-    );
-    assert!(callback_device_code(&wrong_code, expected_state, expected_code).is_err());
+    assert!(callback_device_code(&wrong_state, expected_state).is_err());
+    let mut invalid_code = valid;
+    invalid_code.insert("device_code".to_string(), "short".to_string());
+    assert!(callback_device_code(&invalid_code, expected_state).is_err());
 }
 
 #[test]
@@ -277,6 +278,21 @@ fn logout_retry_treats_only_missing_remote_sessions_as_complete() {
 #[test]
 fn device_code_normalization_matches_dashboard_contract() {
     assert_eq!(normalize_device_code("aabb-ccdd eeff"), "AABBCCDDEEFF");
+}
+
+#[test]
+fn device_code_verifier_is_bound_by_a_one_way_challenge() {
+    let verifier = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let challenge = device_code_challenge(verifier);
+    assert_eq!(challenge.len(), 64);
+    assert!(challenge
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
+    assert_ne!(challenge, verifier);
+    assert_ne!(
+        challenge,
+        device_code_challenge("1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    );
 }
 
 #[test]
