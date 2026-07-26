@@ -36,7 +36,7 @@ use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use builderlab::*;
 use commands::*;
 use deep_link::{
-    acknowledge_pending_community_deep_link, handle_deep_link_url,
+    acknowledge_pending_community_deep_link, handle_deep_link_url, is_supported_deep_link_url,
     take_pending_community_deep_link, PendingCommunityDeepLinks,
 };
 use evaos_teams::*;
@@ -176,7 +176,7 @@ pub fn run() {
             }
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
-                if arg.starts_with("buzz://") {
+                if is_supported_deep_link_url(arg) {
                     handle_deep_link_url(app, arg);
                 }
             }

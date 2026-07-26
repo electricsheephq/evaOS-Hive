@@ -54,7 +54,7 @@ const overrides = new Map([
   // revocable desktop-session adapter isolated from native Buzz behavior in
   // one feature-gated module. Splitting that security boundary during the
   // canary reset would add risk without reducing the reachable surface.
-  ["src-tauri/src/evaos_teams.rs", 1292],
+  ["src-tauri/src/evaos_teams.rs", 1300],
   // Native Builderlab auth/community commands add a small registration surface
   // to the existing Tauri composition root. The implementation lives in
   // builderlab.rs; this narrowly ratchets the command wiring while lib.rs is

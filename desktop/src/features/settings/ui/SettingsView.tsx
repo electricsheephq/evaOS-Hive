@@ -3,7 +3,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { useMyRelayMembershipLookupQuery } from "@/features/community-members/hooks";
-import { getEvaosTeamsAuthStatus } from "@/features/evaosTeams/api";
 import {
   canManageCommunityMembers,
   shouldWarnMissingMembershipSnapshot,
@@ -15,6 +14,7 @@ import {
 } from "@/shared/features/useFeatureEnabled";
 import { topChromeBackdrop } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   Sidebar,
   SidebarContent,
@@ -137,19 +137,7 @@ export function SettingsView({
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const featureState = useFeatureSnapshot();
-  const [managed, setManaged] = React.useState(false);
-
-  React.useEffect(() => {
-    let current = true;
-    getEvaosTeamsAuthStatus()
-      .then((status) => {
-        if (current) setManaged(status.managed);
-      })
-      .catch(() => undefined);
-    return () => {
-      current = false;
-    };
-  }, []);
+  const managed = desktopProductPolicy().managed;
 
   React.useEffect(() => {
     if (managed && managedSettingsDisposition(section) === "hidden") {

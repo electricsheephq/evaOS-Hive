@@ -277,6 +277,12 @@ impl std::fmt::Display for ApiFailure {
     }
 }
 
+impl ApiFailure {
+    fn means_session_is_absent(&self) -> bool {
+        matches!(self.status.as_u16(), 401 | 404)
+    }
+}
+
 fn functions_url(name: &str) -> Result<Url, String> {
     Url::parse(&format!("{SUPABASE_ORIGIN}/functions/v1/{name}"))
         .map_err(|error| format!("invalid managed API URL: {error}"))
@@ -795,22 +801,24 @@ async fn retry_pending_logout(
     session: &str,
 ) -> EvaosTeamsAuthStatus {
     disable_managed_access(app_state);
-    match remote_logout(client, session).await {
-        Ok(()) => match persist_signed_out_identities() {
-            Ok(()) => {
-                if let Ok(mut runtime) = state.runtime.lock() {
-                    *runtime = ManagedRuntime {
-                        initialized: true,
-                        ..ManagedRuntime::default()
-                    };
-                }
-                EvaosTeamsAuthStatus::signed_out()
-            }
-            Err(error) => EvaosTeamsAuthStatus::locked(error),
-        },
-        Err(error) => {
-            EvaosTeamsAuthStatus::logout_pending(format!("Remote logout is still pending: {error}"))
+    if let Err(error) = remote_logout(client, session).await {
+        if !error.means_session_is_absent() {
+            return EvaosTeamsAuthStatus::logout_pending(format!(
+                "Remote logout is still pending: {error}"
+            ));
         }
+    }
+    match persist_signed_out_identities() {
+        Ok(()) => {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                *runtime = ManagedRuntime {
+                    initialized: true,
+                    ..ManagedRuntime::default()
+                };
+            }
+            EvaosTeamsAuthStatus::signed_out()
+        }
+        Err(error) => EvaosTeamsAuthStatus::locked(error),
     }
 }
 

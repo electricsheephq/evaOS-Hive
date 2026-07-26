@@ -211,6 +211,24 @@ fn public_status_never_serializes_credentials() {
 }
 
 #[test]
+fn logout_retry_treats_only_missing_remote_sessions_as_complete() {
+    for status in [401, 404] {
+        assert!(ApiFailure {
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            code: "session_missing".to_string(),
+        }
+        .means_session_is_absent());
+    }
+    for status in [400, 403, 500] {
+        assert!(!ApiFailure {
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            code: "retry".to_string(),
+        }
+        .means_session_is_absent());
+    }
+}
+
+#[test]
 fn device_code_normalization_matches_dashboard_contract() {
     assert_eq!(normalize_device_code("aabb-ccdd eeff"), "AABBCCDDEEFF");
 }
