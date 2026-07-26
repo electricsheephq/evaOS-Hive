@@ -57,9 +57,9 @@ fn verify_managed_store_writable() -> Result<(), String> {
         .unwrap_or_default();
     managed_store()
         .replace_all(&existing)
-        .map_err(|_| "evaOS Teams cannot write to macOS Keychain".to_string())?;
+        .map_err(|_| "Hive cannot write to macOS Keychain".to_string())?;
     if managed_store().load_all_readonly()? != Some(existing) {
-        return Err("evaOS Teams could not verify its Keychain write".to_string());
+        return Err("Hive could not verify its Keychain write".to_string());
     }
     Ok(())
 }
@@ -454,9 +454,7 @@ fn identity_only_entries(keys: &Keys) -> Result<HashMap<String, String>, String>
     )]))
 }
 
-fn runtime_from_entries(
-    stored: Option<HashMap<String, String>>,
-) -> Result<ManagedRuntime, String> {
+fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
     let Some(stored) = stored else {
         return Ok(ManagedRuntime {
             initialized: true,
@@ -596,7 +594,7 @@ async fn current_credentials(
     let session = runtime
         .session
         .clone()
-        .ok_or_else(|| "Sign in to evaOS Teams first".to_string())?;
+        .ok_or_else(|| "Sign in to Hive first".to_string())?;
     let keys = runtime
         .keys
         .clone()
@@ -654,17 +652,17 @@ async fn retry_pending_logout(
                 );
             };
             match persist_signed_out_identity(&keys) {
-            Ok(()) => {
-                if let Ok(mut runtime) = state.runtime.lock() {
-                    *runtime = ManagedRuntime {
-                        initialized: true,
-                        keys: Some(keys),
-                        ..ManagedRuntime::default()
-                    };
+                Ok(()) => {
+                    if let Ok(mut runtime) = state.runtime.lock() {
+                        *runtime = ManagedRuntime {
+                            initialized: true,
+                            keys: Some(keys),
+                            ..ManagedRuntime::default()
+                        };
+                    }
+                    EvaosTeamsAuthStatus::signed_out()
                 }
-                EvaosTeamsAuthStatus::signed_out()
-            }
-            Err(error) => EvaosTeamsAuthStatus::locked(error),
+                Err(error) => EvaosTeamsAuthStatus::locked(error),
             }
         }
         Err(error) => {
@@ -838,13 +836,13 @@ async fn login_callback(
             }
             (
                 StatusCode::OK,
-                Html("<!doctype html><title>evaOS Teams</title><p>Sign-in received. Return to evaOS Teams.</p>"),
+                Html("<!doctype html><title>Hive</title><p>Sign-in received. Return to Hive.</p>"),
             )
                 .into_response()
         }
         Err(_) => (
             StatusCode::BAD_REQUEST,
-            Html("<!doctype html><title>evaOS Teams</title><p>This sign-in callback is not valid.</p>"),
+            Html("<!doctype html><title>Hive</title><p>This sign-in callback is not valid.</p>"),
         )
             .into_response(),
     }
@@ -892,7 +890,7 @@ async fn bind_identity(
             "action": "issue_key_challenge",
             "public_key": public_key,
             "device_metadata": {
-                "label": "evaOS Teams",
+                "label": "Hive",
                 "app_version": env!("CARGO_PKG_VERSION"),
                 "platform": std::env::consts::OS,
             },
@@ -932,7 +930,7 @@ pub(crate) async fn start_evaos_teams_login(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&app, &state, &app_state);
-        return Err("evaOS Teams managed login is not enabled in this build".to_string());
+        return Err("Hive managed login is not enabled in this build".to_string());
     }
 
     #[cfg(feature = "evaos-teams-managed")]
@@ -1001,7 +999,7 @@ pub(crate) async fn start_evaos_teams_login(
 
         if let Err(error) = app.opener().open_url(login_url.as_str(), None::<&str>) {
             server.abort();
-            return Err(format!("could not open ElectricSheep sign-in: {error}"));
+            return Err(format!("could not open Electric Sheep sign-in: {error}"));
         }
         let code = match tokio::time::timeout(LOGIN_TIMEOUT, receiver).await {
             Ok(Ok(Ok(code))) => code,
@@ -1015,7 +1013,7 @@ pub(crate) async fn start_evaos_teams_login(
             }
             Err(_) => {
                 server.abort();
-                return Err("ElectricSheep sign-in timed out".to_string());
+                return Err("Electric Sheep sign-in timed out".to_string());
             }
         };
         server.abort();
@@ -1054,7 +1052,7 @@ pub(crate) async fn logout_evaos_teams(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&state, &app_state);
-        return Err("evaOS Teams managed login is not enabled in this build".to_string());
+        return Err("Hive managed login is not enabled in this build".to_string());
     }
 
     #[cfg(feature = "evaos-teams-managed")]

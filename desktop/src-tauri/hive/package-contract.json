@@ -1,0 +1,9 @@
+{
+  "productName": "Hive",
+  "version": "0.4.26-es.2",
+  "bundleIdentifier": "com.electricsheephq.evaos.teams",
+  "deepLinkScheme": "evaos-teams",
+  "artifactName": "Hive-0.4.26-es.2-arm64.dmg",
+  "updateChannel": "hive-internal",
+  "updateEndpoint": "https://github.com/electricsheephq/evaOS-Hive/releases/download/hive-desktop-latest/latest.json"
+}

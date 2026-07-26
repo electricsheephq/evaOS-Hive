@@ -14,6 +14,7 @@ import type { AcpAuthMethod, AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { getInstallErrorMessage } from "@/shared/lib/installError";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -559,7 +560,7 @@ export function DoctorSettingsPanel() {
       <SectionHeader
         className="items-center"
         title="Agent runtimes"
-        description="Choose which agent tools Buzz can use on this device."
+        description={`Choose which agent tools ${desktopProductPolicy().productName} can use on this device.`}
         action={
           <Button
             disabled={isRefreshing}

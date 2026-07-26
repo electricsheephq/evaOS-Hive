@@ -10,7 +10,7 @@ import {
 } from "@/features/evaosTeams/api";
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { Button } from "@/shared/ui/button";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { ProductMark } from "@/shared/product/ProductMark";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 
 export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
@@ -85,7 +85,10 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
       <StartupWindowDragRegion />
       <ThemeGrainientBackground />
       <section className="relative z-10 w-full max-w-md rounded-2xl border border-border/70 bg-background/90 p-7 shadow-2xl backdrop-blur-xl">
-        <BuzzMark className="mb-6 h-11 w-auto text-foreground" />
+        <ProductMark
+          className="mb-6 h-11 w-auto text-foreground"
+          imageClassName="mb-6 h-16 w-16 rounded-[22%]"
+        />
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
           Hive
         </p>

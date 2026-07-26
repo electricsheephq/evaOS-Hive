@@ -7,6 +7,10 @@ import {
   parseMessageLink,
   resolveMessageLinkRenderTarget,
 } from "./messageLink.ts";
+import {
+  installDesktopProductPolicy,
+  resetDesktopProductPolicyForTests,
+} from "../../../shared/product/productIdentity.ts";
 
 const CHANNEL = "f570339f-8f8a-4e08-a779-8d954aa44109";
 const MESSAGE =
@@ -40,6 +44,32 @@ test("buildMessageLink → parseMessageLink round-trips with thread", () => {
     messageId: MESSAGE,
     threadRootId: THREAD,
   });
+});
+
+test("managed builds emit Hive links while accepting upstream links", () => {
+  installDesktopProductPolicy({
+    managed: true,
+    productName: "Hive",
+    version: "0.4.26-es.2",
+    bundleIdentifier: "com.electricsheephq.evaos.teams",
+    deepLinkScheme: "evaos-teams",
+    artifactName: "Hive-0.4.26-es.2-arm64.dmg",
+    updateChannel: "hive-internal",
+    updaterEnabled: true,
+    upstreamHostedServicesEnabled: false,
+    originAttribution: "Built from Buzz by Block.",
+  });
+  try {
+    const url = buildMessageLink({ channelId: CHANNEL, messageId: MESSAGE });
+    assert.equal(url, `evaos-teams://message?channel=${CHANNEL}&id=${MESSAGE}`);
+    assert.equal(parseMessageLink(url).ok, true);
+    assert.equal(
+      parseMessageLink(`buzz://message?channel=${CHANNEL}&id=${MESSAGE}`).ok,
+      true,
+    );
+  } finally {
+    resetDesktopProductPolicyForTests();
+  }
 });
 
 test("buildMessageLink treats null/empty thread as absent", () => {

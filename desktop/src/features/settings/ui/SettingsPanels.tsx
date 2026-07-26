@@ -9,6 +9,7 @@ import {
   Cpu,
   Download,
   FlaskConical,
+  Info,
   Keyboard,
   LayoutTemplate,
   MessagesSquare,
@@ -37,6 +38,8 @@ import {
   type ThreadViewMode,
 } from "@/features/channels/lib/threadViewModePreference";
 import { cn } from "@/shared/lib/cn";
+import { HiveAboutCard } from "@/features/evaosTeams/HiveAboutCard";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -100,7 +103,8 @@ export type SettingsSection =
   | "custom-emoji"
   | "local-archive"
   | "mobile"
-  | "updates";
+  | "updates"
+  | "about";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
@@ -120,6 +124,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "local-archive",
   "mobile",
   "updates",
+  "about",
 ];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -230,6 +235,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "updates",
     label: "Updates",
     icon: Download,
+  },
+  {
+    value: "about",
+    label: "About",
+    icon: Info,
   },
 ];
 
@@ -518,7 +528,7 @@ function ThemeSettingsCard() {
     >
       <SettingsSectionHeader
         title="Appearance"
-        description="Choose a theme for Buzz."
+        description={`Choose a theme for ${desktopProductPolicy().productName}.`}
       />
 
       {/* Mode selector: System / Light / Dark */}
@@ -843,6 +853,8 @@ export function renderSettingsSection(
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":
       return <UpdateChecker />;
+    case "about":
+      return <HiveAboutCard />;
     default: {
       const exhaustiveCheck: never = section;
       return exhaustiveCheck;

@@ -6,6 +6,7 @@ import {
   SettingsOptionRow,
 } from "./ui/SettingsOptionGroup";
 import { SettingsSectionHeader } from "./ui/SettingsSectionHeader";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 export function UpdateChecker() {
   const { status, checkForUpdate, installAndRelaunch } = useUpdaterContext();
 
@@ -13,7 +14,7 @@ export function UpdateChecker() {
     <section className="min-w-0" data-testid="settings-updates">
       <SettingsSectionHeader
         title="Software Updates"
-        description="Keep Buzz up to date with the latest features and fixes."
+        description={`Keep ${desktopProductPolicy().productName} up to date with the latest features and fixes.`}
       />
 
       <SettingsOptionGroup>

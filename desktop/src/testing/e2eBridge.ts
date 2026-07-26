@@ -9306,6 +9306,20 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_desktop_product_policy":
+        return {
+          managed: false,
+          productName: "Buzz",
+          version: "0.4.26",
+          bundleIdentifier: "xyz.block.buzz.app",
+          deepLinkScheme: "buzz",
+          artifactName: "",
+          updateChannel: "upstream",
+          updaterEnabled: false,
+          upstreamHostedServicesEnabled: true,
+          originAttribution:
+            "Buzz by Block, licensed under the Apache License 2.0.",
+        };
       case "get_evaos_teams_auth_status":
         return {
           managed: false,
