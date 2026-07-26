@@ -19,6 +19,7 @@ import {
   isAgentIdentityMentionable,
   shouldHideAgentFromMentions,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
+import { getRelayPolicyAgentPubkeys } from "@/features/agents/lib/companyAgentCatalog";
 import {
   useInfiniteUserSearchQuery,
   useUsersBatchQuery,
@@ -180,12 +181,7 @@ export function useMentions(
     [relayAgentsQuery.data],
   );
   const directoryAgentPubkeys = React.useMemo(
-    () =>
-      new Set(
-        (relayAgentsQuery.data ?? []).map((agent) =>
-          normalizePubkey(agent.pubkey),
-        ),
-      ),
+    () => getRelayPolicyAgentPubkeys(relayAgentsQuery.data),
     [relayAgentsQuery.data],
   );
   const sharedChannelIds = React.useMemo(
