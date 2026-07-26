@@ -5,6 +5,7 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
 import {
   coalesceAgentAutocompleteCandidates,
   getDirectMessageAgentPubkeys,
@@ -98,6 +99,10 @@ export function useNewMessageRecipients({
     limit: DIRECTORY_PAGE_SIZE,
   });
   const userSearchResults = useFlattenedUserSearchResults(userSearchQuery.data);
+  const companyDirectory = useHiveCompanyUserDirectory({
+    enabled: active,
+    relayUsers: userSearchResults,
+  });
   const isArchivedDiscovery = useIsArchivedPredicate();
 
   const searchResults = React.useMemo(() => {
@@ -165,7 +170,7 @@ export function useNewMessageRecipients({
       });
     };
 
-    for (const user of userSearchResults) {
+    for (const user of companyDirectory.candidates) {
       addCandidate(candidateWithAgentMetadata(user, managedAgentsByPubkey), {
         includeSelected: deferredSearchQuery.length > 0,
       });
@@ -237,18 +242,19 @@ export function useNewMessageRecipients({
   }, [
     channelsQuery.data,
     companyAgentsQuery.data,
+    companyDirectory.candidates,
     currentPubkey,
     deferredSearchQuery,
     isArchivedDiscovery,
     managedAgentsQuery.data,
     relayAgentsQuery.data,
     selectedPubkeys,
-    userSearchResults,
   ]);
 
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
     companyAgentsQuery.isLoading ||
+    companyDirectory.isLoading ||
     managedAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;
@@ -340,7 +346,11 @@ export function useNewMessageRecipients({
     removeUser,
     reset,
     searchError:
-      userSearchQuery.error instanceof Error ? userSearchQuery.error : null,
+      companyDirectory.error instanceof Error
+        ? companyDirectory.error
+        : userSearchQuery.error instanceof Error
+          ? userSearchQuery.error
+          : null,
     searchQuery,
     searchResults,
     selectUser,

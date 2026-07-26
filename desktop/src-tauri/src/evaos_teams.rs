@@ -7,7 +7,7 @@
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Mutex, OnceLock},
     time::Duration,
 };
@@ -32,7 +32,15 @@ use crate::{app_state::AppState, secret_store::SecretStore};
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
 
+mod company_directory;
 mod device_code;
+
+use company_directory::{
+    sanitize_company_agents, sanitize_company_members, CollaborationProjection, HiveCompanyAgent,
+    HiveCompanyMember,
+};
+#[cfg(test)]
+use company_directory::{RawHiveCompanyAgent, RawHiveCompanyMember};
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
@@ -230,29 +238,6 @@ struct IdentityBindingResponse {
     binding: IdentityBinding,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct HiveCompanyAgent {
-    agent_instance_id: String,
-    public_key: String,
-    display_name: String,
-    runtime: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawHiveCompanyAgent {
-    agent_instance_id: String,
-    public_key: String,
-    display_name: String,
-    runtime: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CollaborationProjection {
-    #[serde(default)]
-    agents: Vec<RawHiveCompanyAgent>,
-}
-
 #[derive(Debug, Deserialize)]
 struct CollaborationResponse {
     status: String,
@@ -306,7 +291,10 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
     let mut request = client
         .post(url)
         .header("apikey", SUPABASE_PUBLISHABLE_KEY)
-        .header("x-client-info", "evaos-teams-desktop/0.4.23")
+        .header(
+            "x-client-info",
+            concat!("hive-desktop/", env!("CARGO_PKG_VERSION")),
+        )
         .timeout(REQUEST_TIMEOUT)
         .json(&body);
     if let Some(token) = bearer {
@@ -376,40 +364,6 @@ fn validate_entitlement(
         return Err("managed entitlement has expired".to_string());
     }
     relay_websocket_url(&entitlement.relay_host)
-}
-
-fn sanitize_company_agents(agents: Vec<RawHiveCompanyAgent>) -> Vec<HiveCompanyAgent> {
-    let mut seen = HashSet::new();
-    agents
-        .into_iter()
-        .filter_map(|agent| {
-            let display_name = agent.display_name.trim();
-            let runtime = agent.runtime.trim();
-            let valid_public_key = agent.public_key.len() == 64
-                && agent.public_key.chars().all(|character| {
-                    character.is_ascii_hexdigit() && !character.is_ascii_uppercase()
-                });
-            let valid_text = |value: &str, max: usize| {
-                !value.is_empty()
-                    && value.len() <= max
-                    && value.chars().all(|character| !character.is_control())
-            };
-            if uuid::Uuid::parse_str(&agent.agent_instance_id).is_err()
-                || !valid_public_key
-                || !seen.insert(agent.public_key.clone())
-                || !valid_text(display_name, 128)
-                || !valid_text(runtime, 64)
-            {
-                return None;
-            }
-            Some(HiveCompanyAgent {
-                agent_instance_id: agent.agent_instance_id,
-                public_key: agent.public_key,
-                display_name: display_name.to_string(),
-                runtime: runtime.to_string(),
-            })
-        })
-        .collect()
 }
 
 fn bind_verified_entitlement(
@@ -947,9 +901,9 @@ pub(crate) async fn get_evaos_teams_auth_status(
     }
 }
 
-/// Return only the company-scoped public agent catalog. Room, member, seat,
-/// and control-plane data from the collaboration projection never crosses the
-/// Tauri boundary. Relay profiles remain the source of live status/channels.
+/// Return only the company-scoped public agent catalog. Room, seat, and
+/// control-plane data never crosses the Tauri boundary. The separate human
+/// directory command exposes only active public keys and display names.
 #[tauri::command]
 pub(crate) async fn list_hive_company_agents(
     state: State<'_, EvaosTeamsState>,
@@ -985,6 +939,48 @@ pub(crate) async fn list_hive_company_agents(
             return Err("Company agent catalog is inactive".to_string());
         }
         Ok(sanitize_company_agents(response.collaboration.agents))
+    }
+}
+
+/// Return the active company's public human directory. Only durable public
+/// keys and display names cross the Tauri boundary; membership IDs, email,
+/// seats, rooms, Desktop sessions, and private identity data stay server-side.
+/// Native Buzz remains responsible for signing and publishing collaboration.
+#[tauri::command]
+pub(crate) async fn list_hive_company_members(
+    state: State<'_, EvaosTeamsState>,
+    app_state: State<'_, AppState>,
+) -> Result<Vec<HiveCompanyMember>, String> {
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    {
+        let _ = (&state, &app_state);
+        Ok(Vec::new())
+    }
+
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        if !app_state
+            .evaos_teams_authorized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("Hive access is not active".to_string());
+        }
+        let (session, _, logout_pending) = current_credentials(&state).await?;
+        if logout_pending {
+            return Err("Hive sign-out is still pending".to_string());
+        }
+        let response: CollaborationResponse = post_json(
+            &app_state.http_client,
+            "evaos-teams-access",
+            Some(&session),
+            serde_json::json!({ "action": "get_collaboration_state" }),
+        )
+        .await
+        .map_err(|error| format!("Company member directory is unavailable: {error}"))?;
+        if response.status != "active" {
+            return Err("Company member directory is inactive".to_string());
+        }
+        Ok(sanitize_company_members(response.collaboration.members))
     }
 }
 

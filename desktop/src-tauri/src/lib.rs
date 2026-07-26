@@ -672,6 +672,7 @@ pub fn run() {
             start_evaos_teams_login,
             logout_evaos_teams,
             list_hive_company_agents,
+            list_hive_company_members,
             get_desktop_product_policy,
             get_builderlab_nostr_identity,
             bind_builderlab_nostr_identity,

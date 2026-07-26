@@ -9,6 +9,7 @@ import {
   useChannelMembersQuery,
   useChannelsQuery,
 } from "@/features/channels/hooks";
+import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import {
@@ -129,6 +130,10 @@ export function useMentions(
     () => userSearchQuery.data?.pages.flatMap((page) => page.users) ?? [],
     [userSearchQuery.data],
   );
+  const companyDirectory = useHiveCompanyUserDirectory({
+    enabled: canSearchGlobalPeople,
+    relayUsers: userSearchResults,
+  });
   const managedAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
@@ -352,7 +357,7 @@ export function useMentions(
     }
 
     if (canSearchGlobalUsers) {
-      for (const user of userSearchResults) {
+      for (const user of companyDirectory.candidates) {
         const pubkey = normalizePubkey(user.pubkey);
         addCandidate({
           kind: "identity",
@@ -402,8 +407,8 @@ export function useMentions(
   }, [
     activePersonaById,
     activePersonas,
-    userSearchResults,
     canSearchGlobalUsers,
+    companyDirectory.candidates,
     currentPubkey,
     isArchivedDiscovery,
     managedAgentNamesByPubkey,

@@ -10094,6 +10094,8 @@ export function maybeInstallE2eTauriMocks() {
         return handleListRelayAgents(activeConfig);
       case "list_hive_company_agents":
         return [];
+      case "list_hive_company_members":
+        return [];
       case "list_personas":
         return handleListPersonas();
       case "create_persona":

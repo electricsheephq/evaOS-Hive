@@ -488,6 +488,37 @@ fn company_agent_catalog_drops_invalid_and_duplicate_rows() {
 }
 
 #[test]
+fn company_member_catalog_drops_unbound_invalid_and_duplicate_rows() {
+    let public_key = "a".repeat(64);
+    let members = sanitize_company_members(vec![
+        RawHiveCompanyMember {
+            public_key: Some(public_key.clone()),
+            display_name: "  Andrew  ".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: Some(public_key),
+            display_name: "duplicate".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: None,
+            display_name: "not enrolled".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: Some("B".repeat(64)),
+            display_name: "uppercase key".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: Some("c".repeat(64)),
+            display_name: "in\nvalid".to_string(),
+        },
+    ]);
+
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].display_name, "Andrew");
+    assert_eq!(members[0].public_key, "a".repeat(64));
+}
+
+#[test]
 fn public_company_agent_projection_contains_no_session_or_membership_data() {
     let agent = HiveCompanyAgent {
         agent_instance_id: "10000000-0000-4000-8000-000000000001".to_string(),
@@ -500,4 +531,18 @@ fn public_company_agent_projection_contains_no_session_or_membership_data() {
     assert!(!json.contains("membership"));
     assert!(!json.contains("room"));
     assert!(!json.contains("email"));
+}
+
+#[test]
+fn public_company_member_projection_contains_no_private_or_membership_data() {
+    let member = HiveCompanyMember {
+        public_key: "a".repeat(64),
+        display_name: "Andrew".to_string(),
+    };
+    let json = serde_json::to_string(&member).unwrap();
+    assert!(!json.contains("desktop_session"));
+    assert!(!json.contains("membership"));
+    assert!(!json.contains("room"));
+    assert!(!json.contains("email"));
+    assert!(!json.contains("nsec"));
 }
