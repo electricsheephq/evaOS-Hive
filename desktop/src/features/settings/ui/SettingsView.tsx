@@ -30,6 +30,7 @@ import {
   useSidebar,
 } from "@/shared/ui/sidebar";
 import { SidebarMenuLabel } from "@/shared/ui/sidebar-menu-label";
+import { managedSettingsDisposition } from "../managedSettingsPolicy";
 import {
   renderSettingsSection,
   settingsSections,
@@ -80,18 +81,6 @@ const settingsNavGroups: Array<{
     ],
   },
 ];
-
-const managedHiddenSections = new Set<SettingsSection>([
-  "compute",
-  "hosted-communities",
-  "mobile",
-]);
-
-const managedRestoredFeatureSections = new Set<SettingsSection>([
-  "agents",
-  "channel-templates",
-  "custom-emoji",
-]);
 
 function SettingsSectionButton({
   active,
@@ -163,21 +152,21 @@ export function SettingsView({
   }, []);
 
   React.useEffect(() => {
-    if (managed && managedHiddenSections.has(section)) {
+    if (managed && managedSettingsDisposition(section) === "hidden") {
       onSectionChange("profile");
     }
   }, [managed, onSectionChange, section]);
 
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
-      if (managed && managedHiddenSections.has(s.value)) return false;
+      const managedDisposition = managed
+        ? managedSettingsDisposition(s.value)
+        : "native";
+      if (managedDisposition === "hidden") return false;
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).
-      if (
-        s.featureGate &&
-        !(managed && managedRestoredFeatureSections.has(s.value))
-      ) {
+      if (s.featureGate && managedDisposition !== "restored") {
         const feature = getFeature(s.featureGate);
         if (feature && !resolveEnabled(s.featureGate, featureState)) {
           return false;
