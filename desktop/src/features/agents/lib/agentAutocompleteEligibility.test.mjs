@@ -229,7 +229,6 @@ test("shouldHideAgentFromMentions: never hides non-agents", () => {
       isMember: false,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set([PUB_A]),
     }),
     false,
   );
@@ -242,7 +241,6 @@ test("shouldHideAgentFromMentions: shows invocable agents even when non-member",
       isMember: false,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set([PUB_A]),
-      directoryAgentPubkeys: new Set([PUB_A]),
     }),
     false,
   );
@@ -255,33 +253,30 @@ test("shouldHideAgentFromMentions: hides non-member non-invocable agents", () =>
       isMember: false,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set(),
     }),
     true,
   );
 });
 
-test("shouldHideAgentFromMentions: hides member agents with an explicit not-invocable directory entry (Fizz)", () => {
+test("shouldHideAgentFromMentions: shows room bot members despite stale relay invocation policy", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,
       isMember: true,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set([PUB_A]),
     }),
-    true,
+    false,
   );
 });
 
-test("shouldHideAgentFromMentions: shows member agents with unknown invocability (not in directory)", () => {
+test("shouldHideAgentFromMentions: shows member agents with unknown invocability", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,
       isMember: true,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set(),
     }),
     false,
   );
@@ -294,12 +289,11 @@ test("shouldHideAgentFromMentions: normalizes the pubkey before lookup", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,
-      isMember: true,
+      isMember: false,
       pubkey: mixedCase,
-      mentionableAgentPubkeys: new Set(),
-      directoryAgentPubkeys: new Set([normalized]),
+      mentionableAgentPubkeys: new Set([normalized]),
     }),
-    true,
+    false,
   );
 });
 

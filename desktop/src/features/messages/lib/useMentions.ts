@@ -19,7 +19,6 @@ import {
   isAgentIdentityMentionable,
   shouldHideAgentFromMentions,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
-import { getRelayPolicyAgentPubkeys } from "@/features/agents/lib/companyAgentCatalog";
 import {
   useInfiniteUserSearchQuery,
   useUsersBatchQuery,
@@ -180,10 +179,6 @@ export function useMentions(
       ),
     [relayAgentsQuery.data],
   );
-  const directoryAgentPubkeys = React.useMemo(
-    () => getRelayPolicyAgentPubkeys(relayAgentsQuery.data),
-    [relayAgentsQuery.data],
-  );
   const sharedChannelIds = React.useMemo(
     () => getSharedChannelIds(channelsQuery.data),
     [channelsQuery.data],
@@ -251,7 +246,6 @@ export function useMentions(
           isMember: candidate.isMember === true,
           pubkey,
           mentionableAgentPubkeys,
-          directoryAgentPubkeys,
         })
       ) {
         return;
@@ -411,7 +405,6 @@ export function useMentions(
     userSearchResults,
     canSearchGlobalUsers,
     currentPubkey,
-    directoryAgentPubkeys,
     isArchivedDiscovery,
     managedAgentNamesByPubkey,
     managedAgentPersonaIds,
