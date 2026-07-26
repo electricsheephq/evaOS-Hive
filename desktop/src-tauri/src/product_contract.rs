@@ -6,8 +6,12 @@ pub(crate) const HIVE_BUNDLE_IDENTIFIER: &str = "com.electricsheephq.evaos.teams
 pub(crate) const HIVE_DEEP_LINK_SCHEME: &str = "evaos-teams";
 pub(crate) const HIVE_ARTIFACT_NAME: &str = "Hive-0.4.26-es.2-arm64.dmg";
 pub(crate) const HIVE_UPDATE_CHANNEL: &str = "hive-internal";
+// Consumed by build.rs and the checked-in packaging contract, not the app
+// library target that also compiles this shared module.
+#[allow(dead_code)]
 pub(crate) const HIVE_UPDATE_ENDPOINT: &str = "https://github.com/electricsheephq/evaOS-Hive/releases/download/hive-desktop-latest/latest.json";
 
+#[allow(dead_code)]
 pub(crate) fn managed_tauri_overlay(updater_public_key: Option<&str>) -> Value {
     let updater_enabled = updater_public_key.is_some();
     json!({
