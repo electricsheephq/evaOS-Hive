@@ -309,6 +309,12 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         return;
     }
 
+    #[cfg(feature = "evaos-teams-managed")]
+    if !managed_deep_link_allowed(url.host_str()) {
+        eprintln!("buzz-desktop: managed build rejected an authority-mutating deep link");
+        return;
+    }
+
     match url.host_str() {
         Some("connect") => {
             let Some(relay_url) = parse_websocket_relay_param(&url) else {
@@ -384,14 +390,28 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     }
 }
 
+#[cfg(any(test, feature = "evaos-teams-managed"))]
+fn managed_deep_link_allowed(action: Option<&str>) -> bool {
+    matches!(action, Some("message"))
+}
+
 #[cfg(test)]
 mod tests {
     use url::Url;
 
     use super::{
-        parse_add_community_deep_link, parse_join_deep_link, parse_message_deep_link,
-        parse_nostr_bind_deep_link, PendingCommunityDeepLink, PendingCommunityDeepLinks,
+        managed_deep_link_allowed, parse_add_community_deep_link, parse_join_deep_link,
+        parse_message_deep_link, parse_nostr_bind_deep_link, PendingCommunityDeepLink,
+        PendingCommunityDeepLinks,
     };
+
+    #[test]
+    fn managed_deep_links_allow_messages_but_not_authority_changes() {
+        assert!(managed_deep_link_allowed(Some("message")));
+        for action in ["connect", "join", "add-community", "nostr-bind"] {
+            assert!(!managed_deep_link_allowed(Some(action)), "{action}");
+        }
+    }
 
     fn pending(id: &str, relay_url: &str, code: Option<&str>) -> PendingCommunityDeepLink {
         PendingCommunityDeepLink {

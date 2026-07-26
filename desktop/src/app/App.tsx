@@ -20,6 +20,7 @@ import { deriveShellRoute } from "@/app/AppShell.helpers";
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { useReloadShortcut } from "@/app/useReloadShortcut";
 import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkeys";
+import { EvaosTeamsAuthGate } from "@/features/evaosTeams/EvaosTeamsAuthGate";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
 import {
@@ -671,9 +672,7 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
   );
 }
 
-export function App() {
-  useReloadShortcut();
-  useInitialRenderReady();
+function NativeBuzzApp() {
   const [sharedIdentity, setSharedIdentity] = useState<boolean | null>(null);
   const [queryClient] = useState(createBuzzQueryClient);
 
@@ -692,5 +691,15 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <MachineBootstrap sharedIdentity={sharedIdentity} />
     </QueryClientProvider>
+  );
+}
+
+export function App() {
+  useReloadShortcut();
+  useInitialRenderReady();
+  return (
+    <EvaosTeamsAuthGate>
+      <NativeBuzzApp />
+    </EvaosTeamsAuthGate>
   );
 }

@@ -1,6 +1,10 @@
 import * as React from "react";
 import { toast } from "sonner";
 
+import {
+  getEvaosTeamsAuthStatus,
+  logoutEvaosTeams,
+} from "@/features/evaosTeams/api";
 import { NsecMaskedDisplay } from "@/features/onboarding/ui/NsecMaskedDisplay";
 import { getNsec, signOut } from "@/shared/api/tauriIdentity";
 import {
@@ -40,6 +44,79 @@ export const SIGNOUT_CONFIRM_PHRASE = "wipe all my data";
  * Only when both gates pass does "Delete My Data" become clickable.
  */
 export function SignOutSection() {
+  const [managed, setManaged] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    let current = true;
+    getEvaosTeamsAuthStatus()
+      .then((status) => {
+        if (current) setManaged(status.managed);
+      })
+      .catch(() => {
+        if (current) setManaged(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  if (managed === null) return null;
+  if (managed) return <ManagedSignOutSection />;
+  return <NativeSignOutSection />;
+}
+
+function ManagedSignOutSection() {
+  const [isPending, setIsPending] = React.useState(false);
+
+  async function handleManagedSignOut() {
+    setIsPending(true);
+    try {
+      const status = await logoutEvaosTeams();
+      if (status.phase !== "signed_out") {
+        throw new Error(
+          status.message ?? "Hive could not confirm remote session revocation.",
+        );
+      }
+      window.location.reload();
+    } catch (error) {
+      setIsPending(false);
+      toast.error(error instanceof Error ? error.message : "Sign out failed.");
+    }
+  }
+
+  return (
+    <div
+      className="mt-8 border-t border-border/60 pb-6 pt-5"
+      data-testid="settings-signout"
+    >
+      <div className="flex items-center justify-between gap-4 px-1">
+        <div className="min-w-0 space-y-1">
+          <h2 className="text-lg font-semibold tracking-tight">Sign out</h2>
+          <p className="text-sm text-muted-foreground">
+            Revokes this Hive session. Your device identity stays in Keychain so
+            offline messages remain addressed to you and the next login can
+            verify the same identity.
+          </p>
+        </div>
+        <Button
+          className="shrink-0"
+          data-testid="managed-signout"
+          disabled={isPending}
+          onClick={() => void handleManagedSignOut()}
+          type="button"
+          variant="destructive"
+        >
+          {isPending ? (
+            <Spinner aria-label="Signing out" className="h-4 w-4 border-2" />
+          ) : null}
+          {isPending ? "Signing out…" : "Sign Out"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function NativeSignOutSection() {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isPending, setIsPending] = React.useState(false);
 

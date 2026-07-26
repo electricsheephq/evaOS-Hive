@@ -483,6 +483,9 @@ pub(crate) async fn bind_builderlab_nostr_identity(
     app_state: tauri::State<'_, crate::app_state::AppState>,
     session: tauri::State<'_, BuilderlabSession>,
 ) -> Result<serde_json::Value, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed identities cannot be bound to Builderlab".to_string());
+    }
     let challenge_value = authenticated_json(
         &app_state.http_client,
         &session,

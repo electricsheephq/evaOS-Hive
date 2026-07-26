@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { AlertCircle, ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
 
 import { useMyRelayMembershipLookupQuery } from "@/features/community-members/hooks";
+import { getEvaosTeamsAuthStatus } from "@/features/evaosTeams/api";
 import {
   canManageCommunityMembers,
   shouldWarnMissingMembershipSnapshot,
@@ -73,6 +74,18 @@ const settingsNavGroups: Array<{
   },
 ];
 
+const managedHiddenSections = new Set<SettingsSection>([
+  "compute",
+  "hosted-communities",
+  "mobile",
+]);
+
+const managedRestoredFeatureSections = new Set<SettingsSection>([
+  "agents",
+  "channel-templates",
+  "custom-emoji",
+]);
+
 function SettingsSectionButton({
   active,
   onSelect,
@@ -128,12 +141,36 @@ export function SettingsView({
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const featureState = useFeatureSnapshot();
+  const [managed, setManaged] = React.useState(false);
+
+  React.useEffect(() => {
+    let current = true;
+    getEvaosTeamsAuthStatus()
+      .then((status) => {
+        if (current) setManaged(status.managed);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (managed && managedHiddenSections.has(section)) {
+      onSectionChange("profile");
+    }
+  }, [managed, onSectionChange, section]);
+
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
+      if (managed && managedHiddenSections.has(s.value)) return false;
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).
-      if (s.featureGate) {
+      if (
+        s.featureGate &&
+        !(managed && managedRestoredFeatureSections.has(s.value))
+      ) {
         const feature = getFeature(s.featureGate);
         if (feature && !resolveEnabled(s.featureGate, featureState)) {
           return false;
@@ -146,7 +183,7 @@ export function SettingsView({
       }
       return true;
     });
-  }, [myMembershipQuery.data, featureState]);
+  }, [managed, myMembershipQuery.data, featureState]);
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);

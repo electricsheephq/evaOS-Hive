@@ -4,6 +4,7 @@ mod archive;
 mod builderlab;
 mod commands;
 mod deep_link;
+mod evaos_teams;
 mod event_sync;
 mod events;
 mod huddle;
@@ -36,6 +37,7 @@ use deep_link::{
     acknowledge_pending_community_deep_link, handle_deep_link_url,
     take_pending_community_deep_link, PendingCommunityDeepLinks,
 };
+use evaos_teams::*;
 use huddle::audio_output::{
     get_audio_output_device, list_audio_output_devices, set_audio_output_device,
 };
@@ -355,9 +357,14 @@ pub fn run() {
         .manage(PendingCommunityDeepLinks::default())
         .manage(BuilderlabSession::default())
         .manage(BuilderlabLogin::default())
+        .manage(EvaosTeamsState::default())
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
+            let state = app_handle.state::<AppState>();
+            if let Ok(mut guard) = state.app_handle.lock() {
+                *guard = Some(app_handle.clone());
+            }
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
             // Must run before migrations and identity resolution so the wipe
@@ -400,9 +407,11 @@ pub fn run() {
             // that will be lost on restart, as that silently breaks channel
             // memberships, DMs, and relay identity.
             let state = app_handle.state::<AppState>();
-            if let Err(e) = resolve_persisted_identity(&app_handle, &state) {
-                eprintln!("buzz-desktop: fatal: identity resolution failed: {e}");
-                std::process::exit(1);
+            if !cfg!(feature = "evaos-teams-managed") {
+                if let Err(e) = resolve_persisted_identity(&app_handle, &state) {
+                    eprintln!("buzz-desktop: fatal: identity resolution failed: {e}");
+                    std::process::exit(1);
+                }
             }
 
             // When the identity is in recovery mode (lost = keyring empty after
@@ -416,7 +425,12 @@ pub fn run() {
             let keyring_locked = state
                 .keyring_locked
                 .load(std::sync::atomic::Ordering::Acquire);
-            let recovery_mode = identity_lost || keyring_locked;
+            // Managed builds continue native local initialization but defer all
+            // owner-keyed work until OAuth plus signed-key verification installs
+            // a current entitlement. This preserves Buzz surfaces without ever
+            // publishing under the ephemeral boot placeholder.
+            let recovery_mode =
+                cfg!(feature = "evaos-teams-managed") || identity_lost || keyring_locked;
 
             // Snapshot owner keys after identity resolution; the best-effort
             // event reconcile itself runs off the synchronous setup path below.
@@ -450,7 +464,7 @@ pub fn run() {
             // a UI mount; it publishes discovery and reconciles membership for
             // MeshLLM's native admission and transport.
             #[cfg(feature = "mesh-llm")]
-            {
+            if !cfg!(feature = "evaos-teams-managed") {
                 // Route mesh-llm's download progress (model weights, runtime)
                 // onto Tauri events so the UI can render real progress.
                 crate::mesh_llm::install_progress_sink(&app_handle);
@@ -651,6 +665,9 @@ pub fn run() {
             cancel_builderlab_login,
             get_builderlab_auth,
             clear_builderlab_auth,
+            get_evaos_teams_auth_status,
+            start_evaos_teams_login,
+            logout_evaos_teams,
             get_builderlab_nostr_identity,
             bind_builderlab_nostr_identity,
             delete_builderlab_nostr_identity,

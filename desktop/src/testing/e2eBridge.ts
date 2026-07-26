@@ -9273,6 +9273,13 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_evaos_teams_auth_status":
+        return {
+          managed: false,
+          phase: "native",
+          authenticated: false,
+          keychainAvailable: true,
+        };
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {
