@@ -3,6 +3,7 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
+    commands::metadata_poll::poll_metadata,
     events,
     models::ChannelInfo,
     nostr_convert,
@@ -27,21 +28,23 @@ pub async fn open_dm(
 
     // Re-fetch the channel metadata so the frontend gets the same `ChannelInfo`
     // shape as `get_channel_details`.
-    let metadata = query_relay(
-        &state,
-        &[serde_json::json!({
-            "kinds": [39000],
-            "#d": [ack.channel_id],
-            "limit": 1
-        })],
-    )
-    .await?;
+    let event = poll_metadata(|| async {
+        let metadata = query_relay(
+            &state,
+            &[serde_json::json!({
+                "kinds": [39000],
+                "#d": [&ack.channel_id],
+                "limit": 1
+            })],
+        )
+        .await?;
 
-    metadata
-        .first()
-        .map(|ev| nostr_convert::channel_info_from_event(ev, None, None))
-        .transpose()?
-        .ok_or_else(|| "DM channel created but metadata not yet available".to_string())
+        Ok::<_, String>(metadata.into_iter().next())
+    })
+    .await?
+    .ok_or_else(|| "DM channel created but metadata not yet available".to_string())?;
+
+    nostr_convert::channel_info_from_event(&event, None, None)
 }
 
 #[tauri::command]
