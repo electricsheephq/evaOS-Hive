@@ -42,6 +42,9 @@ import {
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauriManagedAgents";
+import { listHiveCompanyAgents } from "@/features/evaosTeams/api";
+import { mergeRelayAgentsWithCompanyCatalog } from "@/features/agents/lib/companyAgentCatalog";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { bootstrapManagedAgentRuntimePairs } from "@/features/agents/managedAgentRuntimeHooks";
 import {
   createPersona,
@@ -293,7 +296,20 @@ export function useManagedAgentPrereqsQuery(
 export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: relayAgentsQueryKey,
-    queryFn: listRelayAgents,
+    queryFn: async () => {
+      const relayAgents = await listRelayAgents();
+      if (!desktopProductPolicy().managed) return relayAgents;
+      try {
+        const companyAgents = await listHiveCompanyAgents();
+        return mergeRelayAgentsWithCompanyCatalog(relayAgents, companyAgents);
+      } catch (error) {
+        console.warn(
+          "Company VM agent catalog is unavailable; using relay profiles.",
+          error,
+        );
+        return relayAgents;
+      }
+    },
     staleTime: 30_000,
     // Relay agent profiles (kind:10100) are near-static and the backing
     // `list_relay_agents` command is an unfiltered relay query for the whole

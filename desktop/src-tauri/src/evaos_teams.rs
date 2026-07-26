@@ -7,7 +7,7 @@
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Mutex, OnceLock},
     time::Duration,
 };
@@ -208,6 +208,35 @@ struct EntitlementResponse {
     entitlement: EvaosTeamsEntitlement,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HiveCompanyAgent {
+    agent_instance_id: String,
+    public_key: String,
+    display_name: String,
+    runtime: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawHiveCompanyAgent {
+    agent_instance_id: String,
+    public_key: String,
+    display_name: String,
+    runtime: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CollaborationProjection {
+    #[serde(default)]
+    agents: Vec<RawHiveCompanyAgent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CollaborationResponse {
+    status: String,
+    collaboration: CollaborationProjection,
+}
+
 #[derive(Debug, Deserialize)]
 struct LogoutResponse {
     status: String,
@@ -340,6 +369,40 @@ fn validate_entitlement(
         return Err("managed entitlement has expired".to_string());
     }
     relay_websocket_url(&entitlement.relay_host)
+}
+
+fn sanitize_company_agents(agents: Vec<RawHiveCompanyAgent>) -> Vec<HiveCompanyAgent> {
+    let mut seen = HashSet::new();
+    agents
+        .into_iter()
+        .filter_map(|agent| {
+            let display_name = agent.display_name.trim();
+            let runtime = agent.runtime.trim();
+            let valid_public_key = agent.public_key.len() == 64
+                && agent.public_key.chars().all(|character| {
+                    character.is_ascii_hexdigit() && !character.is_ascii_uppercase()
+                });
+            let valid_text = |value: &str, max: usize| {
+                !value.is_empty()
+                    && value.len() <= max
+                    && value.chars().all(|character| !character.is_control())
+            };
+            if uuid::Uuid::parse_str(&agent.agent_instance_id).is_err()
+                || !valid_public_key
+                || !seen.insert(agent.public_key.clone())
+                || !valid_text(display_name, 128)
+                || !valid_text(runtime, 64)
+            {
+                return None;
+            }
+            Some(HiveCompanyAgent {
+                agent_instance_id: agent.agent_instance_id,
+                public_key: agent.public_key,
+                display_name: display_name.to_string(),
+                runtime: runtime.to_string(),
+            })
+        })
+        .collect()
 }
 
 fn bind_verified_entitlement(
@@ -795,6 +858,47 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 )))
             }
         }
+    }
+}
+
+/// Return only the company-scoped public agent catalog. Room, member, seat,
+/// and control-plane data from the collaboration projection never crosses the
+/// Tauri boundary. Relay profiles remain the source of live status/channels.
+#[tauri::command]
+pub(crate) async fn list_hive_company_agents(
+    state: State<'_, EvaosTeamsState>,
+    app_state: State<'_, AppState>,
+) -> Result<Vec<HiveCompanyAgent>, String> {
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    {
+        let _ = (&state, &app_state);
+        return Ok(Vec::new());
+    }
+
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        if !app_state
+            .evaos_teams_authorized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("Hive access is not active".to_string());
+        }
+        let (session, _, logout_pending) = current_credentials(&state).await?;
+        if logout_pending {
+            return Err("Hive sign-out is still pending".to_string());
+        }
+        let response: CollaborationResponse = post_json(
+            &app_state.http_client,
+            "evaos-teams-access",
+            Some(&session),
+            serde_json::json!({ "action": "get_collaboration_state" }),
+        )
+        .await
+        .map_err(|error| format!("Company agent catalog is unavailable: {error}"))?;
+        if response.status != "active" {
+            return Err("Company agent catalog is inactive".to_string());
+        }
+        Ok(sanitize_company_agents(response.collaboration.agents))
     }
 }
 

@@ -200,6 +200,10 @@ export function AgentsView() {
               onImportSnapshotFile={(fileBytes, fileName) => {
                 void personas.handleImportSnapshotFile(fileBytes, fileName);
               }}
+              companyAgents={agents.relayAgentsQuery.data ?? []}
+              onRefreshCompanyAgents={() => {
+                void agents.refetchRelayAgents();
+              }}
             />
 
             <TeamsSection

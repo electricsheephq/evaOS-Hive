@@ -5,11 +5,16 @@ import { formatAgentModelLabel } from "@/features/agents/lib/formatAgentModelLab
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { useUserProfileQuery } from "@/features/profile/hooks";
-import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
+import type {
+  AgentPersona,
+  ManagedAgent,
+  RelayAgent,
+} from "@/shared/api/types";
 import type { ProfilePanelOpenOptions } from "@/shared/context/ProfilePanelContext";
 import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import { Badge } from "@/shared/ui/badge";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,6 +63,8 @@ type UnifiedAgentsSectionProps = {
   onDeactivatePersona: (persona: AgentPersona) => void;
   onDeletePersona: (persona: AgentPersona) => void;
   onImportSnapshotFile: (fileBytes: number[], fileName: string) => void;
+  companyAgents: RelayAgent[];
+  onRefreshCompanyAgents: () => void;
 };
 
 const AGENT_CARD_COLUMN_CLASS = "w-full";
@@ -93,7 +100,10 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onDeactivatePersona,
     onDeletePersona,
     onImportSnapshotFile,
+    companyAgents,
+    onRefreshCompanyAgents,
   } = props;
+  const isManagedHive = desktopProductPolicy().managed;
 
   const { groups, ungrouped, unknown } = React.useMemo(
     () => buildUnifiedGroups(personas, agents),
@@ -180,12 +190,21 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
             })}
             <NewAgentCard
               canChooseCatalog={canChooseCatalog}
+              isManagedHive={isManagedHive}
               isPersonasPending={isPersonasPending}
               openFilePicker={openFilePicker}
               onChooseCatalog={onChooseCatalog}
               onCreatePersona={onCreatePersona}
+              onRefreshCompanyAgents={onRefreshCompanyAgents}
             />
           </div>
+
+          {isManagedHive ? (
+            <CompanyVmAgentsSection
+              agents={companyAgents}
+              onOpenAgentProfile={onOpenAgentProfile}
+            />
+          ) : null}
 
           {unknown.length > 0 ? (
             <CollapsibleAgentGroup
@@ -420,52 +439,112 @@ function firstAvatarUrl(
 
 function NewAgentCard({
   canChooseCatalog,
+  isManagedHive,
   isPersonasPending,
   openFilePicker,
   onChooseCatalog,
   onCreatePersona,
+  onRefreshCompanyAgents,
 }: {
   canChooseCatalog: boolean;
+  isManagedHive: boolean;
   isPersonasPending: boolean;
   openFilePicker: () => void;
   onChooseCatalog: () => void;
   onCreatePersona: () => void;
+  onRefreshCompanyAgents: () => void;
 }) {
+  const label = isManagedHive ? "Import from company VM" : "New agent";
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <CreateIdentityCard
-          ariaLabel="New agent"
+          ariaLabel={label}
           dataTestId="new-agent-card"
-          label="New agent"
+          label={label}
         />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
-        <DropdownMenuItem
-          disabled={isPersonasPending}
-          onClick={onCreatePersona}
-        >
-          Create from scratch
-        </DropdownMenuItem>
-        {canChooseCatalog ? (
-          <DropdownMenuItem
-            disabled={isPersonasPending}
-            onClick={onChooseCatalog}
-          >
-            Choose from catalog
+        {isManagedHive ? (
+          <DropdownMenuItem onClick={onRefreshCompanyAgents}>
+            Refresh registered VM agents
           </DropdownMenuItem>
-        ) : null}
-        <DropdownMenuItem
-          data-testid="import-agent-snapshot-menu-item"
-          onClick={openFilePicker}
-        >
-          Import agent snapshot
-        </DropdownMenuItem>
+        ) : (
+          <>
+            <DropdownMenuItem
+              disabled={isPersonasPending}
+              onClick={onCreatePersona}
+            >
+              Create from scratch
+            </DropdownMenuItem>
+            {canChooseCatalog ? (
+              <DropdownMenuItem
+                disabled={isPersonasPending}
+                onClick={onChooseCatalog}
+              >
+                Choose from catalog
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem
+              data-testid="import-agent-snapshot-menu-item"
+              onClick={openFilePicker}
+            >
+              Import agent snapshot
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function CompanyVmAgentsSection({
+  agents,
+  onOpenAgentProfile,
+}: {
+  agents: RelayAgent[];
+  onOpenAgentProfile: (
+    pubkey: string,
+    options?: ProfilePanelOpenOptions,
+  ) => void;
+}) {
+  return (
+    <div className={`${AGENT_CARD_COLUMN_CLASS} space-y-2`}>
+      <div className="px-1">
+        <h2 className="text-sm font-medium">Company VM agents</h2>
+        <p className="text-xs text-muted-foreground">
+          Registered public Hive identities from your company VMs. Runtime setup
+          remains in Hermes.
+        </p>
+      </div>
+      {agents.length > 0 ? (
+        <div className={AGENT_CARD_GRID_CLASS}>
+          {agents.map((agent) => (
+            <AgentIdentityCard
+              ariaLabel={`${agent.name} company VM agent profile`}
+              dataTestId={`company-vm-agent-${agent.pubkey}`}
+              key={agent.pubkey}
+              label={agent.name}
+              modelLabel={`${agent.agentType} · ${agent.status}`}
+              onClick={() => onOpenAgentProfile(agent.pubkey)}
+              statusBadge={
+                <Badge className="mt-1 w-fit" variant="outline">
+                  VM hosted
+                </Badge>
+              }
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="px-1 text-sm text-muted-foreground">
+          No registered company VM agent identity is available yet. Register the
+          profile on its VM, then refresh.
+        </p>
+      )}
+    </div>
   );
 }
 
