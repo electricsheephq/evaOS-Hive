@@ -104,6 +104,29 @@ export function saveActiveCommunityId(id: string): boolean {
   return setLocalStorageItemWithRecovery(ACTIVE_COMMUNITY_KEY, id);
 }
 
+export function saveCommunitySelection(
+  communities: Community[],
+  activeId: string,
+): boolean {
+  const previousCommunities = localStorage.getItem(COMMUNITIES_KEY);
+  if (!saveCommunities(communities)) {
+    return false;
+  }
+  if (saveActiveCommunityId(activeId)) {
+    return true;
+  }
+  try {
+    if (previousCommunities === null) {
+      localStorage.removeItem(COMMUNITIES_KEY);
+    } else {
+      localStorage.setItem(COMMUNITIES_KEY, previousCommunities);
+    }
+  } catch {
+    // Best effort: both writes already reported failure to the caller.
+  }
+  return false;
+}
+
 export function normalizeRelayUrl(url: string): string {
   if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
     return `wss://${url}`;
