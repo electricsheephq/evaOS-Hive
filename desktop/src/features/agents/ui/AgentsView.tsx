@@ -209,6 +209,12 @@ export function AgentsView() {
                 agents.relayAgentsQuery.data ?? [],
                 companyAgentsQuery.data ?? [],
               )}
+              companyAgentsError={
+                companyAgentsQuery.error instanceof Error
+                  ? companyAgentsQuery.error
+                  : null
+              }
+              isCompanyAgentsLoading={companyAgentsQuery.isLoading}
               onRefreshCompanyAgents={() => {
                 void agents.refetchRelayAgents();
                 void companyAgentsQuery.refetch();

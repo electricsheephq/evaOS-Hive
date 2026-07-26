@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   coalesceAgentAutocompleteCandidates,
+  getDirectMessageAgentPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
   isAgentIdentityInManagedList,
@@ -135,6 +136,31 @@ test("getMentionableAgentPubkeys: keeps managed agents and shared relay agents",
   });
 
   assert.deepEqual(result, new Set([PUB_A, PUB_B, PUB_C]));
+});
+
+test("catalog-only agents are DM-addressable without becoming mentionable", () => {
+  const input = {
+    managedAgentPubkeys: [],
+    currentPubkey: CURRENT_PUBKEY,
+    relayAgents: [
+      {
+        pubkey: PUB_A,
+        respondTo: null,
+        respondToAllowlist: [],
+        channelIds: [],
+      },
+    ],
+    sharedChannelIds: new Set(),
+  };
+
+  assert.deepEqual(getMentionableAgentPubkeys(input), new Set());
+  assert.deepEqual(
+    getDirectMessageAgentPubkeys({
+      ...input,
+      companyAgentPubkeys: [PUB_A.toUpperCase()],
+    }),
+    new Set([PUB_A]),
+  );
 });
 
 test("isAgentIdentityInManagedList: keeps people and only current managed agent identities", () => {

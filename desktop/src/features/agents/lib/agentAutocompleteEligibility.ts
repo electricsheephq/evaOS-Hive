@@ -54,6 +54,37 @@ export function getMentionableAgentPubkeys({
   return pubkeys;
 }
 
+/**
+ * A verified company catalog identity is addressable in a direct message even
+ * before its relay profile advertises invocation policy. This does not make
+ * the agent mentionable or invocable: room and author policy remain enforced
+ * by the relay and buzz-acp when a message reaches the agent.
+ */
+export function getDirectMessageAgentPubkeys({
+  companyAgentPubkeys,
+  currentPubkey,
+  managedAgentPubkeys,
+  relayAgents,
+  sharedChannelIds,
+}: {
+  companyAgentPubkeys: Iterable<string>;
+  currentPubkey?: string | null;
+  managedAgentPubkeys: Iterable<string>;
+  relayAgents: readonly RelayAgent[] | undefined;
+  sharedChannelIds: ReadonlySet<string>;
+}) {
+  const pubkeys = getMentionableAgentPubkeys({
+    currentPubkey,
+    managedAgentPubkeys,
+    relayAgents,
+    sharedChannelIds,
+  });
+  for (const pubkey of companyAgentPubkeys) {
+    pubkeys.add(normalizePubkey(pubkey));
+  }
+  return pubkeys;
+}
+
 export function isAgentIdentityInManagedList(
   candidate: { isAgent?: boolean; pubkey: string },
   managedAgentPubkeys: ReadonlySet<string>,

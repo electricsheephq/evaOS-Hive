@@ -1,12 +1,13 @@
 import * as React from "react";
 
 import {
+  useHiveCompanyAgentsQuery,
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import {
   coalesceAgentAutocompleteCandidates,
-  getMentionableAgentPubkeys,
+  getDirectMessageAgentPubkeys,
   getSharedChannelIds,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { useChannelsQuery } from "@/features/channels/hooks";
@@ -86,6 +87,7 @@ export function useNewMessageRecipients({
   );
 
   const identityQuery = useIdentityQuery();
+  const companyAgentsQuery = useHiveCompanyAgentsQuery({ enabled: active });
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: active });
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: active });
   const channelsQuery = useChannelsQuery({ enabled: active });
@@ -109,7 +111,10 @@ export function useNewMessageRecipients({
     const currentPubkeyNormalized = currentPubkey
       ? normalizePubkey(currentPubkey)
       : null;
-    const eligibleAgentPubkeys = getMentionableAgentPubkeys({
+    const eligibleAgentPubkeys = getDirectMessageAgentPubkeys({
+      companyAgentPubkeys: (companyAgentsQuery.data ?? []).map(
+        (agent) => agent.publicKey,
+      ),
       currentPubkey,
       managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
         (agent) => agent.pubkey,
@@ -184,6 +189,20 @@ export function useNewMessageRecipients({
       );
     }
 
+    for (const agent of companyAgentsQuery.data ?? []) {
+      addCandidate(
+        {
+          pubkey: agent.publicKey,
+          displayName: agent.displayName,
+          avatarUrl: null,
+          nip05Handle: null,
+          ownerPubkey: null,
+          isAgent: true,
+        },
+        { includeSelected: deferredSearchQuery.length > 0 },
+      );
+    }
+
     for (const agent of managedAgentsQuery.data ?? []) {
       addCandidate(
         {
@@ -217,6 +236,7 @@ export function useNewMessageRecipients({
     });
   }, [
     channelsQuery.data,
+    companyAgentsQuery.data,
     currentPubkey,
     deferredSearchQuery,
     isArchivedDiscovery,
@@ -228,6 +248,7 @@ export function useNewMessageRecipients({
 
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
+    companyAgentsQuery.isLoading ||
     managedAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;

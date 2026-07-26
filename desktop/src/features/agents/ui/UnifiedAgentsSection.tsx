@@ -64,6 +64,8 @@ type UnifiedAgentsSectionProps = {
   onDeletePersona: (persona: AgentPersona) => void;
   onImportSnapshotFile: (fileBytes: number[], fileName: string) => void;
   companyAgents: RelayAgent[];
+  companyAgentsError: Error | null;
+  isCompanyAgentsLoading: boolean;
   onRefreshCompanyAgents: () => void;
 };
 
@@ -101,6 +103,8 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onDeletePersona,
     onImportSnapshotFile,
     companyAgents,
+    companyAgentsError,
+    isCompanyAgentsLoading,
     onRefreshCompanyAgents,
   } = props;
   const isManagedHive = desktopProductPolicy().managed;
@@ -202,6 +206,8 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
           {isManagedHive ? (
             <CompanyVmAgentsSection
               agents={companyAgents}
+              error={companyAgentsError}
+              isLoading={isCompanyAgentsLoading}
               onOpenAgentProfile={onOpenAgentProfile}
             />
           ) : null}
@@ -503,9 +509,13 @@ function NewAgentCard({
 
 function CompanyVmAgentsSection({
   agents,
+  error,
+  isLoading,
   onOpenAgentProfile,
 }: {
   agents: RelayAgent[];
+  error: Error | null;
+  isLoading: boolean;
   onOpenAgentProfile: (
     pubkey: string,
     options?: ProfilePanelOpenOptions,
@@ -520,7 +530,14 @@ function CompanyVmAgentsSection({
           remains in Hermes.
         </p>
       </div>
-      {agents.length > 0 ? (
+      {isLoading ? (
+        <LoadingSkeleton />
+      ) : error ? (
+        <p className="px-1 text-sm text-destructive">
+          Company VM agents could not be loaded. Refresh the registered VM
+          agents to try again.
+        </p>
+      ) : agents.length > 0 ? (
         <div className={AGENT_CARD_GRID_CLASS}>
           {agents.map((agent) => (
             <AgentIdentityCard
