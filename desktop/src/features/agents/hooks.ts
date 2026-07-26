@@ -105,6 +105,7 @@ export type {
 } from "@/features/agents/channelAgents";
 
 export const relayAgentsQueryKey = ["relay-agents"] as const;
+export const hiveCompanyAgentsQueryKey = ["hive-company-agents"] as const;
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
@@ -322,6 +323,16 @@ export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
     refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: false,
     enabled: options?.enabled,
+  });
+}
+
+export function useHiveCompanyAgentsQuery(options?: { enabled?: boolean }) {
+  const managed = desktopProductPolicy().managed;
+  return useQuery({
+    queryKey: hiveCompanyAgentsQueryKey,
+    queryFn: listHiveCompanyAgents,
+    staleTime: 30_000,
+    enabled: managed && (options?.enabled ?? true),
   });
 }
 

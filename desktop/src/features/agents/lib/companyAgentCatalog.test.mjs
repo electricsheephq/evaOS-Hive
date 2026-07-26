@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  filterCompanyVmAgents,
+  companyVmAgentsFromCatalog,
   mergeRelayAgentsWithCompanyCatalog,
 } from "./companyAgentCatalog.ts";
 
@@ -74,16 +74,31 @@ test("relay-only profiles are not labeled as registered company VM agents", () =
     agentType: "unknown",
     channels: [],
     channelIds: [],
-    capabilities: ["chat"],
+    capabilities: ["chat", "company-vm"],
     status: "online",
     respondTo: null,
     respondToAllowlist: [],
   };
-  const companyVm = {
-    ...relayOnly,
-    pubkey: PUBKEY,
-    name: "ATRIS",
-    capabilities: ["chat", "company-vm", "hermes"],
-  };
-  assert.deepEqual(filterCompanyVmAgents([relayOnly, companyVm]), [companyVm]);
+  const companyCatalog = [
+    {
+      agentInstanceId: "10000000-0000-4000-8000-000000000001",
+      publicKey: PUBKEY,
+      displayName: "ATRIS",
+      runtime: "hermes",
+    },
+  ];
+  const selected = companyVmAgentsFromCatalog(
+    [
+      relayOnly,
+      {
+        ...relayOnly,
+        pubkey: PUBKEY,
+        name: "Untrusted relay name",
+      },
+    ],
+    companyCatalog,
+  );
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].pubkey, PUBKEY);
+  assert.equal(selected[0].name, "ATRIS");
 });

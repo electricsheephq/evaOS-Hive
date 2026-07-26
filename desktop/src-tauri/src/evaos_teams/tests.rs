@@ -279,6 +279,41 @@ fn legacy_identity_is_reused_only_when_the_server_binding_matches() {
 }
 
 #[test]
+fn switching_to_a_new_membership_preserves_an_unmigrated_legacy_key() {
+    let membership_b = "10000000-0000-4000-8000-000000000002";
+    let legacy_keys = Keys::generate();
+    let new_keys = Keys::generate();
+    let stored = identity_only_entries(&legacy_keys).unwrap();
+
+    let persisted =
+        managed_credential_entries(stored, membership_b, &new_keys, "new-session").unwrap();
+    let preserved_legacy = parse_stored_identity(persisted.get(IDENTITY_KEY).unwrap()).unwrap();
+    assert_eq!(preserved_legacy.public_key(), legacy_keys.public_key());
+    assert_eq!(
+        parse_stored_identity(
+            persisted
+                .get(&membership_identity_key(membership_b).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+        .public_key(),
+        new_keys.public_key(),
+    );
+}
+
+#[test]
+fn matching_legacy_key_is_removed_only_after_membership_migration() {
+    let membership_id = "10000000-0000-4000-8000-000000000001";
+    let keys = Keys::generate();
+    let stored = identity_only_entries(&keys).unwrap();
+
+    let persisted =
+        managed_credential_entries(stored, membership_id, &keys, "new-session").unwrap();
+    assert!(!persisted.contains_key(IDENTITY_KEY));
+    assert!(persisted.contains_key(&membership_identity_key(membership_id).unwrap()));
+}
+
+#[test]
 fn account_switch_never_reuses_another_memberships_key() {
     let membership_a = "10000000-0000-4000-8000-000000000001";
     let membership_b = "10000000-0000-4000-8000-000000000002";

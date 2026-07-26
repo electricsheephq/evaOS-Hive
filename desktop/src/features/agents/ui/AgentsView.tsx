@@ -25,9 +25,12 @@ import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
-import { useBakedBuildEnvQuery } from "@/features/agents/hooks";
+import {
+  useBakedBuildEnvQuery,
+  useHiveCompanyAgentsQuery,
+} from "@/features/agents/hooks";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
-import { filterCompanyVmAgents } from "@/features/agents/lib/companyAgentCatalog";
+import { companyVmAgentsFromCatalog } from "@/features/agents/lib/companyAgentCatalog";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
@@ -37,6 +40,7 @@ export function AgentsView() {
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
   const { globalConfig } = useGlobalAgentConfig();
   const { data: bakedEnv } = useBakedBuildEnvQuery({ enabled: true });
+  const companyAgentsQuery = useHiveCompanyAgentsQuery();
   const inheritedDefaults = getInheritedAgentDefaults(globalConfig, bakedEnv);
   const agents = useManagedAgentActions();
   const personas = usePersonaActions();
@@ -201,11 +205,13 @@ export function AgentsView() {
               onImportSnapshotFile={(fileBytes, fileName) => {
                 void personas.handleImportSnapshotFile(fileBytes, fileName);
               }}
-              companyAgents={filterCompanyVmAgents(
+              companyAgents={companyVmAgentsFromCatalog(
                 agents.relayAgentsQuery.data ?? [],
+                companyAgentsQuery.data ?? [],
               )}
               onRefreshCompanyAgents={() => {
                 void agents.refetchRelayAgents();
+                void companyAgentsQuery.refetch();
               }}
             />
 

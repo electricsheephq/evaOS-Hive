@@ -37,8 +37,14 @@ export function mergeRelayAgentsWithCompanyCatalog(
   );
 }
 
-export function filterCompanyVmAgents(
-  agents: readonly RelayAgent[],
+export function companyVmAgentsFromCatalog(
+  relayAgents: readonly RelayAgent[],
+  companyAgents: readonly HiveCompanyAgent[],
 ): RelayAgent[] {
-  return agents.filter((agent) => agent.capabilities.includes("company-vm"));
+  const catalogPubkeys = new Set(
+    companyAgents.map((agent) => normalizePubkey(agent.publicKey)),
+  );
+  return mergeRelayAgentsWithCompanyCatalog(relayAgents, companyAgents).filter(
+    (agent) => catalogPubkeys.has(normalizePubkey(agent.pubkey)),
+  );
 }

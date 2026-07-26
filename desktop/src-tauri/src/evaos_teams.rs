@@ -554,10 +554,6 @@ fn select_login_keys(
         .get(&scoped_key)
         .map(|value| parse_stored_identity(value))
         .transpose()?;
-    let legacy = stored
-        .get(IDENTITY_KEY)
-        .map(|value| parse_stored_identity(value))
-        .transpose()?;
 
     match binding.public_key.as_deref() {
         Some(public_key) => {
@@ -568,16 +564,46 @@ fn select_login_keys(
             {
                 return Err("server returned an invalid managed public identity".to_string());
             }
-            scoped
-                .into_iter()
-                .chain(legacy)
-                .find(|keys| keys.public_key().to_hex() == public_key)
-                .ok_or_else(|| {
-                    "This device does not hold the private key for this Hive membership".to_string()
-                })
+            if let Some(keys) = scoped {
+                if keys.public_key().to_hex() == public_key {
+                    return Ok(keys);
+                }
+            }
+            if let Some(value) = stored.get(IDENTITY_KEY) {
+                let legacy = parse_stored_identity(value)?;
+                if legacy.public_key().to_hex() == public_key {
+                    return Ok(legacy);
+                }
+            }
+            Err("This device does not hold the private key for this Hive membership".to_string())
         }
         None => Ok(scoped.unwrap_or_else(Keys::generate)),
     }
+}
+
+fn managed_credential_entries(
+    mut stored: HashMap<String, String>,
+    membership_id: &str,
+    keys: &Keys,
+    session: &str,
+) -> Result<HashMap<String, String>, String> {
+    let public_key = keys.public_key();
+    let migrated_legacy = stored
+        .get(IDENTITY_KEY)
+        .map(|value| parse_stored_identity(value))
+        .transpose()?
+        .is_some_and(|legacy| legacy.public_key() == public_key);
+    if migrated_legacy {
+        stored.remove(IDENTITY_KEY);
+    }
+    stored.remove(LOGOUT_PENDING_KEY);
+    stored.insert(
+        membership_identity_key(membership_id)?,
+        encode_managed_identity(keys)?,
+    );
+    stored.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.to_string());
+    stored.insert(SESSION_KEY.to_string(), session.to_string());
+    Ok(stored)
 }
 
 fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
@@ -852,13 +878,12 @@ fn persist_managed_credentials(
     membership_id: String,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let identity = encode_managed_identity(&keys)?;
-    let mut replacement = managed_store().load_all_readonly()?.unwrap_or_default();
-    replacement.remove(IDENTITY_KEY);
-    replacement.remove(LOGOUT_PENDING_KEY);
-    replacement.insert(membership_identity_key(&membership_id)?, identity);
-    replacement.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.clone());
-    replacement.insert(SESSION_KEY.to_string(), session.clone());
+    let replacement = managed_credential_entries(
+        managed_store().load_all_readonly()?.unwrap_or_default(),
+        &membership_id,
+        &keys,
+        &session,
+    )?;
     managed_store()
         .replace_all(&replacement)
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
