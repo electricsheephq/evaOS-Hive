@@ -169,6 +169,52 @@ fn entitlement_rejects_wrong_key_expiry_and_relay_injection() {
 }
 
 #[test]
+fn entitlement_deserializes_server_snake_case_and_serializes_renderer_camel_case() {
+    let response: EntitlementResponse = serde_json::from_value(serde_json::json!({
+        "status": "active",
+        "entitlement": {
+            "community_id": "10000000-0000-4000-8000-000000000003",
+            "relay_host": "https://relay.example.com",
+            "public_key": "a".repeat(64),
+            "role": "member",
+            "access_revision": 7,
+            "expires_at": "2026-07-26T16:00:00Z",
+            "refresh_after_seconds": 300,
+            "assignment_status": "assigned",
+            "reconciliation_status": "current"
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        response.entitlement.community_id,
+        "10000000-0000-4000-8000-000000000003"
+    );
+
+    let renderer = serde_json::to_value(response.entitlement).unwrap();
+    assert_eq!(
+        renderer["communityId"],
+        "10000000-0000-4000-8000-000000000003"
+    );
+    assert_eq!(renderer["refreshAfterSeconds"], 300);
+    assert!(renderer.get("community_id").is_none());
+    assert!(renderer.get("refresh_after_seconds").is_none());
+
+    let verification: EntitlementResponse = serde_json::from_value(serde_json::json!({
+        "status": "active",
+        "entitlement": {
+            "community_id": "10000000-0000-4000-8000-000000000003",
+            "relay_host": "https://relay.example.com",
+            "role": "member",
+            "access_revision": 7,
+            "expires_at": "2026-07-26T16:00:00Z",
+            "refresh_after_seconds": 300
+        }
+    }))
+    .unwrap();
+    assert!(verification.entitlement.public_key.is_none());
+}
+
+#[test]
 fn verification_binds_the_local_key_but_refresh_requires_the_server_key() {
     let public_key = Keys::generate().public_key().to_hex();
     let verified = EvaosTeamsEntitlement {

@@ -70,7 +70,7 @@ fn verify_managed_store_writable() -> Result<(), String> {
 
 /// Public, renderer-safe entitlement projection.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub(crate) struct EvaosTeamsEntitlement {
     community_id: String,
     relay_host: String,
