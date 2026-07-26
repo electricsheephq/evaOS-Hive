@@ -36,7 +36,11 @@ const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
 // from the opaque Desktop session returned after browser authentication.
 const SUPABASE_PUBLISHABLE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmUiLCJyZWYiOiJyaGZvamVsa2d0d2N4bnJmaHRsaiIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzczMjQzNTc2LCJleHAiOjIwODg4MTk1NzZ9.X8mJHaYIolCmx6j_473GGb05OyFTy43Hq-BEelZRjAE";
 const KEYRING_SERVICE: &str = "evaos-teams-desktop";
+// Kept only to migrate the single-identity layout shipped by the first managed
+// candidate. New keys are scoped by the server-selected membership UUID.
 const IDENTITY_KEY: &str = "identity";
+const IDENTITY_KEY_PREFIX: &str = "identity:";
+const ACTIVE_MEMBERSHIP_KEY: &str = "active_membership_id";
 const SESSION_KEY: &str = "electric_desktop_session";
 const LOGOUT_PENDING_KEY: &str = "logout_pending";
 const KEY_BINDING_KIND: u16 = 27_235;
@@ -164,6 +168,7 @@ struct ManagedRuntime {
     initialized: bool,
     session: Option<Zeroizing<String>>,
     keys: Option<Keys>,
+    membership_id: Option<String>,
     logout_pending: bool,
 }
 
@@ -206,6 +211,18 @@ struct ChallengeResponse {
 struct EntitlementResponse {
     status: String,
     entitlement: EvaosTeamsEntitlement,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct IdentityBinding {
+    membership_id: String,
+    public_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdentityBindingResponse {
+    status: String,
+    binding: IdentityBinding,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -510,11 +527,57 @@ fn encode_managed_identity(keys: &Keys) -> Result<String, String> {
         .map_err(|error| format!("could not encode managed identity: {error}"))
 }
 
+#[cfg(test)]
 fn identity_only_entries(keys: &Keys) -> Result<HashMap<String, String>, String> {
     Ok(HashMap::from([(
         IDENTITY_KEY.to_string(),
         encode_managed_identity(keys)?,
     )]))
+}
+
+fn membership_identity_key(membership_id: &str) -> Result<String, String> {
+    uuid::Uuid::parse_str(membership_id)
+        .map_err(|_| "managed membership identity is invalid".to_string())?;
+    Ok(format!("{IDENTITY_KEY_PREFIX}{membership_id}"))
+}
+
+fn parse_stored_identity(value: &str) -> Result<Keys, String> {
+    Keys::parse(value.trim()).map_err(|_| "managed Keychain identity is invalid".to_string())
+}
+
+fn select_login_keys(
+    stored: &HashMap<String, String>,
+    binding: &IdentityBinding,
+) -> Result<Keys, String> {
+    let scoped_key = membership_identity_key(&binding.membership_id)?;
+    let scoped = stored
+        .get(&scoped_key)
+        .map(|value| parse_stored_identity(value))
+        .transpose()?;
+    let legacy = stored
+        .get(IDENTITY_KEY)
+        .map(|value| parse_stored_identity(value))
+        .transpose()?;
+
+    match binding.public_key.as_deref() {
+        Some(public_key) => {
+            if public_key.len() != 64
+                || !public_key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err("server returned an invalid managed public identity".to_string());
+            }
+            scoped
+                .into_iter()
+                .chain(legacy)
+                .find(|keys| keys.public_key().to_hex() == public_key)
+                .ok_or_else(|| {
+                    "This device does not hold the private key for this Hive membership".to_string()
+                })
+        }
+        None => Ok(scoped.unwrap_or_else(Keys::generate)),
+    }
 }
 
 fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
@@ -531,11 +594,6 @@ fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<Manag
         });
     }
 
-    let identity = stored
-        .get(IDENTITY_KEY)
-        .ok_or_else(|| "managed Keychain identity is missing".to_string())?;
-    let keys = Keys::parse(identity.trim())
-        .map_err(|_| "managed Keychain identity is invalid".to_string())?;
     let session = stored
         .get(SESSION_KEY)
         .filter(|value| !value.trim().is_empty())
@@ -547,11 +605,24 @@ fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<Manag
     if logout_pending && session.is_none() {
         return Err("managed logout marker has no Desktop session".to_string());
     }
+    let membership_id = stored.get(ACTIVE_MEMBERSHIP_KEY).cloned();
+    let identity = if let Some(membership_id) = membership_id.as_deref() {
+        stored.get(&membership_identity_key(membership_id)?)
+    } else {
+        stored.get(IDENTITY_KEY)
+    };
+    let keys = identity
+        .map(|value| parse_stored_identity(value))
+        .transpose()?;
+    if session.is_some() && keys.is_none() {
+        return Err("managed Keychain identity is missing".to_string());
+    }
 
     Ok(ManagedRuntime {
         initialized: true,
         session,
-        keys: Some(keys),
+        keys,
+        membership_id,
         logout_pending,
     })
 }
@@ -642,13 +713,6 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
 }
 
 #[cfg(feature = "evaos-teams-managed")]
-fn current_identity_keys(state: &EvaosTeamsState) -> Result<Option<Keys>, String> {
-    initialize_runtime(state)?;
-    let runtime = state.runtime.lock().map_err(|error| error.to_string())?;
-    Ok(runtime.keys.clone())
-}
-
-#[cfg(feature = "evaos-teams-managed")]
 async fn current_credentials(
     state: &EvaosTeamsState,
 ) -> Result<(Zeroizing<String>, Keys, bool), String> {
@@ -685,8 +749,11 @@ async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiF
 }
 
 #[cfg(feature = "evaos-teams-managed")]
-fn persist_signed_out_identity(keys: &Keys) -> Result<(), String> {
-    let replacement = identity_only_entries(keys)?;
+fn persist_signed_out_identities() -> Result<(), String> {
+    let mut replacement = managed_store().load_all_readonly()?.unwrap_or_default();
+    replacement.remove(SESSION_KEY);
+    replacement.remove(LOGOUT_PENDING_KEY);
+    replacement.remove(ACTIVE_MEMBERSHIP_KEY);
     managed_store().replace_all(&replacement)?;
     if managed_store().load_all_readonly()? != Some(replacement) {
         return Err("managed identity read-back verification failed".to_string());
@@ -703,31 +770,18 @@ async fn retry_pending_logout(
 ) -> EvaosTeamsAuthStatus {
     disable_managed_access(app_state);
     match remote_logout(client, session).await {
-        Ok(()) => {
-            let keys = state
-                .runtime
-                .lock()
-                .ok()
-                .and_then(|runtime| runtime.keys.clone());
-            let Some(keys) = keys else {
-                return EvaosTeamsAuthStatus::locked(
-                    "Managed identity is unavailable after logout".to_string(),
-                );
-            };
-            match persist_signed_out_identity(&keys) {
-                Ok(()) => {
-                    if let Ok(mut runtime) = state.runtime.lock() {
-                        *runtime = ManagedRuntime {
-                            initialized: true,
-                            keys: Some(keys),
-                            ..ManagedRuntime::default()
-                        };
-                    }
-                    EvaosTeamsAuthStatus::signed_out()
+        Ok(()) => match persist_signed_out_identities() {
+            Ok(()) => {
+                if let Ok(mut runtime) = state.runtime.lock() {
+                    *runtime = ManagedRuntime {
+                        initialized: true,
+                        ..ManagedRuntime::default()
+                    };
                 }
-                Err(error) => EvaosTeamsAuthStatus::locked(error),
+                EvaosTeamsAuthStatus::signed_out()
             }
-        }
+            Err(error) => EvaosTeamsAuthStatus::locked(error),
+        },
         Err(error) => {
             EvaosTeamsAuthStatus::logout_pending(format!("Remote logout is still pending: {error}"))
         }
@@ -741,12 +795,23 @@ async fn begin_managed_logout(
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let (session, keys, _) = current_credentials(state).await?;
     disable_managed_access(app_state);
-    let identity = encode_managed_identity(&keys)?;
-    let pending = HashMap::from([
-        (IDENTITY_KEY.to_string(), identity),
-        (SESSION_KEY.to_string(), session.to_string()),
-        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
-    ]);
+    let mut pending = managed_store().load_all_readonly()?.unwrap_or_default();
+    let membership_id = state
+        .runtime
+        .lock()
+        .ok()
+        .and_then(|runtime| runtime.membership_id.clone());
+    if let Some(membership_id) = membership_id {
+        pending.insert(
+            membership_identity_key(&membership_id)?,
+            encode_managed_identity(&keys)?,
+        );
+        pending.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id);
+    } else {
+        pending.insert(IDENTITY_KEY.to_string(), encode_managed_identity(&keys)?);
+    }
+    pending.insert(SESSION_KEY.to_string(), session.to_string());
+    pending.insert(LOGOUT_PENDING_KEY.to_string(), "1".to_string());
     managed_store()
         .replace_all(&pending)
         .map_err(|_| "Could not record durable managed logout".to_string())?;
@@ -784,13 +849,16 @@ fn persist_managed_credentials(
     app_state: &AppState,
     session: String,
     keys: Keys,
+    membership_id: String,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let identity = encode_managed_identity(&keys)?;
-    let replacement = HashMap::from([
-        (IDENTITY_KEY.to_string(), identity),
-        (SESSION_KEY.to_string(), session.clone()),
-    ]);
+    let mut replacement = managed_store().load_all_readonly()?.unwrap_or_default();
+    replacement.remove(IDENTITY_KEY);
+    replacement.remove(LOGOUT_PENDING_KEY);
+    replacement.insert(membership_identity_key(&membership_id)?, identity);
+    replacement.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.clone());
+    replacement.insert(SESSION_KEY.to_string(), session.clone());
     managed_store()
         .replace_all(&replacement)
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
@@ -804,6 +872,7 @@ fn persist_managed_credentials(
             initialized: true,
             session: Some(Zeroizing::new(session)),
             keys: Some(keys),
+            membership_id: Some(membership_id),
             logout_pending: false,
         };
     }
@@ -984,6 +1053,7 @@ async fn bind_identity(
     client: &reqwest::Client,
     token: &str,
     keys: &Keys,
+    expected_membership_id: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
     let challenge: ChallengeResponse = post_json(
@@ -1002,6 +1072,9 @@ async fn bind_identity(
     )
     .await
     .map_err(|error| format!("Managed key challenge was not available: {error}"))?;
+    if challenge.challenge.membership_id != expected_membership_id {
+        return Err("Managed key challenge changed the selected membership".to_string());
+    }
     let signed_event = signed_challenge(&challenge, keys)?;
     let verified: EntitlementResponse = post_json(
         client,
@@ -1021,6 +1094,26 @@ async fn bind_identity(
     // already bound by the exact signed challenge above. Install the locally
     // derived public key so every later entitlement validation stays strict.
     bind_verified_entitlement(verified.entitlement, &challenge.relay_host, &public_key)
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+async fn get_identity_binding(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<IdentityBinding, String> {
+    let response: IdentityBindingResponse = post_json(
+        client,
+        "evaos-teams-access",
+        Some(token),
+        serde_json::json!({ "action": "get_identity_binding" }),
+    )
+    .await
+    .map_err(|error| format!("Managed identity selection was not available: {error}"))?;
+    if response.status != "active" {
+        return Err("Managed identity selection is not active".to_string());
+    }
+    membership_identity_key(&response.binding.membership_id)?;
+    Ok(response.binding)
 }
 
 /// Start an account-selecting browser login and complete device-code claim and
@@ -1045,7 +1138,6 @@ pub(crate) async fn start_evaos_teams_login(
         verify_managed_store_writable()?;
 
         initialize_runtime(&state)?;
-        let mut login_keys = current_identity_keys(&state)?;
         if let Ok((session, keys, logout_pending)) = current_credentials(&state).await {
             if logout_pending {
                 let outcome = begin_managed_logout(&state, &app_state).await?;
@@ -1068,9 +1160,9 @@ pub(crate) async fn start_evaos_teams_login(
                     }
                     _ => {
                         // A stale token cannot safely authorize work, but it does
-                        // not own the durable identity. Re-authenticate by proving
-                        // possession of the same local key against a new grant.
-                        login_keys = Some(keys);
+                        // not own the durable identity. The server-selected
+                        // membership below chooses its own Keychain key.
+                        let _ = keys;
                     }
                 }
             }
@@ -1123,11 +1215,14 @@ pub(crate) async fn start_evaos_teams_login(
         server.abort();
 
         let claim = claim_device_code(&app_state.http_client, &code).await?;
-        let candidate_keys = login_keys.unwrap_or_else(Keys::generate);
+        let binding = get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
+        let stored = managed_store().load_all_readonly()?.unwrap_or_default();
+        let candidate_keys = select_login_keys(&stored, &binding)?;
         let entitlement = bind_identity(
             &app_state.http_client,
             &claim.desktop_session,
             &candidate_keys,
+            &binding.membership_id,
         )
         .await?;
         let rollback_session = claim.desktop_session.clone();
@@ -1136,6 +1231,7 @@ pub(crate) async fn start_evaos_teams_login(
             &app_state,
             claim.desktop_session,
             candidate_keys,
+            binding.membership_id,
             entitlement,
         );
         if result.is_err() {

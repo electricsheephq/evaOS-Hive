@@ -234,6 +234,101 @@ fn signed_out_store_preserves_identity_without_session_authority() {
 }
 
 #[test]
+fn account_switch_selects_only_the_server_bound_membership_key() {
+    let membership_a = "10000000-0000-4000-8000-000000000001";
+    let membership_b = "10000000-0000-4000-8000-000000000002";
+    let keys_a = Keys::generate();
+    let keys_b = Keys::generate();
+    let stored = HashMap::from([
+        (
+            membership_identity_key(membership_a).unwrap(),
+            encode_managed_identity(&keys_a).unwrap(),
+        ),
+        (
+            membership_identity_key(membership_b).unwrap(),
+            encode_managed_identity(&keys_b).unwrap(),
+        ),
+    ]);
+
+    let selected = select_login_keys(
+        &stored,
+        &IdentityBinding {
+            membership_id: membership_b.to_string(),
+            public_key: Some(keys_b.public_key().to_hex()),
+        },
+    )
+    .unwrap();
+    assert_eq!(selected.public_key(), keys_b.public_key());
+}
+
+#[test]
+fn legacy_identity_is_reused_only_when_the_server_binding_matches() {
+    let membership_id = "10000000-0000-4000-8000-000000000001";
+    let keys = Keys::generate();
+    let stored = identity_only_entries(&keys).unwrap();
+
+    let selected = select_login_keys(
+        &stored,
+        &IdentityBinding {
+            membership_id: membership_id.to_string(),
+            public_key: Some(keys.public_key().to_hex()),
+        },
+    )
+    .unwrap();
+    assert_eq!(selected.public_key(), keys.public_key());
+}
+
+#[test]
+fn account_switch_never_reuses_another_memberships_key() {
+    let membership_a = "10000000-0000-4000-8000-000000000001";
+    let membership_b = "10000000-0000-4000-8000-000000000002";
+    let keys_a = Keys::generate();
+    let stored = HashMap::from([(
+        membership_identity_key(membership_a).unwrap(),
+        encode_managed_identity(&keys_a).unwrap(),
+    )]);
+
+    let selected = select_login_keys(
+        &stored,
+        &IdentityBinding {
+            membership_id: membership_b.to_string(),
+            public_key: None,
+        },
+    )
+    .unwrap();
+    assert_ne!(selected.public_key(), keys_a.public_key());
+}
+
+#[test]
+fn active_scoped_identity_restores_with_its_membership() {
+    let membership_id = "10000000-0000-4000-8000-000000000001";
+    let keys = Keys::generate();
+    let session = "opaque-desktop-session";
+    let entries = HashMap::from([
+        (
+            membership_identity_key(membership_id).unwrap(),
+            encode_managed_identity(&keys).unwrap(),
+        ),
+        (ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.to_string()),
+        (SESSION_KEY.to_string(), session.to_string()),
+    ]);
+
+    let runtime = runtime_from_entries(Some(entries)).unwrap();
+    assert_eq!(runtime.membership_id.as_deref(), Some(membership_id));
+    assert_eq!(runtime.keys.unwrap().public_key(), keys.public_key(),);
+    assert_eq!(runtime.session.unwrap().as_str(), session);
+}
+
+#[test]
+fn bound_membership_without_its_private_key_fails_closed() {
+    let binding = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000001".to_string(),
+        public_key: Some("a".repeat(64)),
+    };
+    assert!(select_login_keys(&HashMap::new(), &binding).is_err());
+}
+
+#[test]
 fn session_without_identity_fails_closed() {
     let entries = HashMap::from([(
         SESSION_KEY.to_string(),

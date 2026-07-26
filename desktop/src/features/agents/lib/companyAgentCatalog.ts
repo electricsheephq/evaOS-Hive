@@ -36,3 +36,9 @@ export function mergeRelayAgentsWithCompanyCatalog(
     left.name.localeCompare(right.name),
   );
 }
+
+export function filterCompanyVmAgents(
+  agents: readonly RelayAgent[],
+): RelayAgent[] {
+  return agents.filter((agent) => agent.capabilities.includes("company-vm"));
+}

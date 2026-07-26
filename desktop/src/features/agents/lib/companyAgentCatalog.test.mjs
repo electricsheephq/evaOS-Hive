@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeRelayAgentsWithCompanyCatalog } from "./companyAgentCatalog.ts";
+import {
+  filterCompanyVmAgents,
+  mergeRelayAgentsWithCompanyCatalog,
+} from "./companyAgentCatalog.ts";
 
 const PUBKEY = "a".repeat(64);
 
@@ -62,4 +65,25 @@ test("relay profile supplies live status while company catalog owns name and run
   assert.equal(merged[0].status, "online");
   assert.deepEqual(merged[0].channels, ["general"]);
   assert.deepEqual(merged[0].capabilities, ["chat", "company-vm", "hermes"]);
+});
+
+test("relay-only profiles are not labeled as registered company VM agents", () => {
+  const relayOnly = {
+    pubkey: "b".repeat(64),
+    name: "Relay only",
+    agentType: "unknown",
+    channels: [],
+    channelIds: [],
+    capabilities: ["chat"],
+    status: "online",
+    respondTo: null,
+    respondToAllowlist: [],
+  };
+  const companyVm = {
+    ...relayOnly,
+    pubkey: PUBKEY,
+    name: "ATRIS",
+    capabilities: ["chat", "company-vm", "hermes"],
+  };
+  assert.deepEqual(filterCompanyVmAgents([relayOnly, companyVm]), [companyVm]);
 });

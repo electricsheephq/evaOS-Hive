@@ -27,6 +27,7 @@ import { useTeamActions } from "./useTeamActions";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { useBakedBuildEnvQuery } from "@/features/agents/hooks";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
+import { filterCompanyVmAgents } from "@/features/agents/lib/companyAgentCatalog";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
@@ -200,7 +201,9 @@ export function AgentsView() {
               onImportSnapshotFile={(fileBytes, fileName) => {
                 void personas.handleImportSnapshotFile(fileBytes, fileName);
               }}
-              companyAgents={agents.relayAgentsQuery.data ?? []}
+              companyAgents={filterCompanyVmAgents(
+                agents.relayAgentsQuery.data ?? [],
+              )}
               onRefreshCompanyAgents={() => {
                 void agents.refetchRelayAgents();
               }}
