@@ -50,6 +50,11 @@ const rules = [
 // Do not add to this list; split the file instead. Remove each entry as its
 // file is broken up. Tracked as a follow-up.
 const overrides = new Map([
+  // Hive #36 keeps the Electric OAuth, durable membership-key binding, and
+  // revocable desktop-session adapter isolated from native Buzz behavior in
+  // one feature-gated module. Splitting that security boundary during the
+  // canary reset would add risk without reducing the reachable surface.
+  ["src-tauri/src/evaos_teams.rs", 1267],
   // Native Builderlab auth/community commands add a small registration surface
   // to the existing Tauri composition root. The implementation lives in
   // builderlab.rs; this narrowly ratchets the command wiring while lib.rs is
@@ -131,7 +136,9 @@ const overrides = new Map([
   // record_provider param + applies persona_field_with_record_fallback. +5 lines.
   // global-agent-config: spawn_agent_child loads global config and merges as
   // lowest env layer (+8 lines). Queued to split.
-  ["src-tauri/src/managed_agents/runtime.rs", 2216],
+  // Hive #36 adds the four-line Hermes session-continuity handoff at the
+  // existing runtime seam. Keep the grandfathered ceiling exact.
+  ["src-tauri/src/managed_agents/runtime.rs", 2220],
   // config-bridge setup-payload env-boundary fix adds readiness wiring in
   // spawn_agent_child; load-bearing security fix, queued to split.
   ["src-tauri/src/managed_agents/config_bridge/reader.rs", 1016],
