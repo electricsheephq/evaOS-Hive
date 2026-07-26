@@ -32,6 +32,7 @@ mod media_transcode;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
 mod messages;
+mod metadata_poll;
 mod notifications;
 mod observer_archive;
 mod os_idle;
