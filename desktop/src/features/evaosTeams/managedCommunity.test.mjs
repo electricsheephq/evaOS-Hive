@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  forEachRetiredManagedCommunity,
   isManagedCommunityStateReady,
   managedRelayWebSocketUrl,
   resolveManagedCommunityState,
@@ -91,16 +92,53 @@ test("different memberships sharing one relay never reuse local community identi
     pubkey: "b".repeat(64),
     addedAt: "2026-07-25T00:00:00.000Z",
   };
-  const state = resolveManagedCommunityState([previous], ENTITLEMENT);
-  assert.equal(state.communities.length, 2);
-  assert.equal(state.communities[0].id, previous.id);
-  assert.equal(state.communities[1].id, ENTITLEMENT.communityId);
-  assert.equal(state.communities[1].name, "Hive");
-  assert.deepEqual(state.retiredCommunities, []);
+  const state = resolveManagedCommunityState(
+    [previous],
+    ENTITLEMENT,
+    "2026-07-26T00:00:00.000Z",
+  );
+  assert.deepEqual(state.communities, [
+    {
+      id: ENTITLEMENT.communityId,
+      name: "Hive",
+      relayUrl: "wss://teams.example.invalid",
+      pubkey: ENTITLEMENT.publicKey,
+      addedAt: "2026-07-26T00:00:00.000Z",
+    },
+  ]);
+  assert.deepEqual(state.retiredCommunities, [previous]);
+  const clearedScopes = [];
+  forEachRetiredManagedCommunity(state.retiredCommunities, (community) => {
+    clearedScopes.push({
+      id: community.id,
+      relayUrl: community.relayUrl,
+    });
+  });
+  assert.deepEqual(clearedScopes, [
+    {
+      id: previous.id,
+      relayUrl: previous.relayUrl,
+    },
+  ]);
   assert.equal(
     isManagedCommunityStateReady(state.communities, previous.id, ENTITLEMENT),
     false,
   );
+});
+
+test("unrelated communities on other relays remain available", () => {
+  const unrelated = {
+    id: "30000000-0000-4000-8000-000000000005",
+    name: "Unrelated community",
+    relayUrl: "wss://other.example.invalid",
+    pubkey: "c".repeat(64),
+    addedAt: "2026-07-25T00:00:00.000Z",
+  };
+  const state = resolveManagedCommunityState([unrelated], ENTITLEMENT);
+  assert.equal(state.communities.length, 2);
+  assert.equal(state.communities[0].id, unrelated.id);
+  assert.equal(state.communities[1].id, ENTITLEMENT.communityId);
+  assert.deepEqual(state.retiredCommunities, []);
 });
 
 test("persisted active selection must match the entitlement", () => {

@@ -8,6 +8,15 @@ export type ManagedCommunityState = {
   retiredCommunities: Community[];
 };
 
+export function forEachRetiredManagedCommunity(
+  retiredCommunities: Community[],
+  clearRetiredCommunity: (community: Community) => void,
+): void {
+  for (const community of retiredCommunities) {
+    clearRetiredCommunity(community);
+  }
+}
+
 export function managedRelayWebSocketUrl(relayHost: string): string {
   let url: URL;
   try {
@@ -51,19 +60,25 @@ export function resolveManagedCommunityState(
     addedAt: existing?.addedAt ?? addedAt,
     ...(existing?.reposDir ? { reposDir: existing.reposDir } : {}),
   };
-  const retiredCommunities = communities.filter(
-    (candidate) =>
-      candidate.id === community.id &&
+  const shouldRetire = (candidate: Community) =>
+    (candidate.id === community.id &&
       (candidate.relayUrl !== community.relayUrl ||
-        candidate.pubkey !== community.pubkey),
+        candidate.pubkey !== community.pubkey)) ||
+    (candidate.relayUrl === community.relayUrl &&
+      (candidate.id !== community.id || candidate.pubkey !== community.pubkey));
+  const retiredCommunities = communities.filter((candidate) =>
+    shouldRetire(candidate),
   );
-  const existingIndex = communities.findIndex(
+  const survivingCommunities = communities.filter(
+    (candidate) => !shouldRetire(candidate),
+  );
+  const existingIndex = survivingCommunities.findIndex(
     (candidate) => candidate.id === community.id,
   );
   const nextCommunities =
     existingIndex === -1
-      ? [...communities, community]
-      : communities.map((candidate, index) =>
+      ? [...survivingCommunities, community]
+      : survivingCommunities.map((candidate, index) =>
           index === existingIndex ? community : candidate,
         );
   return {

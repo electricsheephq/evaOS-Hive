@@ -27,6 +27,7 @@ import {
 } from "./communityNavigationStorage";
 import type { EvaosTeamsEntitlement } from "@/features/evaosTeams/api";
 import {
+  forEachRetiredManagedCommunity,
   isManagedCommunityStateReady,
   resolveManagedCommunityState,
 } from "@/features/evaosTeams/managedCommunity";
@@ -280,13 +281,13 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
       if (!saveCommunitySelection(next.communities, next.activeId)) {
         return false;
       }
-      for (const retired of next.retiredCommunities) {
+      forEachRetiredManagedCommunity(next.retiredCommunities, (retired) => {
         removeSelfProfileCachesForRelay(retired.relayUrl);
         removeChannelSnapshotForRelay(retired.relayUrl);
         removeMessageSnapshotsForRelay(retired.relayUrl);
         clearSavedCommunitySnapshot(retired.id);
         removeCommunityDestination(retired.id);
-      }
+      });
       communitiesRef.current = next.communities;
       setCommunitiesState(next.communities);
       setActiveId(next.activeId);
