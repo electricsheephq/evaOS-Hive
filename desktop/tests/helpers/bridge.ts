@@ -82,6 +82,8 @@ type MockRelayAgentSeed = {
   channelIds?: string[];
   /** Also seed this relay-owned agent as a bot member of the named channels. */
   memberChannelNames?: string[];
+  /** Override the membership role while preserving signed agent identity. */
+  memberRole?: "bot" | "member";
   status?: "online" | "away" | "offline";
 };
 

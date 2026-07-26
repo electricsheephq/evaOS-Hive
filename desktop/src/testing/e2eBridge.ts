@@ -98,6 +98,7 @@ type MockRelayAgentSeed = {
   channelNames?: string[];
   channelIds?: string[];
   memberChannelNames?: string[];
+  memberRole?: "bot" | "member";
   status?: PresenceStatus;
 };
 
@@ -2076,7 +2077,7 @@ function resetMockRelayAgents(config?: E2eConfig) {
       }
       channel.members.push({
         pubkey: seed.pubkey,
-        role: "bot",
+        role: seed.memberRole ?? "bot",
         is_agent: true,
         joined_at: new Date().toISOString(),
         display_name: seed.name,

@@ -189,7 +189,7 @@ test("isAgentIdentityInManagedList: keeps people and only current managed agent 
   );
 });
 
-test("isAgentIdentityMentionable: admits in-channel bots owned elsewhere", () => {
+test("isAgentIdentityMentionable: admits verified in-channel agents without a bot membership role", () => {
   const managedAgentPubkeys = new Set([PUB_A]);
 
   assert.equal(
@@ -204,7 +204,7 @@ test("isAgentIdentityMentionable: admits in-channel bots owned elsewhere", () =>
       { isAgent: true, isMember: true, pubkey: PUB_B, role: "member" },
       managedAgentPubkeys,
     ),
-    false,
+    true,
   );
   assert.equal(
     isAgentIdentityMentionable(

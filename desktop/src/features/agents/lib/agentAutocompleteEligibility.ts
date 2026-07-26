@@ -96,9 +96,10 @@ export function isAgentIdentityInManagedList(
 }
 
 /**
- * Allows channel bot members into mention eligibility without granting this
- * client ownership of their runtime. The later relay-policy check remains
- * authoritative for whether the agent can be invoked.
+ * Allows verified agent identities already admitted to the current channel
+ * into mention eligibility without granting this client ownership of their
+ * runtime. NIP-29 membership events may omit the explicit "bot" role; in that
+ * case the signed NIP-OA profile still truthfully supplies `isAgent`.
  */
 export function isAgentIdentityMentionable(
   candidate: {
@@ -111,7 +112,7 @@ export function isAgentIdentityMentionable(
 ) {
   return (
     isAgentIdentityInManagedList(candidate, managedAgentPubkeys) ||
-    (candidate.isMember === true && candidate.role === "bot")
+    (candidate.isMember === true && candidate.isAgent === true)
   );
 }
 
