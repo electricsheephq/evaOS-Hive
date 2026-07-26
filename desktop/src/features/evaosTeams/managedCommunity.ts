@@ -17,6 +17,20 @@ export function forEachRetiredManagedCommunity(
   }
 }
 
+export function shouldRetireManagedCommunity(
+  candidate: Community,
+  managedCommunity: Community,
+): boolean {
+  return (
+    (candidate.id === managedCommunity.id &&
+      (candidate.relayUrl !== managedCommunity.relayUrl ||
+        candidate.pubkey !== managedCommunity.pubkey)) ||
+    (candidate.relayUrl === managedCommunity.relayUrl &&
+      (candidate.id !== managedCommunity.id ||
+        candidate.pubkey !== managedCommunity.pubkey))
+  );
+}
+
 export function managedRelayWebSocketUrl(relayHost: string): string {
   let url: URL;
   try {
@@ -60,17 +74,11 @@ export function resolveManagedCommunityState(
     addedAt: existing?.addedAt ?? addedAt,
     ...(existing?.reposDir ? { reposDir: existing.reposDir } : {}),
   };
-  const shouldRetire = (candidate: Community) =>
-    (candidate.id === community.id &&
-      (candidate.relayUrl !== community.relayUrl ||
-        candidate.pubkey !== community.pubkey)) ||
-    (candidate.relayUrl === community.relayUrl &&
-      (candidate.id !== community.id || candidate.pubkey !== community.pubkey));
   const retiredCommunities = communities.filter((candidate) =>
-    shouldRetire(candidate),
+    shouldRetireManagedCommunity(candidate, community),
   );
   const survivingCommunities = communities.filter(
-    (candidate) => !shouldRetire(candidate),
+    (candidate) => !shouldRetireManagedCommunity(candidate, community),
   );
   const existingIndex = survivingCommunities.findIndex(
     (candidate) => candidate.id === community.id,
@@ -102,6 +110,15 @@ export function isManagedCommunityStateReady(
     (candidate) => candidate.id === entitlement.communityId,
   );
   if (!community) return false;
+  if (
+    communities.some(
+      (candidate) =>
+        candidate !== community &&
+        shouldRetireManagedCommunity(candidate, community),
+    )
+  ) {
+    return false;
+  }
   return (
     community.relayUrl === managedRelayWebSocketUrl(entitlement.relayHost) &&
     community.pubkey === publicKey &&

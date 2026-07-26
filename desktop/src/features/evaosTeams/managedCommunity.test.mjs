@@ -141,6 +141,43 @@ test("unrelated communities on other relays remain available", () => {
   assert.deepEqual(state.retiredCommunities, []);
 });
 
+test("persisted same-relay membership conflict forces one cleanup reconciliation", () => {
+  const previous = {
+    id: "20000000-0000-4000-8000-000000000004",
+    name: "Previous company",
+    relayUrl: "wss://teams.example.invalid",
+    pubkey: "b".repeat(64),
+    addedAt: "2026-07-25T00:00:00.000Z",
+  };
+  const entitled = {
+    id: ENTITLEMENT.communityId,
+    name: "Hive",
+    relayUrl: "wss://teams.example.invalid",
+    pubkey: ENTITLEMENT.publicKey,
+    addedAt: "2026-07-26T00:00:00.000Z",
+  };
+  assert.equal(
+    isManagedCommunityStateReady(
+      [previous, entitled],
+      ENTITLEMENT.communityId,
+      ENTITLEMENT,
+    ),
+    false,
+  );
+
+  const state = resolveManagedCommunityState([previous, entitled], ENTITLEMENT);
+  assert.deepEqual(state.communities, [entitled]);
+  assert.deepEqual(state.retiredCommunities, [previous]);
+  assert.equal(
+    isManagedCommunityStateReady(
+      state.communities,
+      state.activeId,
+      ENTITLEMENT,
+    ),
+    true,
+  );
+});
+
 test("persisted active selection must match the entitlement", () => {
   const state = resolveManagedCommunityState([], ENTITLEMENT);
   assert.equal(
