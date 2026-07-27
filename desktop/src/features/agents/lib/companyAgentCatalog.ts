@@ -4,7 +4,12 @@ import {
   resolveCompanyAgentPresence,
 } from "@/features/evaosTeams/lib/companyAgentIdentity";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
-import type { Channel, PresenceLookup, RelayAgent } from "@/shared/api/types";
+import type {
+  Channel,
+  ManagedAgent,
+  PresenceLookup,
+  RelayAgent,
+} from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
 export function mergeRelayAgentsWithCompanyCatalog(
@@ -118,5 +123,17 @@ export function companyVmAgentsFromCatalog(
   );
   return mergeRelayAgentsWithCompanyCatalog(relayAgents, companyAgents).filter(
     (agent) => catalogPubkeys.has(normalizePubkey(agent.pubkey)),
+  );
+}
+
+export function excludeLocalAgentDuplicates(
+  companyAgents: readonly RelayAgent[],
+  localAgents: readonly ManagedAgent[],
+): RelayAgent[] {
+  const localPubkeys = new Set(
+    localAgents.map((agent) => normalizePubkey(agent.pubkey)),
+  );
+  return companyAgents.filter(
+    (agent) => !localPubkeys.has(normalizePubkey(agent.pubkey)),
   );
 }

@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { formatAgentModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
+import { excludeLocalAgentDuplicates } from "@/features/agents/lib/companyAgentCatalog";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import type {
   AgentPersona,
@@ -26,11 +27,7 @@ import { AgentIdentityCard } from "./AgentIdentityCard";
 import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { PersonaActionsMenu } from "./PersonaActionsMenu";
-import {
-  buildUnifiedGroups,
-  filterManagedLocalWelcomeRecords,
-  pickProfileAgent,
-} from "./unifiedAgentGroups";
+import { buildUnifiedGroups, pickProfileAgent } from "./unifiedAgentGroups";
 
 type UnifiedAgentsSectionProps = {
   defaultModel: string;
@@ -114,12 +111,12 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
   const isManagedHive = desktopProductPolicy().managed;
 
   const { groups, ungrouped, unknown } = React.useMemo(
-    () =>
-      filterManagedLocalWelcomeRecords(
-        buildUnifiedGroups(personas, agents),
-        isManagedHive,
-      ),
-    [agents, isManagedHive, personas],
+    () => buildUnifiedGroups(personas, agents),
+    [agents, personas],
+  );
+  const visibleCompanyAgents = React.useMemo(
+    () => excludeLocalAgentDuplicates(companyAgents, agents),
+    [agents, companyAgents],
   );
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const {
@@ -202,18 +199,24 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
             })}
             <NewAgentCard
               canChooseCatalog={canChooseCatalog}
-              isManagedHive={isManagedHive}
               isPersonasPending={isPersonasPending}
               openFilePicker={openFilePicker}
               onChooseCatalog={onChooseCatalog}
               onCreatePersona={onCreatePersona}
-              onRefreshCompanyAgents={onRefreshCompanyAgents}
             />
+            {isManagedHive ? (
+              <CreateIdentityCard
+                ariaLabel="Refresh registered VM agents"
+                dataTestId="refresh-company-agents-card"
+                label="Refresh registered VM agents"
+                onClick={onRefreshCompanyAgents}
+              />
+            ) : null}
           </div>
 
           {isManagedHive ? (
             <CompanyVmAgentsSection
-              agents={companyAgents}
+              agents={visibleCompanyAgents}
               error={companyAgentsError}
               isLoading={isCompanyAgentsLoading}
               onOpenAgentProfile={onOpenAgentProfile}
@@ -453,22 +456,18 @@ function firstAvatarUrl(
 
 function NewAgentCard({
   canChooseCatalog,
-  isManagedHive,
   isPersonasPending,
   openFilePicker,
   onChooseCatalog,
   onCreatePersona,
-  onRefreshCompanyAgents,
 }: {
   canChooseCatalog: boolean;
-  isManagedHive: boolean;
   isPersonasPending: boolean;
   openFilePicker: () => void;
   onChooseCatalog: () => void;
   onCreatePersona: () => void;
-  onRefreshCompanyAgents: () => void;
 }) {
-  const label = isManagedHive ? "Import from company VM" : "New agent";
+  const label = "New agent";
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
@@ -482,34 +481,26 @@ function NewAgentCard({
         align="start"
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
-        {isManagedHive ? (
-          <DropdownMenuItem onClick={onRefreshCompanyAgents}>
-            Refresh registered VM agents
+        <DropdownMenuItem
+          disabled={isPersonasPending}
+          onClick={onCreatePersona}
+        >
+          Create from scratch
+        </DropdownMenuItem>
+        {canChooseCatalog ? (
+          <DropdownMenuItem
+            disabled={isPersonasPending}
+            onClick={onChooseCatalog}
+          >
+            Choose from catalog
           </DropdownMenuItem>
-        ) : (
-          <>
-            <DropdownMenuItem
-              disabled={isPersonasPending}
-              onClick={onCreatePersona}
-            >
-              Create from scratch
-            </DropdownMenuItem>
-            {canChooseCatalog ? (
-              <DropdownMenuItem
-                disabled={isPersonasPending}
-                onClick={onChooseCatalog}
-              >
-                Choose from catalog
-              </DropdownMenuItem>
-            ) : null}
-            <DropdownMenuItem
-              data-testid="import-agent-snapshot-menu-item"
-              onClick={openFilePicker}
-            >
-              Import agent snapshot
-            </DropdownMenuItem>
-          </>
-        )}
+        ) : null}
+        <DropdownMenuItem
+          data-testid="import-agent-snapshot-menu-item"
+          onClick={openFilePicker}
+        >
+          Import agent snapshot
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

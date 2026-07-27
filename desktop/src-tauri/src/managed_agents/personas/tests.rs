@@ -1,7 +1,8 @@
 use super::{
     built_in_persona_records, ensure_persona_ids_are_active, ensure_persona_is_active,
     merge_personas, migrate_retired_personas, validate_persona_activation_change,
-    validate_persona_deletion, BUILT_IN_PERSONAS, RETIRED_PERSONAS,
+    validate_persona_deletion, BUILT_IN_PERSONAS, FIZZ_AVATAR, LEGACY_FIZZ_SYSTEM_PROMPT,
+    RETIRED_PERSONAS,
 };
 use crate::managed_agents::discovery::{default_agent_command, effective_agent_command};
 use crate::managed_agents::AgentDefinition;
@@ -43,7 +44,7 @@ fn merge_personas_adds_missing_built_ins() {
         .iter()
         .map(|record| record.display_name.as_str())
         .collect();
-    assert_eq!(display_names, vec!["Fizz", "Honey", "Bumble"]);
+    assert_eq!(display_names, vec!["TARS", "Samantha", "HAL 9000"]);
     let active_ids: Vec<&str> = records
         .iter()
         .filter(|record| record.is_active)
@@ -62,6 +63,29 @@ fn merge_personas_preserves_custom_records() {
 
     assert!(changed);
     assert!(records.iter().any(|record| record.id == custom.id));
+}
+
+#[test]
+fn merge_personas_replaces_only_pristine_legacy_starter_presentation() {
+    let now = "2026-07-27T00:00:00Z";
+    let mut legacy_tars = built_in_persona_records(now)
+        .into_iter()
+        .find(|record| record.id == "builtin:fizz")
+        .expect("TARS seed should exist");
+    legacy_tars.display_name = "Fizz".to_string();
+    legacy_tars.avatar_url = Some(FIZZ_AVATAR.to_string());
+    legacy_tars.system_prompt = LEGACY_FIZZ_SYSTEM_PROMPT.to_string();
+
+    let (records, changed) = merge_personas(vec![legacy_tars], now);
+
+    assert!(changed);
+    let tars = records
+        .iter()
+        .find(|record| record.id == "builtin:fizz")
+        .expect("TARS built-in should exist");
+    assert_eq!(tars.display_name, "TARS");
+    assert_ne!(tars.avatar_url.as_deref(), Some(FIZZ_AVATAR));
+    assert!(tars.system_prompt.starts_with("You are TARS"));
 }
 
 #[test]

@@ -13,6 +13,10 @@ import {
   takePendingWelcomeChannelForDirectEntry,
   WELCOME_SURFACE_READY_EVENT,
 } from "@/features/onboarding/welcome";
+import {
+  STARTER_PERSONA_NAMES,
+  starterPersonaAvatar,
+} from "@/features/onboarding/starterPersonaPresentation";
 import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { registerAvatarWhenReady } from "@/features/profile/avatarProfileSync";
 import { profileQueryKey } from "@/features/profile/hooks";
@@ -49,12 +53,6 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
     error.message.includes("invalid: you are not a relay member")
   );
 }
-
-const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
-  Fizz: "/onboarding/starter-team/fizz.png",
-  Honey: "/onboarding/starter-team/honey.png",
-  Bumble: "/onboarding/starter-team/bumble.png",
-};
 
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
@@ -185,7 +183,7 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          ["Fizz", "Honey", "Bumble"].flatMap((name) => {
+          STARTER_PERSONA_NAMES.flatMap((name) => {
             const persona = personas.find(
               (candidate) => candidate.displayName === name,
             );
@@ -628,8 +626,9 @@ export function CommunityOnboardingFlow({
                 {starterPersonas.length > 0 ? (
                   <div className="flex flex-wrap justify-center gap-8">
                     {starterPersonas.map((persona) => {
-                      const animationUrl =
-                        STARTER_PERSONA_ANIMATIONS[persona.displayName];
+                      const animationUrl = starterPersonaAvatar(
+                        persona.displayName,
+                      );
                       return (
                         <div
                           className="flex w-40 flex-col items-center gap-3"

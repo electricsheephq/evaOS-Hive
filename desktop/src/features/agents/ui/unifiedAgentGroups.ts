@@ -1,8 +1,4 @@
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
-import {
-  isLocalWelcomeAgentRecord,
-  isLocalWelcomePersonaId,
-} from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 
 type PersonaGroup = { persona: AgentPersona; agents: ManagedAgent[] };
@@ -36,32 +32,6 @@ export function buildUnifiedGroups(
   }
 
   return { groups, ungrouped, unknown };
-}
-
-export function filterManagedLocalWelcomeRecords(
-  unifiedGroups: ReturnType<typeof buildUnifiedGroups>,
-  managedProduct: boolean,
-): ReturnType<typeof buildUnifiedGroups> {
-  if (!managedProduct) {
-    return unifiedGroups;
-  }
-
-  return {
-    groups: unifiedGroups.groups
-      .filter(({ persona }) => !isLocalWelcomePersonaId(persona.id))
-      .map((group) => ({
-        ...group,
-        agents: group.agents.filter(
-          (agent) => !isLocalWelcomeAgentRecord(agent),
-        ),
-      })),
-    ungrouped: unifiedGroups.ungrouped.filter(
-      (agent) => !isLocalWelcomeAgentRecord(agent),
-    ),
-    unknown: unifiedGroups.unknown.filter(
-      (agent) => !isLocalWelcomeAgentRecord(agent),
-    ),
-  };
 }
 
 export function pickProfileAgent(agents: ManagedAgent[]) {
