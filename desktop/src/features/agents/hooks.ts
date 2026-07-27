@@ -33,7 +33,6 @@ import {
   getRuntimeFileConfig,
   installAcpRuntime,
   listManagedAgents,
-  listRelayAgents,
   updateManagedAgent,
 } from "@/shared/api/tauri";
 import {
@@ -42,9 +41,11 @@ import {
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauriManagedAgents";
-import { listHiveCompanyAgents } from "@/features/evaosTeams/api";
-import { mergeRelayAgentsWithCompanyCatalog } from "@/features/agents/lib/companyAgentCatalog";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
+import { useHiveCompanyAgentsQuery } from "@/features/evaosTeams/hooks";
+import {
+  relayAgentsQueryKey,
+  useRelayAgentsQuery,
+} from "@/features/agents/relayAgentsQuery";
 import { bootstrapManagedAgentRuntimePairs } from "@/features/agents/managedAgentRuntimeHooks";
 import {
   createPersona,
@@ -74,7 +75,6 @@ import type {
   UpdateManagedAgentInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
-import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   AttachManagedAgentToChannelInput,
   CreateChannelManagedAgentInput,
@@ -84,6 +84,7 @@ import type {
   EnsureChannelAgentPresetResult,
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 export { findReusableAgent } from "@/features/agents/agentReuse";
 export {
   teamsQueryKey,
@@ -104,8 +105,7 @@ export type {
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
 
-export const relayAgentsQueryKey = ["relay-agents"] as const;
-export const hiveCompanyAgentsQueryKey = ["hive-company-agents"] as const;
+export { relayAgentsQueryKey, useRelayAgentsQuery };
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
@@ -113,7 +113,6 @@ export const acpAuthMethodsQueryKey = ["acp-auth-methods"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 export const backendProvidersQueryKey = ["backend-providers"] as const;
 export const gitBashPrerequisiteQueryKey = ["git-bash-prerequisite"] as const;
-
 type InvalidateAgentQueriesOptions = {
   refetchChannels?: boolean;
 };
@@ -294,47 +293,7 @@ export function useManagedAgentPrereqsQuery(
   });
 }
 
-export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
-  return useQuery({
-    queryKey: relayAgentsQueryKey,
-    queryFn: async () => {
-      const relayAgents = await listRelayAgents();
-      if (!desktopProductPolicy().managed) return relayAgents;
-      try {
-        const companyAgents = await listHiveCompanyAgents();
-        return mergeRelayAgentsWithCompanyCatalog(relayAgents, companyAgents);
-      } catch (error) {
-        console.warn(
-          "Company VM agent catalog is unavailable; using relay profiles.",
-          error,
-        );
-        return relayAgents;
-      }
-    },
-    staleTime: 30_000,
-    // Relay agent profiles (kind:10100) are near-static and the backing
-    // `list_relay_agents` command is an unfiltered relay query for the whole
-    // profile set — mounted on ~13 always-live surfaces (channel screen,
-    // members bar, mentions, sidebar, profile popovers), so a tight interval
-    // re-pulls the full set app-wide. This poll is also the ONLY refresh path:
-    // the `agents-data-changed` event fires only for local persona/team/managed
-    // reconcile (kinds PERSONA/TEAM/MANAGED_AGENT), never for kind:10100. So we
-    // keep polling but at a relaxed cadence and pause it while backgrounded.
-    refetchInterval: 5 * 60_000,
-    refetchIntervalInBackground: false,
-    enabled: options?.enabled,
-  });
-}
-
-export function useHiveCompanyAgentsQuery(options?: { enabled?: boolean }) {
-  const managed = desktopProductPolicy().managed;
-  return useQuery({
-    queryKey: hiveCompanyAgentsQueryKey,
-    queryFn: listHiveCompanyAgents,
-    staleTime: 30_000,
-    enabled: managed && (options?.enabled ?? true),
-  });
-}
+export { useHiveCompanyAgentsQuery };
 
 export function useManagedAgentsQuery(options?: { enabled?: boolean }) {
   return useQuery({

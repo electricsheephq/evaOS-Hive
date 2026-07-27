@@ -548,18 +548,10 @@ function CompanyVmAgentsSection({
       ) : agents.length > 0 ? (
         <div className={AGENT_CARD_GRID_CLASS}>
           {agents.map((agent) => (
-            <AgentIdentityCard
-              ariaLabel={`${agent.name} company VM agent profile`}
-              dataTestId={`company-vm-agent-${agent.pubkey}`}
+            <CompanyVmAgentCard
+              agent={agent}
               key={agent.pubkey}
-              label={agent.name}
-              modelLabel={`${agent.agentType} · ${agent.status}`}
-              onClick={() => onOpenAgentProfile(agent.pubkey)}
-              statusBadge={
-                <Badge className="mt-1 w-fit" variant="outline">
-                  VM hosted
-                </Badge>
-              }
+              onOpenAgentProfile={onOpenAgentProfile}
             />
           ))}
         </div>
@@ -570,6 +562,36 @@ function CompanyVmAgentsSection({
         </p>
       )}
     </div>
+  );
+}
+
+function CompanyVmAgentCard({
+  agent,
+  onOpenAgentProfile,
+}: {
+  agent: RelayAgent;
+  onOpenAgentProfile: (
+    pubkey: string,
+    options?: ProfilePanelOpenOptions,
+  ) => void;
+}) {
+  const profileQuery = useUserProfileQuery(agent.pubkey);
+  const label = profileQuery.data?.displayName?.trim() || agent.name;
+
+  return (
+    <AgentIdentityCard
+      ariaLabel={`${label} company VM agent profile`}
+      avatarUrl={profileQuery.data?.avatarUrl}
+      dataTestId={`company-vm-agent-${agent.pubkey}`}
+      label={label}
+      modelLabel={`${agent.agentType} · ${agent.status}`}
+      onClick={() => onOpenAgentProfile(agent.pubkey)}
+      statusBadge={
+        <Badge className="mt-1 w-fit" variant="outline">
+          VM hosted
+        </Badge>
+      }
+    />
   );
 }
 

@@ -6,6 +6,7 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
+import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
 import { retainManagedSelectedRecipients } from "@/features/evaosTeams/lib/companyMemberDirectory";
 import {
   coalesceAgentAutocompleteCandidates,
@@ -174,11 +175,9 @@ export function useNewMessageRecipients({
         pubkey,
         avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
         displayName:
-          candidate.isAgent && candidateName
-            ? candidateName
-            : current.isAgent
-              ? currentName
-              : (currentName ?? candidateName),
+          current.isAgent || candidate.isAgent
+            ? preferIdentityDisplayName(currentName, candidateName, pubkey)
+            : (currentName ?? candidateName),
         nip05Handle: current.nip05Handle ?? candidate.nip05Handle ?? null,
         ownerPubkey: current.ownerPubkey ?? candidate.ownerPubkey ?? null,
         isAgent: current.isAgent || candidate.isAgent,

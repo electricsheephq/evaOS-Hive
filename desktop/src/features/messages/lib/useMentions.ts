@@ -10,6 +10,7 @@ import {
   useChannelsQuery,
 } from "@/features/channels/hooks";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
+import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import {
@@ -266,11 +267,13 @@ export function useMentions(
         ...current,
         avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
         displayName:
-          current.isAgent && !candidate.isAgent
-            ? current.displayName
-            : candidate.isAgent && !current.isAgent
-              ? (candidate.displayName ?? current.displayName)
-              : (current.displayName ?? candidate.displayName),
+          current.isAgent || candidate.isAgent
+            ? preferIdentityDisplayName(
+                current.displayName,
+                candidate.displayName,
+                pubkey,
+              )
+            : (current.displayName ?? candidate.displayName),
         isAgent: current.isAgent || candidate.isAgent,
         isMember: current.isMember || candidate.isMember,
         personaId: current.personaId ?? candidate.personaId,
@@ -302,10 +305,9 @@ export function useMentions(
         kind: "identity",
         pubkey,
         displayName:
-          member.displayName?.trim() ||
-          agentName ||
-          profile?.displayName?.trim() ||
-          profile?.nip05Handle?.trim() ||
+          preferIdentityDisplayName(profile?.displayName, agentName, pubkey) ??
+          preferIdentityDisplayName(member.displayName, null, pubkey) ??
+          profile?.nip05Handle?.trim() ??
           null,
         avatarUrl: profile?.avatarUrl ?? null,
         isMember: true,

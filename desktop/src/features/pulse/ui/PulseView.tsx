@@ -129,7 +129,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   const agentStatusMap = React.useMemo(() => {
     const map: Record<string, "online" | "away" | "offline"> = {};
     for (const a of relayAgents) {
-      map[a.pubkey] = a.status;
+      map[a.pubkey] = a.status === "unknown" ? "offline" : a.status;
     }
     return map;
   }, [relayAgents]);

@@ -39,6 +39,11 @@ export function resolveProfileActivityAgent({
     avatarUrl: profile?.avatarUrl ?? null,
     name: relayAgent?.name ?? profile?.displayName?.trim() ?? "Agent",
     pubkey: effectivePubkey,
+    // `deployed` here enables the owner's observer/activity feed; it is not a
+    // liveness claim. Relay presence remains the status authority displayed by
+    // agent surfaces, while an unknown remote agent can still have durable
+    // activity history and later frames for its owner. Explicit offline stays
+    // stopped.
     status: relayAgent?.status === "offline" ? "stopped" : "deployed",
   };
 }
