@@ -101,7 +101,11 @@ Hermes profiles on that VM. Different companies do not share a VM or relay.
 
 Each company relay has its own hostname.
 
-- Company and relay are selected server-side after OAuth.
+- The URL host is authoritative for community binding. OAuth and token claims
+  may authenticate or narrow access, but they never override the host-derived
+  company/community.
+- Company and relay are selected server-side after OAuth, and any host/claim
+  mismatch is rejected before admission.
 - Unknown or ambiguous hosts fail closed.
 - Database, cache, object storage, search, secrets, logs, backup, restore, and
   retirement remain company-scoped.

@@ -58,12 +58,22 @@ and small additive components already provide that boundary.
 |---|---|
 | Buzz/Hive | Native collaboration, events, channels, DMs, profiles, search, files, settings, and user experience |
 | Electric Sheep backend | Human authentication, company membership, seats, relay assignment, public VM-agent catalog, and company policy |
+| Electric Sheep release process | Hive update signer, signing-key custody, rotation and revocation, signed appcast publication, and release evidence |
 | Local OS key store | Human private Hive identity |
 | Company relay | Admission plus native event and room enforcement for exactly one company |
 | Hermes and the VM bridge | Agent private identity, runtime, model, provider, memory, tools, instructions, permissions, secrets, and process isolation |
 
 No layer may silently take authority from another. In particular, Hive must not
 copy Hermes state or turn Electric services into a broker for routine messages.
+
+The signed-update gate is the exact-tag release workflow in
+[`release.yml`](.github/workflows/release.yml). Release evidence must bind the
+source head and tag to the signed and notarized application, detached updater
+signature, appcast entry, and a clean install/update verification. If artifact
+or update-signature verification fails, the release is not published or
+installed; the client keeps the last verified installed version. Signing-key
+rotation or revocation is owned by the Electric Sheep release process and
+requires a separately recorded release decision and verification.
 
 ## One company, one relay
 
