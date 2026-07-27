@@ -6,6 +6,7 @@ import {
   isLocalWelcomeAgentRecord,
   isLocalWelcomePersonaId,
   shouldPresentLocalAgentTeam,
+  shouldRunLocalWelcomeAgent,
   shouldUseLocalWelcomeTeam,
 } from "./localWelcomeTeamPolicy.ts";
 import {
@@ -20,15 +21,15 @@ const welcomeChannel = {
   visibility: "private",
 };
 
-test("managed Hive keeps the native local welcome team", () => {
-  assert.equal(shouldUseLocalWelcomeTeam(true), true);
+test("managed Hive does not launch the native local welcome team", () => {
+  assert.equal(shouldUseLocalWelcomeTeam(true), false);
 });
 
 test("unmanaged Buzz keeps the native local welcome team", () => {
   assert.equal(shouldUseLocalWelcomeTeam(false), true);
 });
 
-test("managed Hive keeps the native welcome guide surface", (context) => {
+test("managed Hive skips the native local welcome guide surface", (context) => {
   context.after(resetDesktopProductPolicyForTests);
   installDesktopProductPolicy({
     ...NATIVE_PRODUCT_POLICY,
@@ -36,7 +37,7 @@ test("managed Hive keeps the native welcome guide surface", (context) => {
     productName: "Hive",
   });
 
-  assert.equal(isLocalWelcomeExperienceChannel(welcomeChannel), true);
+  assert.equal(isLocalWelcomeExperienceChannel(welcomeChannel), false);
 });
 
 test("unmanaged Buzz keeps the native welcome guide surface", (context) => {
@@ -74,8 +75,42 @@ test("managed filtering recognizes both welcome personas and team records", () =
   );
 });
 
-test("managed Hive presents the native built-in local welcome team", () => {
-  assert.equal(shouldPresentLocalAgentTeam(true, "builtin-team:welcome"), true);
+test("managed Hive never runs retained local welcome agents", () => {
+  assert.equal(
+    shouldRunLocalWelcomeAgent(true, {
+      personaId: "builtin:fizz",
+      teamId: null,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRunLocalWelcomeAgent(true, {
+      personaId: null,
+      teamId: "builtin-team:welcome",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRunLocalWelcomeAgent(true, {
+      personaId: "custom:researcher",
+      teamId: "custom-team:research",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRunLocalWelcomeAgent(false, {
+      personaId: "builtin:fizz",
+      teamId: "builtin-team:welcome",
+    }),
+    true,
+  );
+});
+
+test("managed Hive hides only the native built-in local welcome team", () => {
+  assert.equal(
+    shouldPresentLocalAgentTeam(true, "builtin-team:welcome"),
+    false,
+  );
   assert.equal(shouldPresentLocalAgentTeam(true, "custom-team:research"), true);
   assert.equal(
     shouldPresentLocalAgentTeam(false, "builtin-team:welcome"),
