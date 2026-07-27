@@ -1,0 +1,139 @@
+# Hive — Electric Sheep's thin Buzz distribution
+
+Hive gives an Electric Sheep company a private, branded workspace where people
+use native Buzz collaboration and work with the agents registered for their
+company. It should feel like Buzz with Electric Sheep sign-in and cloud agents,
+not like a second product built on top of Buzz.
+
+Upstream [`VISION.md`](VISION.md) remains the product vision. This document
+defines only the Electric Sheep distribution boundary.
+
+## The customer experience
+
+1. A person signs in with their Electric Sheep account.
+2. Electric Sheep selects the person's company and that company's relay.
+3. Hive opens the native workspace with the person's durable Hive identity.
+4. Channels, DMs, profiles, search, files, forums, reactions, settings, and
+   other collaboration features behave as upstream Buzz designed them.
+5. Agents already registered for that company appear through the native Agents,
+   channel, mention, and DM surfaces.
+6. Electric-specific configuration appears as a small additive section inside
+   the existing Settings structure.
+
+Signing out ends the device session. It does not delete the person's durable
+recipient identity or prevent offline messages from accumulating.
+
+## Product boundary
+
+Hive owns only these seams:
+
+- **Product identity:** visible Hive name, icon, support destination, bundle
+  identity, and signed Hive update channel while retaining required upstream
+  license and attribution.
+- **Company admission:** Electric OAuth, membership and seat entitlement,
+  server-selected company, and server-selected relay.
+- **Local identity custody:** the person's private key remains in the operating
+  system key store; Electric systems store public identity and session metadata.
+- **Company configuration:** a small additive Settings section for options that
+  differ from upstream.
+- **VM-agent adaptation:** map already-registered public agent identities and
+  supported responder policy into native Hive surfaces.
+- **Deployment:** one isolated relay instance per company for the guarded
+  business beta.
+
+Everything else remains native Buzz unless an exact supported-path failure
+proves that a narrow adapter is required.
+
+"Thin adapter" describes the architectural boundary. Hive does not need to
+invent a dynamic plugin framework when build configuration, existing providers,
+and small additive components already provide that boundary.
+
+## Authority boundaries
+
+| Authority | Owns |
+|---|---|
+| Buzz/Hive | Native collaboration, events, channels, DMs, profiles, search, files, settings, and user experience |
+| Electric Sheep backend | Human authentication, company membership, seats, relay assignment, public VM-agent catalog, and company policy |
+| Local OS key store | Human private Hive identity |
+| Company relay | Admission plus native event and room enforcement for exactly one company |
+| Hermes and the VM bridge | Agent private identity, runtime, model, provider, memory, tools, instructions, permissions, secrets, and process isolation |
+
+No layer may silently take authority from another. In particular, Hive must not
+copy Hermes state or turn Electric services into a broker for routine messages.
+
+## One company, one relay
+
+During the internal canary and guarded business beta, each company receives a
+separate relay instance and hostname. Database, cache, object storage, search,
+secrets, backups, restore targets, and operational lifecycle are scoped to that
+company.
+
+This costs more operationally than shared infrastructure, but it makes
+cross-company isolation structural and keeps multi-tenant complexity out of the
+Hive client. A shared multi-company relay requires a separate future owner
+decision, cost case, threat model, and runtime isolation proof.
+
+## Native first
+
+When upstream adds or changes a feature, the default answer is to inherit it.
+Hive should not:
+
+- mass-rename internal Buzz crates, modules, protocols, schemas, or developer
+  terminology merely to change the visible product name;
+- duplicate an upstream screen or workflow;
+- hide or disable native features without an explicit product disposition;
+- replace native channels or DMs with managed APIs;
+- sign routine collaboration with a control identity;
+- create a second profile, avatar, search, memory, or retrieval system;
+- provision or enumerate Hermes profiles, services, keys, work directories,
+  memories, tools, providers, or credentials;
+- expose customer VM, provider, Keychain, Mac Access, or connector secrets;
+- accept a client-selected company, tenant, relay, agent, or policy authority.
+
+If a proposed change needs any of those patterns, stop. First prove why the
+native path and the documented adapter seams cannot deliver the outcome.
+
+## Agent model
+
+Company VM agents are real Hive identities registered by their owning runtime.
+Hive may display their public identity, truthful capability and presence
+metadata, visible native room membership, and an adapter for the native
+responder-policy controls.
+
+Hive does not create or configure those agents. A catalog refresh discovers only
+identities already registered by an authorized server-side process. Names such
+as ATRIS, TARS, Samantha, or HAL 9000 are data, not hardcoded product behavior.
+
+## Settings model
+
+Electric configuration belongs in one additive Hive/Electric section within the
+native Settings navigation. It may show company, relay, session, update,
+support, and registered-agent information that genuinely differs from upstream.
+
+It must not fork the Settings shell, replace native pages, or use a managed mode
+as a reason to hide unrelated upstream capabilities. Unsupported features must
+be labeled truthfully and narrowly.
+
+## Staying close to upstream
+
+Every Hive candidate records an exact upstream base and a small, explained
+Electric patch stack. New upstream commits are dispositioned before adoption;
+the fork is never blindly rebased into a release.
+
+Generic fixes are developed from a fresh upstream base. Electric branding,
+OAuth, endpoints, company policy, and VM details never enter an upstream
+candidate.
+
+The contribution process and stop rules are defined in
+[`docs/hive-thin-adapter-runbook.md`](docs/hive-thin-adapter-runbook.md).
+
+## Success
+
+Hive succeeds when Electric Sheep customers receive a reliable Slack-like
+workspace with their company agents, while new Buzz releases remain inexpensive
+to evaluate and adopt.
+
+The proof is not the size of this document or the number of guardrails. The
+proof is that native features keep working, the Electric patch stack stays
+small and isolated, company boundaries fail closed, and installed customer
+flows work on an exact reviewed release.
