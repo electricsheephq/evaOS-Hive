@@ -6,6 +6,9 @@ on:
       - .github/workflows/buzz-admin-linux.yml
       - Cargo.lock
       - Cargo.toml
+      - rust-toolchain.toml
+      - .cargo/**
+      - bin/**
       - crates/**
   workflow_dispatch:
 
