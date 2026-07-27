@@ -71,6 +71,31 @@ fn managed_policy_effective_rooms(
         .collect()
 }
 
+fn register_managed_policy_room_filter(
+    room: Uuid,
+    is_dm: bool,
+    filter: Option<config::ChannelFilter>,
+    static_filters: &mut HashMap<Uuid, config::ChannelFilter>,
+) -> Option<config::ChannelFilter> {
+    if is_dm {
+        return None;
+    }
+    let filter = filter?;
+    static_filters.insert(room, filter.clone());
+    Some(filter)
+}
+
+fn managed_policy_permits(
+    policy: &ResponderPolicy,
+    native_non_dm_rooms: &HashSet<Uuid>,
+    room_id: Uuid,
+    author: &str,
+    is_dm: bool,
+    now: std::time::Instant,
+) -> bool {
+    native_non_dm_rooms.contains(&room_id) && policy.permits(room_id, author, is_dm, now)
+}
+
 struct ManagedPolicySubscriptions<'a> {
     native_non_dm_rooms: &'a HashSet<Uuid>,
     static_filters: &'a HashMap<Uuid, config::ChannelFilter>,
@@ -173,6 +198,74 @@ mod managed_policy_subscription_tests {
             managed_policy_effective_rooms(&policy, &native, &static_filters),
             HashSet::from([allowed])
         );
+    }
+
+    #[test]
+    fn joined_room_is_registered_before_a_later_policy_revision_selects_it() {
+        let room = Uuid::new_v4();
+        let author = "a".repeat(64);
+        let now = std::time::Instant::now();
+        let mut policy = ResponderPolicy::new(Some(
+            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
+        ));
+        policy.apply_pull(
+            serde_json::json!({
+                "schema_version": "hive.company_agent_responder_policy.v1",
+                "desired_revision": 1,
+                "allowed_room_ids": [],
+                "allowed_author_public_keys": [author],
+            }),
+            now,
+        );
+        let native = HashSet::from([room]);
+        let mut static_filters = HashMap::new();
+        let filter = config::ChannelFilter {
+            kinds: None,
+            require_mention: true,
+        };
+        register_managed_policy_room_filter(room, false, Some(filter), &mut static_filters);
+        assert!(managed_policy_effective_rooms(&policy, &native, &static_filters).is_empty());
+
+        policy.apply_pull(
+            serde_json::json!({
+                "schema_version": "hive.company_agent_responder_policy.v1",
+                "desired_revision": 2,
+                "allowed_room_ids": [room.to_string()],
+                "allowed_author_public_keys": ["a".repeat(64)],
+            }),
+            now,
+        );
+        assert_eq!(
+            managed_policy_effective_rooms(&policy, &native, &static_filters),
+            HashSet::from([room])
+        );
+    }
+
+    #[test]
+    fn final_gate_requires_current_native_membership() {
+        let room = Uuid::new_v4();
+        let author = "a".repeat(64);
+        let now = std::time::Instant::now();
+        let mut policy = ResponderPolicy::new(Some(
+            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
+        ));
+        policy.apply_pull(
+            serde_json::json!({
+                "schema_version": "hive.company_agent_responder_policy.v1",
+                "desired_revision": 1,
+                "allowed_room_ids": [room.to_string()],
+                "allowed_author_public_keys": [author.clone()],
+            }),
+            now,
+        );
+        let mut native = HashSet::from([room]);
+        assert!(managed_policy_permits(
+            &policy, &native, room, &author, false, now
+        ));
+        native.remove(&room);
+        assert!(!managed_policy_permits(
+            &policy, &native, room, &author, false, now
+        ));
     }
 }
 
@@ -2314,14 +2407,17 @@ async fn tokio_main() -> Result<()> {
                                     if subscribed_channel_ids.contains(&ch) {
                                         tracing::debug!(channel_id = %ch, "membership notification: channel already subscribed");
                                     } else if responder_policy.enabled() {
-                                        if !is_dm
-                                            && responder_policy.selects_room(
-                                                ch,
-                                                std::time::Instant::now(),
-                                            )
-                                        {
-                                            if let Some(filter) = config::resolve_dynamic_channel_filter(&config, ch, &rules) {
-                                                static_channel_filters.insert(ch, filter.clone());
+                                        let filter = register_managed_policy_room_filter(
+                                            ch,
+                                            is_dm,
+                                            config::resolve_dynamic_channel_filter(&config, ch, &rules),
+                                            &mut static_channel_filters,
+                                        );
+                                        if responder_policy.selects_room(
+                                            ch,
+                                            std::time::Instant::now(),
+                                        ) {
+                                            if let Some(filter) = filter {
                                                 tracing::info!(channel_id = %ch, "managed policy: subscribing to newly joined room");
                                                 if let Err(e) = relay.subscribe_channel_from(ch, filter, Some(ts)).await {
                                                     tracing::warn!("failed to subscribe to managed room {ch}: {e}");
@@ -2547,7 +2643,9 @@ async fn tokio_main() -> Result<()> {
                                 let is_dm =
                                     is_dm_channel(buzz_event.channel_id, &ctx.channel_info).await;
                                 let allowed = if responder_policy.enabled() {
-                                    responder_policy.permits(
+                                    managed_policy_permits(
+                                        &responder_policy,
+                                        &native_non_dm_rooms,
                                         buzz_event.channel_id,
                                         &author,
                                         is_dm,

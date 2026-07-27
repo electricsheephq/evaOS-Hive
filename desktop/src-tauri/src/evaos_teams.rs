@@ -26,20 +26,20 @@ use crate::{app_state::AppState, secret_store::SecretStore};
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
 
-mod company_directory;
 mod company_agent_policy;
+mod company_directory;
 mod device_code;
 mod login;
 
+pub(crate) use company_agent_policy::{
+    get_hive_company_agent_policy, set_hive_company_agent_policy,
+};
 use company_directory::{
     sanitize_company_agents, sanitize_company_members, CollaborationProjection, HiveCompanyAgent,
     HiveCompanyMember,
 };
 #[cfg(test)]
 use company_directory::{RawHiveCompanyAgent, RawHiveCompanyMember};
-pub(crate) use company_agent_policy::{
-    get_hive_company_agent_policy, set_hive_company_agent_policy,
-};
 #[cfg(test)]
 use login::callback_device_code;
 use login::{login_callback, register_pending_login, submit_pending_login_code, LoginCallback};

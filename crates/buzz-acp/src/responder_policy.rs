@@ -40,6 +40,7 @@ pub(crate) struct PolicyUpdate {
 pub(crate) struct ResponderPolicy {
     endpoint: Option<String>,
     snapshot: Option<PolicySnapshot>,
+    accepted_watermark: Option<PolicySnapshot>,
     refreshed_at: Option<Instant>,
 }
 
@@ -48,6 +49,7 @@ impl ResponderPolicy {
         Self {
             endpoint,
             snapshot: None,
+            accepted_watermark: None,
             refreshed_at: None,
         }
     }
@@ -113,7 +115,7 @@ impl ResponderPolicy {
                 } else {
                     None
                 };
-                if let Some(current) = &self.snapshot {
+                if let Some(current) = &self.accepted_watermark {
                     if next.revision < current.revision
                         || (next.revision == current.revision && next != *current)
                     {
@@ -130,6 +132,7 @@ impl ResponderPolicy {
                         };
                     }
                 }
+                self.accepted_watermark = Some(next.clone());
                 self.snapshot = Some(next);
                 self.refreshed_at = Some(now);
                 PolicyUpdate { changed, ack }
@@ -287,10 +290,24 @@ mod tests {
         assert_eq!(update.ack.unwrap().result, "error");
         assert!(!policy.permits(room, &author, false, now));
 
+        let repeated_stale = policy.apply_pull(value(1, vec![], vec![]), now);
+        assert_eq!(
+            repeated_stale.ack.unwrap().error_code,
+            Some("revision_content_mismatch")
+        );
+        assert!(!policy.permits(room, &author, false, now));
+
         policy.apply_pull(value(2, vec![room.to_string()], vec![author.clone()]), now);
         let update = policy.apply_pull(value(2, vec![], vec![]), now);
         assert_eq!(
             update.ack.unwrap().error_code,
+            Some("revision_content_mismatch")
+        );
+        assert!(!policy.permits(room, &author, false, now));
+
+        let repeated_mutation = policy.apply_pull(value(2, vec![], vec![]), now);
+        assert_eq!(
+            repeated_mutation.ack.unwrap().error_code,
             Some("revision_content_mismatch")
         );
         assert!(!policy.permits(room, &author, false, now));

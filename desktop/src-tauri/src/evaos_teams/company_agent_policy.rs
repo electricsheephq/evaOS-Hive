@@ -5,7 +5,9 @@ use tauri::State;
 
 use crate::app_state::AppState;
 
-use super::{current_credentials, post_json, EvaosTeamsState};
+use super::EvaosTeamsState;
+#[cfg(feature = "evaos-teams-managed")]
+use super::{current_credentials, post_json};
 
 const MAX_POLICY_SELECTORS: usize = 128;
 
@@ -187,9 +189,7 @@ mod tests {
             desired_revision: 2,
             applied_revision: 1,
             allowed_room_ids: vec!["20000000-0000-4000-8000-000000000001".to_string()],
-            allowed_author_membership_ids: vec![
-                "30000000-0000-4000-8000-000000000001".to_string(),
-            ],
+            allowed_author_membership_ids: vec!["30000000-0000-4000-8000-000000000001".to_string()],
             status: "pending".to_string(),
             applied_at: None,
             last_error_code: None,
@@ -204,9 +204,9 @@ mod tests {
     #[test]
     fn rejects_duplicate_or_unresolved_selectors() {
         let mut value = policy();
-        value.allowed_author_membership_ids.push(
-            "30000000-0000-4000-8000-000000000001".to_string(),
-        );
+        value
+            .allowed_author_membership_ids
+            .push("30000000-0000-4000-8000-000000000001".to_string());
         assert!(validate_policy(&value).is_err());
         value.allowed_author_membership_ids.clear();
         value.allowed_room_ids = vec!["not-a-native-room".to_string()];
