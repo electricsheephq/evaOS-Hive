@@ -1,0 +1,69 @@
+name: Buzz Admin Linux Artifact
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/buzz-admin-linux.yml
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - .cargo/**
+      - bin/**
+      - crates/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build x86_64 Linux buzz-admin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: buzz-admin-${{ env.TARGET }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Install cross
+        uses: taiki-e/install-action@0fd46367812ee04360509b4169d9f659d6892bb2 # v2.79.15
+        with:
+          tool: cross@0.2.5
+
+      - name: Build exact-source operator binary
+        run: cross build --locked --release --target "$TARGET" -p buzz-admin
+
+      - name: Verify and record provenance
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          BINARY="target/$TARGET/release/buzz-admin"
+          test -x "$BINARY"
+          file "$BINARY" | grep -q 'ELF 64-bit.*x86-64'
+          install -d artifact
+          install -m 0755 "$BINARY" artifact/buzz-admin
+          SHA256="$(sha256sum artifact/buzz-admin | awk '{print $1}')"
+          printf '{"source_sha":"%s","sha256":"%s","target":"%s"}\n' \
+            "$SOURCE_SHA" "$SHA256" "$TARGET" > artifact/provenance.json
+          sha256sum artifact/buzz-admin artifact/provenance.json > artifact/SHA256SUMS
+
+      - name: Upload exact-head artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: buzz-admin-linux-x86_64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 7
