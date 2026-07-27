@@ -1,4 +1,5 @@
 import { getCanvas, setCanvas } from "@/shared/api/tauri";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 
 export const WELCOME_CANVAS_CONTENT = `# Welcome to Buzz
 
@@ -19,6 +20,10 @@ Bring the team something you are building, or give them a quick challenge to see
 Ask the team a question here, or read the [Buzz user guide](https://github.com/block/buzz#readme).
 `;
 
+export function buildWelcomeCanvasContent(): string {
+  return desktopProductCopy(WELCOME_CANVAS_CONTENT);
+}
+
 type WelcomeCanvasClient = {
   getCanvas: typeof getCanvas;
   setCanvas: typeof setCanvas;
@@ -36,6 +41,9 @@ export async function ensureWelcomeCanvas(
     return false;
   }
 
-  await client.setCanvas({ channelId, content: WELCOME_CANVAS_CONTENT });
+  await client.setCanvas({
+    channelId,
+    content: buildWelcomeCanvasContent(),
+  });
   return true;
 }
