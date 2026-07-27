@@ -17,6 +17,7 @@ import {
 } from "@/shared/constants/kinds";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import { Switch } from "@/shared/ui/switch";
@@ -531,7 +532,9 @@ export function LocalArchiveSettingsCard() {
     <section className="min-w-0" data-testid="settings-local-archive">
       <SettingsSectionHeader
         title="Local archive"
-        description="Save copies of relay messages to a local SQLite database in your Buzz nest. Events are re-verified against the relay at archive time."
+        description={desktopProductCopy(
+          "Save copies of relay messages to a local SQLite database in your Buzz nest. Events are re-verified against the relay at archive time.",
+        )}
       />
 
       <div className="space-y-6">

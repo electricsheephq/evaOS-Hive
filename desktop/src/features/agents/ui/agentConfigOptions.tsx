@@ -4,6 +4,7 @@ import type {
 } from "@/shared/api/types";
 import { BUZZ_AGENT_THINKING_EFFORT } from "./buzzAgentConfig";
 import type { RuntimeFileConfigSubset } from "@/shared/api/tauri";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 // Dialogs import getDefaultPersonaRuntime via this re-export; lib code imports
 // directly from lib/resolvePersonaRuntime.
 export { getDefaultPersonaRuntime } from "../lib/resolvePersonaRuntime";
@@ -285,8 +286,9 @@ export function providerRequiresExplicitModel(
 
 export function providerDisplayLabel(providerId: string) {
   const trimmedProvider = providerId.trim();
-  return trimmedProvider === "relay-mesh"
-    ? "Buzz shared compute"
+  return trimmedProvider === "relay-mesh" ||
+    trimmedProvider === "Buzz shared compute"
+    ? desktopProductCopy("Buzz shared compute")
     : trimmedProvider;
 }
 

@@ -34,6 +34,7 @@ import {
 import { AnimatedAvatarBackdropPanel } from "@/features/profile/ui/AnimatedAvatarBackdropPanel";
 import type { AnimatedAvatarCaptureProps } from "@/features/profile/ui/AnimatedAvatarCapture.types";
 import { AnimatedAvatarCameraControls } from "@/features/profile/ui/AnimatedAvatarCameraControls";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import {
   AvatarFilmstripPicker,
   AvatarFramingSlider,
@@ -377,9 +378,9 @@ export function AnimatedAvatarCapture({
         void refreshCameraDevices();
       } catch {
         releaseCamera();
-        setErrorMessage(
-          "Could not access the camera. Check Buzz's camera permission and try again.",
-        );
+        const message =
+          "Could not access the camera. Check Buzz's camera permission and try again.";
+        setErrorMessage(desktopProductCopy(message));
         setPhase("idle");
       }
     },

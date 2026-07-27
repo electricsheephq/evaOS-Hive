@@ -3,6 +3,7 @@ import {
   activateRateLimit,
   parseRateLimitHint,
 } from "@/shared/api/relayRateLimitGate";
+import { desktopRuntimePresentation } from "@/shared/product/productIdentity";
 import type {
   AddChannelMembersInput,
   AddChannelMembersResult,
@@ -730,7 +731,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
 function fromRawAcpRuntimeCatalogEntry(
   entry: RawAcpRuntimeCatalogEntry,
 ): AcpRuntimeCatalogEntry {
-  return {
+  return desktopRuntimePresentation({
     id: entry.id,
     label: entry.label,
     avatarUrl: entry.avatar_url,
@@ -750,7 +751,7 @@ function fromRawAcpRuntimeCatalogEntry(
     nodeRequired: entry.node_required,
     authStatus: entry.auth_status,
     loginHint: entry.login_hint ?? null,
-  };
+  });
 }
 
 function fromRawInstallRuntimeResult(
