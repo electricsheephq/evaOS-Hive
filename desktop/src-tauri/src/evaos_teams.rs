@@ -12,13 +12,7 @@ use std::{
     time::Duration,
 };
 
-use axum::{
-    extract::{Query, State as AxumState},
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
-    routing::get,
-    Router,
-};
+use axum::{routing::get, Router};
 use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp, ToBech32};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
@@ -34,6 +28,7 @@ use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
 
 mod company_directory;
 mod device_code;
+mod login;
 
 use company_directory::{
     sanitize_company_agents, sanitize_company_members, CollaborationProjection, HiveCompanyAgent,
@@ -41,6 +36,9 @@ use company_directory::{
 };
 #[cfg(test)]
 use company_directory::{RawHiveCompanyAgent, RawHiveCompanyMember};
+#[cfg(test)]
+use login::callback_device_code;
+use login::{login_callback, register_pending_login, submit_pending_login_code, LoginCallback};
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
@@ -190,6 +188,7 @@ struct ManagedRuntime {
 pub(crate) struct EvaosTeamsState {
     runtime: Mutex<ManagedRuntime>,
     operation: tokio::sync::Mutex<()>,
+    pending_login: Mutex<Option<std::sync::Arc<LoginCallback>>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -984,52 +983,23 @@ pub(crate) async fn list_hive_company_members(
     }
 }
 
-struct LoginCallback {
-    expected_state: String,
-    sender: Mutex<Option<oneshot::Sender<Result<String, String>>>>,
-}
-
-fn callback_device_code(
-    query: &HashMap<String, String>,
-    expected_state: &str,
-) -> Result<String, String> {
-    let received_state = query.get("desktop_auth_state").map(String::as_str);
-    let received_code = query.get("device_code").map(String::as_str);
-    if received_state != Some(expected_state) {
-        return Err("Authentication callback did not match this login attempt".to_string());
+/// Deliver a server-issued backup code to the current in-memory login attempt.
+/// The code is still claimed with that attempt's app-held verifier; neither the
+/// verifier nor the resulting Desktop session crosses the Tauri boundary.
+#[tauri::command]
+pub(crate) fn submit_evaos_teams_login_code(
+    state: State<'_, EvaosTeamsState>,
+    device_code: String,
+) -> Result<(), String> {
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    {
+        let _ = (&state, &device_code);
+        Err("Hive managed login is not enabled in this build".to_string())
     }
-    if let Some(received_code) = received_code {
-        let normalized = normalize_device_code(received_code);
-        if (8..=40).contains(&normalized.len()) {
-            return Ok(normalized);
-        }
-    }
-    Err("Authentication callback did not match this login attempt".to_string())
-}
 
-async fn login_callback(
-    Query(query): Query<HashMap<String, String>>,
-    AxumState(state): AxumState<std::sync::Arc<LoginCallback>>,
-) -> Response {
-    let result = callback_device_code(&query, &state.expected_state);
-    match result {
-        Ok(code) => {
-            if let Ok(mut sender) = state.sender.lock() {
-                if let Some(sender) = sender.take() {
-                    let _ = sender.send(Ok(code));
-                }
-            }
-            (
-                StatusCode::OK,
-                Html("<!doctype html><title>Hive</title><p>Sign-in received. Return to Hive.</p>"),
-            )
-                .into_response()
-        }
-        Err(_) => (
-            StatusCode::BAD_REQUEST,
-            Html("<!doctype html><title>Hive</title><p>This sign-in callback is not valid.</p>"),
-        )
-            .into_response(),
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        submit_pending_login_code(&state, &device_code)
     }
 }
 
@@ -1199,6 +1169,7 @@ pub(crate) async fn start_evaos_teams_login(
             expected_state: auth_state,
             sender: Mutex::new(Some(sender)),
         });
+        let pending_login = register_pending_login(&state, callback_state.clone())?;
         let router = Router::new()
             .route("/auth/callback", get(login_callback))
             .with_state(callback_state);
@@ -1226,6 +1197,7 @@ pub(crate) async fn start_evaos_teams_login(
             }
         };
         server.abort();
+        drop(pending_login);
 
         let claim =
             claim_device_code(&app_state.http_client, &code, &device_code_proof.verifier).await?;

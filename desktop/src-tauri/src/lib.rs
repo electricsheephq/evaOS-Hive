@@ -670,6 +670,7 @@ pub fn run() {
             clear_builderlab_auth,
             get_evaos_teams_auth_status,
             start_evaos_teams_login,
+            submit_evaos_teams_login_code,
             logout_evaos_teams,
             list_hive_company_agents,
             list_hive_company_members,

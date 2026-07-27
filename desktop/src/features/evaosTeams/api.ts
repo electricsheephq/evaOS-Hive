@@ -45,6 +45,10 @@ export function startEvaosTeamsLogin() {
   return invoke<EvaosTeamsAuthStatus>("start_evaos_teams_login");
 }
 
+export function submitEvaosTeamsLoginCode(deviceCode: string) {
+  return invoke<void>("submit_evaos_teams_login_code", { deviceCode });
+}
+
 export function logoutEvaosTeams() {
   return invoke<EvaosTeamsAuthStatus>("logout_evaos_teams");
 }
