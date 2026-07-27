@@ -26,7 +26,11 @@ import { AgentIdentityCard } from "./AgentIdentityCard";
 import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { PersonaActionsMenu } from "./PersonaActionsMenu";
-import { buildUnifiedGroups, pickProfileAgent } from "./unifiedAgentGroups";
+import {
+  buildUnifiedGroups,
+  filterManagedLocalWelcomeRecords,
+  pickProfileAgent,
+} from "./unifiedAgentGroups";
 
 type UnifiedAgentsSectionProps = {
   defaultModel: string;
@@ -110,8 +114,12 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
   const isManagedHive = desktopProductPolicy().managed;
 
   const { groups, ungrouped, unknown } = React.useMemo(
-    () => buildUnifiedGroups(personas, agents),
-    [personas, agents],
+    () =>
+      filterManagedLocalWelcomeRecords(
+        buildUnifiedGroups(personas, agents),
+        isManagedHive,
+      ),
+    [agents, isManagedHive, personas],
   );
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const {

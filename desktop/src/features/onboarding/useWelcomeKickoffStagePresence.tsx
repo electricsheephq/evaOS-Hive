@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { isWelcomeSetupSystemMessage } from "@/features/channels/ui/ChannelPane.helpers";
 import type { TimelineMessage } from "@/features/messages/types";
+import { shouldUseLocalWelcomeTeam } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { WelcomeKickoffStage } from "@/features/onboarding/ui/WelcomeKickoffStage";
 import {
   isWelcomeKickoffSettingUp,
@@ -12,6 +13,7 @@ import {
   notifyWelcomeSurfaceReady,
 } from "@/features/onboarding/welcome";
 import type { Channel } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 /**
  * Composes the Welcome kickoff stage for the channel screen: gates on the
@@ -28,13 +30,16 @@ export function useWelcomeKickoffStagePresence(
   timelineMessages: readonly TimelineMessage[],
   isTimelineLoading: boolean,
 ) {
+  const localWelcomeTeamEnabled = shouldUseLocalWelcomeTeam(
+    desktopProductPolicy().managed,
+  );
   const hasVisibleTimelineMessages = React.useMemo(
     () =>
       timelineMessages.some((message) => !isWelcomeSetupSystemMessage(message)),
     [timelineMessages],
   );
   const { phase, handleExitComplete } = useWelcomeKickoffStage(
-    activeChannel,
+    localWelcomeTeamEnabled ? activeChannel : null,
     hasVisibleTimelineMessages,
     isTimelineLoading,
   );
@@ -51,11 +56,12 @@ export function useWelcomeKickoffStagePresence(
     notifyWelcomeSurfaceReady(channelId);
   }, [activeChannel, channelId, isTimelineLoading]);
   const welcomeKickoffStage =
-    phase !== "hidden" ? (
+    localWelcomeTeamEnabled && phase !== "hidden" ? (
       <WelcomeKickoffStage onExitComplete={handleExitComplete} phase={phase} />
     ) : null;
   return {
     welcomeKickoffStage,
-    welcomeKickoffSettingUp: isWelcomeKickoffSettingUp(phase),
+    welcomeKickoffSettingUp:
+      localWelcomeTeamEnabled && isWelcomeKickoffSettingUp(phase),
   };
 }
