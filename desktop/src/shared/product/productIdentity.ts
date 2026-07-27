@@ -74,17 +74,22 @@ type RuntimePresentation = {
 };
 
 /**
- * Productize the built-in desktop agent runtime at the UI boundary while
- * preserving its native runtime ID, command, arguments, and capabilities.
+ * Productize runtime presentation at the UI boundary while preserving native
+ * runtime IDs, commands, arguments, labels, and capabilities. Only the
+ * built-in desktop agent label changes; selected user-facing hints may mention
+ * the desktop product and therefore use the active product name.
  */
 export function desktopRuntimePresentation<T extends RuntimePresentation>(
   runtime: T,
 ): T {
   const policy = desktopProductPolicy();
-  if (!policy.managed || runtime.id !== "buzz-agent") return runtime;
+  if (!policy.managed) return runtime;
   return {
     ...runtime,
-    label: `${policy.productName} Agent`,
+    label:
+      runtime.id === "buzz-agent"
+        ? `${policy.productName} Agent`
+        : runtime.label,
     installHint: desktopProductCopy(runtime.installHint),
     loginHint:
       runtime.loginHint === null ? null : desktopProductCopy(runtime.loginHint),

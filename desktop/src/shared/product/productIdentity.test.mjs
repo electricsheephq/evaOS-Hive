@@ -76,6 +76,40 @@ test("managed presentation changes app copy without renaming native identifiers"
   }
 });
 
+test("managed presentation productizes runtime hints without renaming vendors", () => {
+  const runtime = {
+    id: "goose",
+    label: "Goose",
+    installHint:
+      "Buzz requires the Goose CLI; the desktop app alone is not enough.",
+    loginHint: null,
+  };
+
+  installDesktopProductPolicy({
+    managed: true,
+    productName: "Hive",
+    version: "0.4.26-es.2",
+    bundleIdentifier: "com.electricsheephq.evaos.teams",
+    deepLinkScheme: "evaos-teams",
+    artifactName: "Hive-0.4.26-es.2-arm64.dmg",
+    updateChannel: "hive-internal",
+    updaterEnabled: true,
+    upstreamHostedServicesEnabled: false,
+    originAttribution: "Built from Buzz by Block.",
+  });
+  try {
+    const presented = desktopRuntimePresentation(runtime);
+    assert.equal(presented.label, "Goose");
+    assert.equal(
+      presented.installHint,
+      "Hive requires the Goose CLI; the desktop app alone is not enough.",
+    );
+    assert.equal(presented.id, runtime.id);
+  } finally {
+    resetDesktopProductPolicyForTests();
+  }
+});
+
 test("native presentation stays Buzz and preserves the runtime object", () => {
   resetDesktopProductPolicyForTests();
   const runtime = {
