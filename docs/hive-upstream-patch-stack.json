@@ -1,0 +1,410 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-27",
+  "issue": "https://github.com/electricsheephq/evaOS-Hive/issues/11",
+  "proofBoundary": "This manifest proves commit accounting and a read-only merge rehearsal only. It does not prove a merged branch, release artifact, installed runtime, or customer rollout.",
+  "refs": {
+    "upstreamRepository": "https://github.com/block/buzz.git",
+    "upstreamBase": "dd222a509b156ba52ed3219e895d7bf1cf322c92",
+    "upstreamTarget": "37420764349bcd8f3dcf34786c30a8f924152922",
+    "candidateHead": "4def81dbea6c3bbd7d375b60836761b828f99574",
+    "candidateBranch": "fix/36-thin-upstream-parity"
+  },
+  "expectedCounts": {
+    "upstream": 18,
+    "electricFirstParent": 37,
+    "electricMergeChildren": 6
+  },
+  "upstream": [
+    {
+      "sha": "74b63e1846212af6e6751a62cfc631f74b1dfe07",
+      "subject": "Refactor managed-agent runtime into cohesive modules (#2974)",
+      "disposition": "redesign",
+      "reason": "Adopt the upstream modular runtime seam on the next pinned base, then replay only Hermes discovery and launch behavior against that seam."
+    },
+    {
+      "sha": "c9a73726be6e6edd4e5d0c9c44abdf07d550ecd0",
+      "subject": "fix(mobile): validate invite relay destinations (#2986)",
+      "disposition": "prove-inapplicable",
+      "reason": "Mobile is separately gated and company invites remain on the Electric Sheep website for this beta."
+    },
+    {
+      "sha": "166c6655e8bca87d83ad60c087fb70a32a026baf",
+      "subject": "fix(desktop): surface install failures hidden by curl-pipe exit codes (#2892)",
+      "disposition": "keep",
+      "reason": "Retain when advancing the pinned upstream base; no isolated backport is required for the current macOS candidate."
+    },
+    {
+      "sha": "8e67cf399d0291bcdbc69cd0402983ca030f05bb",
+      "subject": "chore(desktop): delete dead persona catalog UI cluster (#2886)",
+      "disposition": "keep",
+      "reason": "Native dead-code removal is compatible with the thin-adapter model."
+    },
+    {
+      "sha": "8c0e8cb1656b04ad269bce3c2deeda2a943ae78a",
+      "subject": "fix(desktop): make agent definition authoritative for model/provider/prompt (#1968)",
+      "disposition": "redesign",
+      "reason": "Keep native authority for local agents; company VM agents remain read-only projections whose model, memory, tools, and prompt stay authoritative in Hermes."
+    },
+    {
+      "sha": "dc1646fcb952c8fb9ab62b838a5ccfb7bfdbbaae",
+      "subject": "docs: document required DCO sign-off and add commit-msg sign-off hook (#2993)",
+      "disposition": "keep",
+      "reason": "Repository contribution policy is generic and does not alter Hive runtime behavior."
+    },
+    {
+      "sha": "a31fc4d2f35d51cdf45ff8c61fc3a07f49c665e8",
+      "subject": "fix(desktop): remove bundled libsystemd from AppImage (#2353)",
+      "disposition": "prove-inapplicable",
+      "reason": "The current internal candidate is macOS-only; inherit this when a future Linux base is adopted."
+    },
+    {
+      "sha": "e6c90bb7c430d1b2af16508b634f9a5283b7fa3b",
+      "subject": "Polish community rail and mobile pairing (#2972)",
+      "disposition": "redesign",
+      "reason": "Keep the native desktop community rail; do not enable mobile pairing until the separate OAuth, NIP-AB, and revocation proof passes."
+    },
+    {
+      "sha": "1a56b7cc9e441819328ae6814d15f83ed22388f8",
+      "subject": "feat(mobile): add worktree-aware debug identities (#2858)",
+      "disposition": "prove-inapplicable",
+      "reason": "Mobile debug identities are outside the internal desktop beta."
+    },
+    {
+      "sha": "5d8ede446f8fdc48146fe56d389cab6bf3500f92",
+      "subject": "feat(agents): lower default agent parallelism from 24 to 10 (#3038)",
+      "disposition": "keep",
+      "reason": "The safer native local-agent default should be inherited; it does not change Hermes company-agent parallelism."
+    },
+    {
+      "sha": "871a3b37723404a34c4cdf63037bbc4916b25245",
+      "subject": "Refine mobile community switching and discovery (#2967)",
+      "disposition": "prove-inapplicable",
+      "reason": "Mobile remains a separate post-beta proof lane."
+    },
+    {
+      "sha": "aee63144843854ee32ed9d36a2e7511c82ddc6b0",
+      "subject": "fix(desktop): strip legacy baked team instructions from stored prompts (#3035)",
+      "disposition": "keep",
+      "reason": "Hive's TARS, Samantha, and HAL 9000 changes are presentation-only starter defaults and must not restore a second prompt-authority layer."
+    },
+    {
+      "sha": "16d4ec335e210295a9d9f77f36c1e85a18b6814a",
+      "subject": "feat(desktop): use collective mesh routing for Auto (#2825)",
+      "disposition": "redesign",
+      "reason": "Inherit native local-agent behavior while keeping Compute hidden and making no claim that company VM agents use the local collective mesh."
+    },
+    {
+      "sha": "95fdf978800982389b120c66ff5e766d785419c7",
+      "subject": "feat(acp): bring your own harness (BYOH) — generic ACP runtime seam + settings gallery (#2773)",
+      "disposition": "redesign",
+      "reason": "Use the new upstream generic runtime seam to shrink the Hermes adapter while preserving dependency-readiness versus ACP-authentication separation."
+    },
+    {
+      "sha": "63c62fcf3eb5321262e8b7c4e299d110de330884",
+      "subject": "chore(deps): update dependency @tanstack/react-virtual to v3.14.8 (#3057)",
+      "disposition": "keep",
+      "reason": "Dependency accompanies current native UI work and has no Electric-specific behavior."
+    },
+    {
+      "sha": "070fb6a16153b47d88953e1a2db5c2f241b838b5",
+      "subject": "chore(deps): update radix-ui-primitives monorepo (#3063)",
+      "disposition": "keep",
+      "reason": "Dependencies accompany current native UI work and have no Electric-specific behavior."
+    },
+    {
+      "sha": "afb272bb7b8d7d45d7de676fa97dcd5a8eefacc7",
+      "subject": "fix(desktop): render rich project work item content (#3100)",
+      "disposition": "keep",
+      "reason": "Preserve the native product feature unchanged."
+    },
+    {
+      "sha": "37420764349bcd8f3dcf34786c30a8f924152922",
+      "subject": "fix(mobile): mitigate message-post delay with optimistic rendering (#3037)",
+      "disposition": "prove-inapplicable",
+      "reason": "Mobile remains outside the current internal desktop beta."
+    }
+  ],
+  "electricFirstParent": [
+    {
+      "sha": "d044aa7aafdfad4e94da06416952499f01e57ee9",
+      "subject": "fix(desktop): bound relay metadata read-back",
+      "purpose": "Bound native relay metadata read-after-write lag.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "d36a115e67f9e983836aca6be1fc9758630cce37",
+      "subject": "feat(agents): add Hermes ACP runtime",
+      "purpose": "Recognize and launch the Hermes ACP runtime.",
+      "disposition": "redesign"
+    },
+    {
+      "sha": "41f44aaf14662814107821da847950b57c7b5104",
+      "subject": "fix: separate Hermes readiness from auth discovery",
+      "purpose": "Treat hermes acp --check as dependency readiness, not provider authentication.",
+      "disposition": "redesign"
+    },
+    {
+      "sha": "c367847259bf00934f2c6160176258e4f7cfc08a",
+      "subject": "feat(acp): persist channel session mappings",
+      "purpose": "Preserve native ACP conversation continuity across reconnects.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "22fcc4a191c2fcfe9ceb4951bf01ef0fff185122",
+      "subject": "fix(acp): harden durable session invalidation",
+      "purpose": "Invalidate stale durable ACP mappings on definitive session loss.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "85e271b11e6826172d7376e3e492045bcea54244",
+      "subject": "fix(acp): preserve mappings on failed controls",
+      "purpose": "Avoid losing a valid ACP mapping when a control operation fails.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "ed1b636b02cc1f9bc8429ac8b7c167b4ce475ede",
+      "subject": "fix(relay): disconnect removed members cluster-wide",
+      "purpose": "Enforce membership revocation across relay workers.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "380062db58a3e962a80d865da4fcd973184a3996",
+      "subject": "fix(relay): add durable membership revocation backstop",
+      "purpose": "Fail closed when a removed member has a stale live relay connection.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "8a7f03ed9e69a3d0f19005727ee0b0b51483920e",
+      "subject": "fix(relay): fence idempotent removals to closed relays",
+      "purpose": "Keep relay removal idempotent without reopening access.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "ecca4b4e95014b100a04b86cec5b0719eab09ac4",
+      "subject": "feat(desktop): add thin Hive access adapter",
+      "purpose": "Add Electric OAuth, entitlement, durable identity, and session-grant admission without brokering native collaboration.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "2aad63526ff5520cb4f1bbc8eeaad478564e4053",
+      "subject": "fix(desktop): mention remote channel agents",
+      "purpose": "Let native mentions address admitted remote agent identities.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "94d210b2c1bac78745ef490bfb362bce8234c425",
+      "subject": "feat(desktop): apply narrow Hive product overlay",
+      "purpose": "Apply branding, updater, and explicit product-surface dispositions without replacing native screens.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "bb20a637d26fe90a2938e0297639c152e4caeb54",
+      "subject": "feat(agents): adapt native catalog to company VMs",
+      "purpose": "Project registered public company VM agents into the native Agents catalog.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "92450084816164e02e2a56222eb7636a668e6103",
+      "subject": "test(settings): lock managed parity policy",
+      "purpose": "Assert that supported native settings remain visible and only explicit product exclusions are hidden.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "cad272133701f1a887b504daf6dcbfcb13ffed0e",
+      "subject": "fix(managed): scope identities and VM agents",
+      "purpose": "Bind people and company-agent discovery to the entitled company.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "69eb2ad41d6d09dda803e4c2d3cb7ffca2743f8e",
+      "subject": "chore: reconcile managed main ancestry",
+      "purpose": "Reconcile construction history with the then-current fork main.",
+      "disposition": "drop"
+    },
+    {
+      "sha": "0e12928ea82e5a981fc3d761ce192504fdab0ace",
+      "subject": "ci(hive): ratchet managed adapter sizes",
+      "purpose": "Keep the Electric adapter surface bounded and visible.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "22395ab086a5c971cfa7599215383c1d0b19ad59",
+      "subject": "fix(managed): preserve legacy identity provenance",
+      "purpose": "Retain provenance while adopting durable membership identities.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "ff02e8cc6d34f480717fa6159fab89f867dd3bc4",
+      "subject": "fix(ci): satisfy desktop Clippy contract",
+      "purpose": "Repair a transient lint failure in the candidate lineage.",
+      "disposition": "drop"
+    },
+    {
+      "sha": "ae735034cd47d165c21d2fc05d77ab6ac994fa7d",
+      "subject": "fix: close managed desktop review gaps",
+      "purpose": "Resolve verified thin-adapter identity and runtime review findings.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "6d5c0afdd3e798473cf28bd10ec0a3e686833a40",
+      "subject": "ci: scope push gateway cache to repository owner",
+      "purpose": "Prevent fork CI from colliding with upstream-owned cache state.",
+      "disposition": "replay-narrowly"
+    },
+    {
+      "sha": "e0cce047e9f7c1b91175498275b12d574a2cab27",
+      "subject": "fix(hive): decode live entitlement response",
+      "purpose": "Decode the Electric entitlement response into the thin adapter.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "68bbbfdfdefa8beadbc0d4f00349ef959685ab47",
+      "subject": "fix(hive): bootstrap entitled native community",
+      "purpose": "Select the entitled company community while preserving native community state.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "50e04c7a43ee9d88f182dcaaff0b5d3a1d63b2c7",
+      "subject": "fix(hive): isolate same-relay memberships",
+      "purpose": "Prevent membership discovery from crossing company scope even on a shared legacy relay.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "913f179ba3e6a0b37ef050566a1130500b4c2890",
+      "subject": "fix(hive): reconcile persisted relay conflicts",
+      "purpose": "Resolve stale local relay state against the server-authoritative entitlement.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "726ef8930c1d03ca8d8896f60a1b36084efe3c49",
+      "subject": "fix(hive): discover company agents in native DMs",
+      "purpose": "Expose registered company agents through the native DM people surface.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "d60d0bd8d56fc914a5d18300af481ae5cfd68329",
+      "subject": "fix(hive): mention assigned company agents",
+      "purpose": "Expose assigned registered agents in the native mention picker.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "3e0284e64b3f79947bcc98548bb89857eafd9400",
+      "subject": "fix(hive): trust admitted bot members for mentions",
+      "purpose": "Use relay-admitted bot membership for native mention eligibility.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "bcb661488be97ec8a11b7073e0b5caeb74c37393",
+      "subject": "fix(hive): admit verified member agents in mentions",
+      "purpose": "Require verified company-agent membership before mention discovery.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "36a22e8d9ad5c51370d9e29a62dca836276078b6",
+      "subject": "fix(hive): bind browser login to app proof",
+      "purpose": "Bind the OAuth browser completion to the requesting desktop app session.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "12c3ef3a8d476b57aec9f2e05599811322fe1341",
+      "subject": "refactor(hive): isolate device code proof",
+      "purpose": "Keep device-code proof bounded to the Hive access adapter.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "11e36356765d7e9e9d7d2eb67b7654d9a593daf2",
+      "subject": "fix(hive): scope people discovery to company members",
+      "purpose": "Filter native people discovery through server-authoritative company membership.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "e9fd62a066f9a73a70a2b247e67fe135cee79a5b",
+      "subject": "fix(hive): revoke stale people discovery",
+      "purpose": "Remove stale discovered people after membership revocation.",
+      "disposition": "keep"
+    },
+    {
+      "sha": "3622deb61385e4d8dc096f8da48cfa061d1b3e23",
+      "subject": "Merge pull request #47 from electricsheephq/fix/44-managed-welcome-stop-local",
+      "purpose": "Merge reviewed presentation-only welcome behavior.",
+      "disposition": "drop-merge-replay-children"
+    },
+    {
+      "sha": "34f7ace7090904f9758f1393ed3dcef5316298a2",
+      "subject": "Merge pull request #48 from electricsheephq/fix/39-native-vm-agent-identity",
+      "purpose": "Merge reviewed company-agent public identity corrections.",
+      "disposition": "drop-merge-replay-children"
+    },
+    {
+      "sha": "b290bc8f0f90fa1bededa60ed9fc2e30a3c30982",
+      "subject": "Merge pull request #52 from electricsheephq/fix/51-managed-hive-copy",
+      "purpose": "Merge reviewed Hive presentation copy.",
+      "disposition": "drop-merge-replay-children"
+    },
+    {
+      "sha": "4def81dbea6c3bbd7d375b60836761b828f99574",
+      "subject": "fix(desktop): productize managed runtime hints",
+      "purpose": "Describe local versus company VM runtimes truthfully in native surfaces.",
+      "disposition": "keep"
+    }
+  ],
+  "electricMergeChildren": [
+    {
+      "merge": "3622deb61385e4d8dc096f8da48cfa061d1b3e23",
+      "sha": "e16a33244ded29f86803532630fcb3d82ef49325",
+      "subject": "fix(desktop): skip local welcome team in managed Hive",
+      "purpose": "Avoid auto-launching local starter runtimes in a managed company community.",
+      "disposition": "keep"
+    },
+    {
+      "merge": "3622deb61385e4d8dc096f8da48cfa061d1b3e23",
+      "sha": "e10fff9ccf1a968f25a48d05f51a234b751d9175",
+      "subject": "fix(desktop): hide managed local welcome actions",
+      "purpose": "Keep presentation-only starter personas without offering a broken local setup action.",
+      "disposition": "keep"
+    },
+    {
+      "merge": "34f7ace7090904f9758f1393ed3dcef5316298a2",
+      "sha": "019f56453a1453727f3ea5bd0092d5cf038530d9",
+      "subject": "fix(hive): unify company agent identity surfaces (#39)",
+      "purpose": "Use the registered public company-agent identity consistently across native surfaces.",
+      "disposition": "keep"
+    },
+    {
+      "merge": "34f7ace7090904f9758f1393ed3dcef5316298a2",
+      "sha": "cd4a0c3409e628a1caff12de511c91010d35787d",
+      "subject": "fix(hive): make company agent projection authoritative",
+      "purpose": "Prefer the server-registered public agent projection over relay fallback metadata.",
+      "disposition": "keep"
+    },
+    {
+      "merge": "34f7ace7090904f9758f1393ed3dcef5316298a2",
+      "sha": "519d4dc6e15a9824f5ea288a90249251b0237247",
+      "subject": "fix(hive): preserve remote agent activity ingestion",
+      "purpose": "Keep native activity ingestion for remote company agents.",
+      "disposition": "keep"
+    },
+    {
+      "merge": "b290bc8f0f90fa1bededa60ed9fc2e30a3c30982",
+      "sha": "bd70ae07ebb40d1f57d64fee51424f2e15a995ef",
+      "subject": "fix: productize managed Hive presentation",
+      "purpose": "Apply reviewed Hive naming and explanatory copy without replacing native behavior.",
+      "disposition": "keep"
+    }
+  ],
+  "mergeRehearsal": {
+    "command": "git merge-tree --write-tree --messages 4def81dbea6c3bbd7d375b60836761b828f99574 37420764349bcd8f3dcf34786c30a8f924152922",
+    "resultTree": "8496ebbe06d033ab5515157954cd27f8ac8a6491",
+    "expectedExitCode": 1,
+    "conflicts": [
+      "desktop/playwright.config.ts",
+      "desktop/scripts/check-file-sizes.mjs",
+      "desktop/src-tauri/src/managed_agents/discovery/tests.rs",
+      "desktop/src/features/agents/hooks.ts",
+      "desktop/src/features/agents/ui/AgentDefinitionDialog.tsx",
+      "desktop/src/features/agents/ui/PersonaModelField.tsx",
+      "desktop/src/shared/api/tauri.ts"
+    ]
+  }
+}
