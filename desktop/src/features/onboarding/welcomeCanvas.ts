@@ -1,8 +1,9 @@
 import { getCanvas, setCanvas } from "@/shared/api/tauri";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 
 export const WELCOME_CANVAS_CONTENT = `# Welcome to Buzz
 
-This private channel is your home base for getting oriented. Fizz, Honey, and Bumble can help you learn the app, troubleshoot setup, and work through something you are building.
+This private channel is your home base for getting oriented. TARS, Samantha, and HAL 9000 can help you learn the app, troubleshoot setup, and work through something you are building.
 
 ## Work with your agents
 
@@ -18,6 +19,10 @@ Bring the team something you are building, or give them a quick challenge to see
 
 Ask the team a question here, or read the [Buzz user guide](https://github.com/block/buzz#readme).
 `;
+
+export function buildWelcomeCanvasContent(): string {
+  return desktopProductCopy(WELCOME_CANVAS_CONTENT);
+}
 
 type WelcomeCanvasClient = {
   getCanvas: typeof getCanvas;
@@ -36,6 +41,9 @@ export async function ensureWelcomeCanvas(
     return false;
   }
 
-  await client.setCanvas({ channelId, content: WELCOME_CANVAS_CONTENT });
+  await client.setCanvas({
+    channelId,
+    content: buildWelcomeCanvasContent(),
+  });
   return true;
 }

@@ -233,8 +233,8 @@ async function expectWelcomePersonaMention(page: Page) {
   const banner = page.getByTestId("welcome-composer-guide-banner");
   const personaMention = page.getByTestId("welcome-composer-persona-mention");
   await expect(personaMention).toBeVisible();
-  await expect(personaMention).toHaveAttribute("data-persona-options", "Fizz");
-  await expect(personaMention).toHaveAttribute("data-active-persona", "Fizz");
+  await expect(personaMention).toHaveAttribute("data-persona-options", "TARS");
+  await expect(personaMention).toHaveAttribute("data-active-persona", "TARS");
   await expect(personaMention).toHaveAttribute(
     "data-animation-target",
     "per-character",
@@ -370,7 +370,7 @@ async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
   const banner = page.getByTestId("welcome-composer-guide-banner");
   const channelIntro = page.getByTestId("message-channel-intro");
 
-  await page.getByTestId("message-input").fill("Thanks @Fizz");
+  await page.getByTestId("message-input").fill("Thanks @TARS");
   await page.getByTestId("send-message").click();
 
   await expect(banner).toHaveAttribute("data-state", "complete");
@@ -541,31 +541,31 @@ async function expectWelcomeGuideIntro(
           Array<{ pubkey: string; name: string; persona_id: string | null }>
         >(page, "list_managed_agents"),
       ]);
-      const fizz = agents.find(
-        (agent) => agent.name === "Fizz" && agent.persona_id === "builtin:fizz",
+      const tars = agents.find(
+        (agent) => agent.name === "TARS" && agent.persona_id === "builtin:fizz",
       );
-      const fizzMember = fizz
-        ? members.members.find((member) => member.pubkey === fizz.pubkey)
+      const tarsMember = tars
+        ? members.members.find((member) => member.pubkey === tars.pubkey)
         : null;
-      const profileAvatarUrl = fizz
+      const profileAvatarUrl = tars
         ? (
             await invokeMockCommand<{
               profiles: Record<string, { avatar_url: string | null }>;
             }>(page, "get_users_batch", {
-              pubkeys: [fizz.pubkey],
+              pubkeys: [tars.pubkey],
             })
-          ).profiles[fizz.pubkey]?.avatar_url
+          ).profiles[tars.pubkey]?.avatar_url
         : null;
 
       return {
-        fizzIsBot: fizzMember?.role === "bot" && fizzMember.is_agent,
-        fizzPersonaId: fizz?.persona_id ?? null,
+        tarsIsBot: tarsMember?.role === "bot" && tarsMember.is_agent,
+        tarsPersonaId: tars?.persona_id ?? null,
         profileAvatarUrl,
       };
     })
     .toEqual({
-      fizzIsBot: true,
-      fizzPersonaId: "builtin:fizz",
+      tarsIsBot: true,
+      tarsPersonaId: "builtin:fizz",
       profileAvatarUrl: null,
     });
 
@@ -2674,7 +2674,7 @@ test("successful starter channel retry clears its actionable toast", async ({
   await expectStarterChannels(page);
 });
 
-test("first-run onboarding posts the live Fizz kickoff", async ({ page }) => {
+test("first-run onboarding posts the live TARS kickoff", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
@@ -2696,10 +2696,10 @@ test("first-run onboarding posts the live Fizz kickoff", async ({ page }) => {
   // Greeted by the name typed above — the @mention pill also files the opener
   // into the new user's Inbox mentions feed.
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi @Morty QA, I'm Fizz. Welcome to Buzz.",
+    "Hi @Morty QA, I'm TARS. Welcome to Buzz.",
   );
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Honey and Bumble, introduce yourselves",
+    "Samantha and HAL 9000, introduce yourselves",
   );
 });
 
@@ -2720,7 +2720,7 @@ test("first-run onboarding lands before Welcome team bootstrap completes", async
   await expectPrivateWelcomeLanding(page);
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi @Morty QA, I'm Fizz. Welcome to Buzz.",
+    "Hi @Morty QA, I'm TARS. Welcome to Buzz.",
   );
   await page.waitForTimeout(1_500);
   expect(await commandCount(page, "create_managed_agent")).toBe(3);

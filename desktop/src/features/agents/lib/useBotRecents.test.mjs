@@ -20,7 +20,7 @@ function createPersona(id, displayName) {
 
 test("pickQuickBotPersonas prefers recents before defaults", () => {
   const personas = [
-    createPersona("builtin:fizz", "Fizz"),
+    createPersona("builtin:fizz", "TARS"),
     createPersona("builtin:reviewer", "Reviewer"),
   ];
 
@@ -34,9 +34,9 @@ test("pickQuickBotPersonas prefers recents before defaults", () => {
 
 test("pickQuickBotPersonas seeds the three starter agents", () => {
   const personas = [
-    createPersona("builtin:bumble", "Bumble"),
-    createPersona("builtin:honey", "Honey"),
-    createPersona("builtin:fizz", "Fizz"),
+    createPersona("builtin:bumble", "HAL 9000"),
+    createPersona("builtin:honey", "Samantha"),
+    createPersona("builtin:fizz", "TARS"),
     createPersona("builtin:reviewer", "Reviewer"),
   ];
 
@@ -61,7 +61,7 @@ test("pickQuickBotPersonas falls back to any active personas when defaults are m
 
 test("pickQuickBotPersonas skips duplicate and missing recents", () => {
   const personas = [
-    createPersona("builtin:fizz", "Fizz"),
+    createPersona("builtin:fizz", "TARS"),
     createPersona("custom:honey", "Honey"),
   ];
 

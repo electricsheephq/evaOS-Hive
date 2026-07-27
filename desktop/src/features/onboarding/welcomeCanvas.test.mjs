@@ -2,15 +2,37 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildWelcomeCanvasContent,
   ensureWelcomeCanvas,
   WELCOME_CANVAS_CONTENT,
 } from "./welcomeCanvas.ts";
+import {
+  installDesktopProductPolicy,
+  NATIVE_PRODUCT_POLICY,
+  resetDesktopProductPolicyForTests,
+} from "../../shared/product/productIdentity.ts";
 
 test("welcome canvas covers purpose, agent use, a first challenge, and help", () => {
   assert.match(WELCOME_CANVAS_CONTENT, /private channel is your home base/i);
   assert.match(WELCOME_CANVAS_CONTENT, /Mention an agent/i);
   assert.match(WELCOME_CANVAS_CONTENT, /quick challenge/i);
   assert.match(WELCOME_CANVAS_CONTENT, /Buzz user guide/i);
+});
+
+test("welcome canvas keeps native Buzz copy and productizes managed Hive copy", (context) => {
+  context.after(resetDesktopProductPolicyForTests);
+  assert.match(buildWelcomeCanvasContent(), /^# Welcome to Buzz/m);
+
+  installDesktopProductPolicy({
+    ...NATIVE_PRODUCT_POLICY,
+    managed: true,
+    productName: "Hive",
+  });
+
+  const managedContent = buildWelcomeCanvasContent();
+  assert.match(managedContent, /^# Welcome to Hive/m);
+  assert.match(managedContent, /Hive user guide/i);
+  assert.doesNotMatch(managedContent, /\bBuzz\b/);
 });
 
 test("ensureWelcomeCanvas seeds a fresh channel with no canvas", async () => {

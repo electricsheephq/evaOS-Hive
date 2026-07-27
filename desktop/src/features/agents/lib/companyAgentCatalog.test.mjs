@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   companyVmAgentsFromCatalog,
+  excludeLocalAgentDuplicates,
   mergeRelayAgentsWithCompanyCatalog,
   resolveCompanyAgentPresenceStatuses,
   resolveCompanyAgentVisibleChannels,
@@ -37,6 +38,25 @@ test("company catalog adds a VM agent with unknown liveness", () => {
       respondToAllowlist: [],
     },
   ]);
+});
+
+test("company section omits an identity already rendered as a local agent", () => {
+  const companyAgents = [
+    {
+      pubkey: PUBKEY.toUpperCase(),
+      name: "ATRIS",
+      agentType: "hermes",
+      channels: [],
+      channelIds: [],
+      capabilities: ["company-vm", "hermes"],
+      status: "unknown",
+      respondTo: null,
+      respondToAllowlist: [],
+    },
+  ];
+  const localAgents = [{ pubkey: PUBKEY }];
+
+  assert.deepEqual(excludeLocalAgentDuplicates(companyAgents, localAgents), []);
 });
 
 test("valid signed relay name and live status win over catalog fallback", () => {

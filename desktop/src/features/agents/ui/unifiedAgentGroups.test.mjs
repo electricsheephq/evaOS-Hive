@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  buildUnifiedGroups,
-  filterManagedLocalWelcomeRecords,
-} from "./unifiedAgentGroups.ts";
+import { buildUnifiedGroups } from "./unifiedAgentGroups.ts";
 
 const welcomePersona = {
   id: "builtin:fizz",
@@ -29,52 +26,37 @@ const customAgent = {
   teamId: "custom-team:research",
 };
 
-test("managed Hive hides renamed built-in welcome records without deleting custom agents", () => {
-  const result = filterManagedLocalWelcomeRecords(
-    buildUnifiedGroups(
-      [welcomePersona, customPersona],
-      [welcomeAgent, customAgent],
-    ),
-    true,
+test("native grouping keeps starter and custom agents together in Hive", () => {
+  const result = buildUnifiedGroups(
+    [welcomePersona, customPersona],
+    [welcomeAgent, customAgent],
   );
 
   assert.deepEqual(
     result.groups.map(({ persona }) => persona.id),
-    ["custom:researcher"],
+    ["builtin:fizz", "custom:researcher"],
   );
   assert.deepEqual(
     result.groups.flatMap(({ agents }) => agents.map(({ pubkey }) => pubkey)),
-    ["custom-agent"],
+    ["welcome-agent", "custom-agent"],
   );
 });
 
-test("managed Hive hides orphaned welcome-team records", () => {
-  const result = filterManagedLocalWelcomeRecords(
-    buildUnifiedGroups(
-      [],
-      [
-        {
-          ...welcomeAgent,
-          personaId: "missing:persona",
-        },
-        {
-          ...welcomeAgent,
-          personaId: null,
-        },
-      ],
-    ),
-    true,
+test("native grouping preserves orphaned records for normal recovery surfaces", () => {
+  const result = buildUnifiedGroups(
+    [],
+    [
+      {
+        ...welcomeAgent,
+        personaId: "missing:persona",
+      },
+      {
+        ...welcomeAgent,
+        personaId: null,
+      },
+    ],
   );
 
-  assert.deepEqual(result.unknown, []);
-  assert.deepEqual(result.ungrouped, []);
-});
-
-test("unmanaged Buzz keeps native welcome records unchanged", () => {
-  const unifiedGroups = buildUnifiedGroups([welcomePersona], [welcomeAgent]);
-
-  assert.strictEqual(
-    filterManagedLocalWelcomeRecords(unifiedGroups, false),
-    unifiedGroups,
-  );
+  assert.equal(result.unknown.length, 1);
+  assert.equal(result.ungrouped.length, 1);
 });
