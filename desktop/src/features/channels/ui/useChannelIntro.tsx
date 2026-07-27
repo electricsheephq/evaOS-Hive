@@ -5,10 +5,8 @@ import {
   getChannelIntroDescription,
   getChannelIntroKind,
 } from "@/features/channels/ui/ChannelPane.helpers";
-import {
-  isWelcomeChannel,
-  isWelcomeExperienceChannel,
-} from "@/features/onboarding/welcome";
+import { isLocalWelcomeExperienceChannel } from "@/features/onboarding/localWelcomeTeamPolicy";
+import { isWelcomeChannel } from "@/features/onboarding/welcome";
 import type { Channel } from "@/shared/api/types";
 import { HashSearch } from "@/shared/ui/icons";
 
@@ -47,7 +45,7 @@ export function useChannelIntro({
     }
 
     const actions: ChannelIntroAction[] = [];
-    if (isWelcomeExperienceChannel(activeChannel)) {
+    if (isLocalWelcomeExperienceChannel(activeChannel)) {
       if (onBrowseChannels) {
         actions.push({
           icon: <HashSearch aria-hidden className="h-6 w-6" />,

@@ -47,3 +47,10 @@ export function isLocalWelcomeAgentRecord(agent: {
     isLocalWelcomePersonaId(agent.personaId)
   );
 }
+
+export function shouldPresentLocalAgentTeam(
+  managedProduct: boolean,
+  teamId: string,
+): boolean {
+  return !managedProduct || teamId !== LOCAL_WELCOME_TEAM_ID;
+}

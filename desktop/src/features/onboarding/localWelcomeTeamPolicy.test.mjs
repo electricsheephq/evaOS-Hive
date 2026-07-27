@@ -5,6 +5,7 @@ import {
   isLocalWelcomeExperienceChannel,
   isLocalWelcomeAgentRecord,
   isLocalWelcomePersonaId,
+  shouldPresentLocalAgentTeam,
   shouldUseLocalWelcomeTeam,
 } from "./localWelcomeTeamPolicy.ts";
 import {
@@ -70,5 +71,17 @@ test("managed filtering recognizes both welcome personas and team records", () =
       teamId: "custom-team:research",
     }),
     false,
+  );
+});
+
+test("managed Hive hides only the built-in local welcome team", () => {
+  assert.equal(
+    shouldPresentLocalAgentTeam(true, "builtin-team:welcome"),
+    false,
+  );
+  assert.equal(shouldPresentLocalAgentTeam(true, "custom-team:research"), true);
+  assert.equal(
+    shouldPresentLocalAgentTeam(false, "builtin-team:welcome"),
+    true,
   );
 });
