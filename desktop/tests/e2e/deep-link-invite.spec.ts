@@ -296,18 +296,47 @@ test("Welcome failure retries once before allowing starter channel setup to be s
   );
   await installMockBridge(
     page,
-    { ensureStarterChannelsErrors: [welcomeError, welcomeError, welcomeError] },
+    {
+      ensureStarterChannelsErrors: [welcomeError, welcomeError, welcomeError],
+      personas: [
+        {
+          displayName: "TARS",
+          id: "builtin:fizz",
+          systemPrompt: "You are TARS.",
+        },
+        {
+          displayName: "Samantha",
+          id: "builtin:honey",
+          systemPrompt: "You are Samantha.",
+        },
+        {
+          displayName: "HAL 9000",
+          id: "builtin:bumble",
+          systemPrompt: "You are HAL 9000.",
+        },
+      ],
+    },
     { relayWsUrl: COMMUNITY_RELAY_URL, skipOnboardingSeed: true },
   );
   await page.goto("/");
 
-  for (const name of ["fizz", "honey", "bumble"]) {
-    const character = page.getByTestId(`starter-persona-${name}`);
+  for (const persona of [
+    {
+      avatarUrl: "/onboarding/starter-team/tars.webp",
+      testId: "starter-persona-tars",
+    },
+    {
+      avatarUrl: "/onboarding/starter-team/samantha.webp",
+      testId: "starter-persona-samantha",
+    },
+    {
+      avatarUrl: "/onboarding/starter-team/hal-9000.webp",
+      testId: "starter-persona-hal 9000",
+    },
+  ]) {
+    const character = page.getByTestId(persona.testId);
     await expect(character).toBeVisible();
-    await expect(character).toHaveAttribute(
-      "src",
-      `/onboarding/starter-team/${name}.png`,
-    );
+    await expect(character).toHaveAttribute("src", persona.avatarUrl);
   }
 
   const enterButton = page.getByRole("button", { name: "Take me to Buzz" });
