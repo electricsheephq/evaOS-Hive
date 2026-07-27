@@ -202,6 +202,26 @@ if (live) {
     ),
   );
 
+  for (const merge of mergeCommits) {
+    const actualChildren = runGit([
+      "log",
+      "--reverse",
+      "--format=%H%x09%s",
+      `${merge}^1..${merge}^2`,
+    ])
+      .stdout.trim()
+      .split("\n")
+      .filter(Boolean);
+    const expectedChildren = manifest.electricMergeChildren
+      .filter((entry) => entry.merge === merge)
+      .map((entry) => `${entry.sha}\t${entry.subject}`);
+    assertExactList(
+      `semantic children of merge ${merge}`,
+      actualChildren,
+      expectedChildren,
+    );
+  }
+
   const rehearsal = runGit(
     [
       "merge-tree",

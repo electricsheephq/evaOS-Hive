@@ -6,12 +6,12 @@
   "refs": {
     "upstreamRepository": "https://github.com/block/buzz.git",
     "upstreamBase": "dd222a509b156ba52ed3219e895d7bf1cf322c92",
-    "upstreamTarget": "37420764349bcd8f3dcf34786c30a8f924152922",
+    "upstreamTarget": "7fc0cc82db4d9dced9c258bbe8b530164a832a77",
     "candidateHead": "4def81dbea6c3bbd7d375b60836761b828f99574",
     "candidateBranch": "fix/36-thin-upstream-parity"
   },
   "expectedCounts": {
-    "upstream": 18,
+    "upstream": 19,
     "electricFirstParent": 37,
     "electricMergeChildren": 6
   },
@@ -123,6 +123,12 @@
       "subject": "fix(mobile): mitigate message-post delay with optimistic rendering (#3037)",
       "disposition": "prove-inapplicable",
       "reason": "Mobile remains outside the current internal desktop beta."
+    },
+    {
+      "sha": "7fc0cc82db4d9dced9c258bbe8b530164a832a77",
+      "subject": "Restore Goose and Buzz Agent to onboarding harness selection (#2731)",
+      "disposition": "keep",
+      "reason": "Preserve native local-agent harness selection and configuration gating; managed mode changes only the Buzz Agent presentation label to Hive Agent and does not suppress its lifecycle."
     }
   ],
   "electricFirstParent": [
@@ -355,14 +361,14 @@
       "sha": "e16a33244ded29f86803532630fcb3d82ef49325",
       "subject": "fix(desktop): skip local welcome team in managed Hive",
       "purpose": "Avoid auto-launching local starter runtimes in a managed company community.",
-      "disposition": "keep"
+      "disposition": "drop"
     },
     {
       "merge": "3622deb61385e4d8dc096f8da48cfa061d1b3e23",
       "sha": "e10fff9ccf1a968f25a48d05f51a234b751d9175",
       "subject": "fix(desktop): hide managed local welcome actions",
       "purpose": "Keep presentation-only starter personas without offering a broken local setup action.",
-      "disposition": "keep"
+      "disposition": "drop"
     },
     {
       "merge": "34f7ace7090904f9758f1393ed3dcef5316298a2",
@@ -394,8 +400,8 @@
     }
   ],
   "mergeRehearsal": {
-    "command": "git merge-tree --write-tree --messages 4def81dbea6c3bbd7d375b60836761b828f99574 37420764349bcd8f3dcf34786c30a8f924152922",
-    "resultTree": "8496ebbe06d033ab5515157954cd27f8ac8a6491",
+    "command": "git merge-tree --write-tree --messages 4def81dbea6c3bbd7d375b60836761b828f99574 7fc0cc82db4d9dced9c258bbe8b530164a832a77",
+    "resultTree": "2a6f81506513e3be5fd872808b89d2fb248b7c23",
     "expectedExitCode": 1,
     "conflicts": [
       "desktop/playwright.config.ts",

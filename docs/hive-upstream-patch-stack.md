@@ -10,14 +10,14 @@ without rebasing or modifying either lineage.
 | Role | Exact commit |
 | --- | --- |
 | Pinned upstream base | `dd222a509b156ba52ed3219e895d7bf1cf322c92` |
-| Current upstream target | `37420764349bcd8f3dcf34786c30a8f924152922` |
+| Current upstream target | `7fc0cc82db4d9dced9c258bbe8b530164a832a77` |
 | Hive internal-canary head | `4def81dbea6c3bbd7d375b60836761b828f99574` |
 | Hive candidate branch | `fix/36-thin-upstream-parity` |
 
 The machine-readable source of truth is
 [`hive-upstream-patch-stack.json`](./hive-upstream-patch-stack.json). It records:
 
-- all 18 upstream commits after the pinned base, each with one terminal
+- all 19 upstream commits after the pinned base, each with one terminal
   disposition: `keep`, `redesign`, or `prove-inapplicable`;
 - all 37 Electric first-parent commits in the candidate lineage, each with its
   purpose and one terminal replay disposition;
@@ -57,7 +57,7 @@ The next adoption branch must:
 
 | Disposition | Commits | Meaning |
 | --- | ---: | --- |
-| `keep` | 8 | Inherit unchanged on the next pinned upstream base. |
+| `keep` | 9 | Inherit unchanged on the next pinned upstream base. |
 | `redesign` | 5 | Preserve the observable outcome using the newer native seam. |
 | `prove-inapplicable` | 5 | Not part of the current desktop beta; inherit only with the relevant future surface. |
 
@@ -93,6 +93,11 @@ repair, and merge objects are dropped. The reviewed semantic child commits are
 accounted for separately so a later replay never depends on cherry-picking a
 mixed merge wholesale.
 
+The two #47 child commits that suppressed the native local welcome-team
+lifecycle are also marked `drop`. TARS, Samantha, and HAL 9000 replace starter
+persona presentation only; native creation, storage, editing, permissions, and
+runtime behavior remain upstream.
+
 ## Rehearsal result
 
 The exact read-only command was:
@@ -100,10 +105,10 @@ The exact read-only command was:
 ```sh
 git merge-tree --write-tree --messages \
   4def81dbea6c3bbd7d375b60836761b828f99574 \
-  37420764349bcd8f3dcf34786c30a8f924152922
+  7fc0cc82db4d9dced9c258bbe8b530164a832a77
 ```
 
-It produced tree `8496ebbe06d033ab5515157954cd27f8ac8a6491`
+It produced tree `2a6f81506513e3be5fd872808b89d2fb248b7c23`
 and exited `1` with conflicts in:
 
 - `desktop/playwright.config.ts`
