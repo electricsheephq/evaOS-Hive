@@ -14,14 +14,10 @@ import {
 import { resolveSnapshotAvatarPng } from "@/features/agents/ui/snapshotAvatarPng";
 import {
   channelsQueryKey,
-  useChannelsQuery,
   upsertCachedChannelMember,
 } from "@/features/channels/hooks";
 import { updateCachedChannelMemberDisplayName } from "@/features/channels/channelMemberProfileCache";
-import {
-  evictUsersBatchEntries,
-  useUsersBatchQuery,
-} from "@/features/profile/hooks";
+import { evictUsersBatchEntries } from "@/features/profile/hooks";
 import {
   createManagedAgent,
   deleteManagedAgent,
@@ -37,7 +33,6 @@ import {
   getRuntimeFileConfig,
   installAcpRuntime,
   listManagedAgents,
-  listRelayAgents,
   updateManagedAgent,
 } from "@/shared/api/tauri";
 import {
@@ -46,12 +41,11 @@ import {
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauriManagedAgents";
-import {
-  mergeRelayAgentsWithCompanyCatalog,
-  resolveCompanyAgentVisibleChannels,
-  resolveRelayAgentProfiles,
-} from "@/features/agents/lib/companyAgentCatalog";
 import { useHiveCompanyAgentsQuery } from "@/features/evaosTeams/hooks";
+import {
+  relayAgentsQueryKey,
+  useRelayAgentsQuery,
+} from "@/features/agents/relayAgentsQuery";
 import { bootstrapManagedAgentRuntimePairs } from "@/features/agents/managedAgentRuntimeHooks";
 import {
   createPersona,
@@ -81,7 +75,6 @@ import type {
   UpdateManagedAgentInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
-import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   AttachManagedAgentToChannelInput,
   CreateChannelManagedAgentInput,
@@ -91,6 +84,7 @@ import type {
   EnsureChannelAgentPresetResult,
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 export { findReusableAgent } from "@/features/agents/agentReuse";
 export {
   teamsQueryKey,
@@ -111,7 +105,7 @@ export type {
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
 
-export const relayAgentsQueryKey = ["relay-agents"] as const;
+export { relayAgentsQueryKey, useRelayAgentsQuery };
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
@@ -299,64 +293,6 @@ export function useManagedAgentPrereqsQuery(
   });
 }
 
-export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
-  const relayAgentsQuery = useQuery({
-    queryKey: relayAgentsQueryKey,
-    queryFn: listRelayAgents,
-    staleTime: 30_000,
-    // Relay agent profiles (kind:10100) are near-static and the backing
-    // `list_relay_agents` command is an unfiltered relay query for the whole
-    // profile set — mounted on ~13 always-live surfaces (channel screen,
-    // members bar, mentions, sidebar, profile popovers), so a tight interval
-    // re-pulls the full set app-wide. This poll is also the ONLY refresh path:
-    // the `agents-data-changed` event fires only for local persona/team/managed
-    // reconcile (kinds PERSONA/TEAM/MANAGED_AGENT), never for kind:10100. So we
-    // keep polling but at a relaxed cadence and pause it while backgrounded.
-    refetchInterval: 5 * 60_000,
-    refetchIntervalInBackground: false,
-    enabled: options?.enabled,
-  });
-  const companyAgentsQuery = useHiveCompanyAgentsQuery(options);
-  const mergedRelayAgents = React.useMemo(
-    () =>
-      (companyAgentsQuery.data?.length ?? 0) > 0
-        ? mergeRelayAgentsWithCompanyCatalog(
-            relayAgentsQuery.data ?? [],
-            companyAgentsQuery.data ?? [],
-          )
-        : (relayAgentsQuery.data ?? []),
-    [companyAgentsQuery.data, relayAgentsQuery.data],
-  );
-  const hasCompanyVmAgents = mergedRelayAgents.some((agent) =>
-    agent.capabilities.includes("company-vm"),
-  );
-  const channelsQuery = useChannelsQuery({
-    enabled: (options?.enabled ?? true) && hasCompanyVmAgents,
-  });
-  const agentPubkeys = React.useMemo(
-    () =>
-      mergedRelayAgents
-        .filter((agent) => agent.capabilities.includes("company-vm"))
-        .map((agent) => agent.pubkey),
-    [mergedRelayAgents],
-  );
-  const profilesQuery = useUsersBatchQuery(agentPubkeys, {
-    enabled: (options?.enabled ?? true) && agentPubkeys.length > 0,
-  });
-  const agentsWithProfiles = resolveRelayAgentProfiles(
-    relayAgentsQuery.data === undefined && companyAgentsQuery.data === undefined
-      ? undefined
-      : mergedRelayAgents,
-    profilesQuery.data?.profiles,
-  );
-  return {
-    ...relayAgentsQuery,
-    data: resolveCompanyAgentVisibleChannels(
-      agentsWithProfiles,
-      channelsQuery.data,
-    ),
-  };
-}
 export { useHiveCompanyAgentsQuery };
 
 export function useManagedAgentsQuery(options?: { enabled?: boolean }) {

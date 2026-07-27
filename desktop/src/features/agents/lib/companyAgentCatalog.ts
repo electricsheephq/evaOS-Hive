@@ -1,7 +1,10 @@
 import type { HiveCompanyAgent } from "@/features/evaosTeams/api";
-import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
+import {
+  preferIdentityDisplayName,
+  resolveCompanyAgentPresence,
+} from "@/features/evaosTeams/lib/companyAgentIdentity";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
-import type { Channel, RelayAgent } from "@/shared/api/types";
+import type { Channel, PresenceLookup, RelayAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
 export function mergeRelayAgentsWithCompanyCatalog(
@@ -47,13 +50,18 @@ export function mergeRelayAgentsWithCompanyCatalog(
 export function resolveCompanyAgentVisibleChannels(
   relayAgents: readonly RelayAgent[] | undefined,
   visibleChannels: readonly Channel[] | undefined,
+  companyAgentPubkeys: ReadonlySet<string>,
 ): RelayAgent[] | undefined {
   if (!relayAgents) return undefined;
-  if (!visibleChannels) return [...relayAgents];
 
   return relayAgents.map((agent) => {
-    if (!agent.capabilities.includes("company-vm")) return agent;
     const pubkey = normalizePubkey(agent.pubkey);
+    if (!companyAgentPubkeys.has(pubkey)) return agent;
+    if (!visibleChannels) {
+      return agent.channels.length === 0 && agent.channelIds.length === 0
+        ? agent
+        : { ...agent, channels: [], channelIds: [] };
+    }
     const memberChannels = visibleChannels.filter((channel) =>
       channel.memberPubkeys.some(
         (memberPubkey) => normalizePubkey(memberPubkey) === pubkey,
@@ -70,18 +78,34 @@ export function resolveCompanyAgentVisibleChannels(
 export function resolveRelayAgentProfiles(
   relayAgents: readonly RelayAgent[] | undefined,
   profiles: UserProfileLookup | undefined,
+  companyAgentPubkeys: ReadonlySet<string>,
 ): RelayAgent[] | undefined {
   if (!relayAgents) return undefined;
   if (!profiles) return [...relayAgents];
   return relayAgents.map((agent) => {
-    if (!agent.capabilities.includes("company-vm")) return agent;
-    const profile = profiles[normalizePubkey(agent.pubkey)];
+    const pubkey = normalizePubkey(agent.pubkey);
+    if (!companyAgentPubkeys.has(pubkey)) return agent;
+    const profile = profiles[pubkey];
     const name = preferIdentityDisplayName(
       profile?.displayName,
       agent.name,
       agent.pubkey,
     );
     return name && name !== agent.name ? { ...agent, name } : agent;
+  });
+}
+
+export function resolveCompanyAgentPresenceStatuses(
+  relayAgents: readonly RelayAgent[] | undefined,
+  presence: PresenceLookup | undefined,
+  companyAgentPubkeys: ReadonlySet<string>,
+): RelayAgent[] | undefined {
+  if (!relayAgents) return undefined;
+  return relayAgents.map((agent) => {
+    const pubkey = normalizePubkey(agent.pubkey);
+    if (!companyAgentPubkeys.has(pubkey)) return agent;
+    const status = resolveCompanyAgentPresence(presence?.[pubkey]);
+    return status === agent.status ? agent : { ...agent, status };
   });
 }
 

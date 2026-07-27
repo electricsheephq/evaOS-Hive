@@ -4,11 +4,13 @@ import test from "node:test";
 import {
   companyVmAgentsFromCatalog,
   mergeRelayAgentsWithCompanyCatalog,
+  resolveCompanyAgentPresenceStatuses,
   resolveCompanyAgentVisibleChannels,
   resolveRelayAgentProfiles,
 } from "./companyAgentCatalog.ts";
 
 const PUBKEY = "a".repeat(64);
+const COMPANY_AGENT_PUBKEYS = new Set([PUBKEY]);
 
 test("company catalog adds a VM agent with unknown liveness", () => {
   const merged = mergeRelayAgentsWithCompanyCatalog(
@@ -144,16 +146,20 @@ test("signed native profile name wins consistently after catalog merge", () => {
       },
     ],
   );
-  const resolved = resolveRelayAgentProfiles(merged, {
-    [PUBKEY]: {
-      displayName: "Atris Signed",
-      name: null,
-      avatarUrl: "https://example.test/atris.png",
-      nip05Handle: null,
-      ownerPubkey: null,
-      isAgent: true,
+  const resolved = resolveRelayAgentProfiles(
+    merged,
+    {
+      [PUBKEY]: {
+        displayName: "Atris Signed",
+        name: null,
+        avatarUrl: "https://example.test/atris.png",
+        nip05Handle: null,
+        ownerPubkey: null,
+        isAgent: true,
+      },
     },
-  });
+    COMPANY_AGENT_PUBKEYS,
+  );
   assert.equal(resolved?.[0].name, "Atris Signed");
 });
 
@@ -181,44 +187,124 @@ test("company agent channels come only from actual visible native membership", (
       },
     ],
   );
-  const resolved = resolveCompanyAgentVisibleChannels(agent, [
-    {
-      id: "visible-room",
-      name: "general",
-      channelType: "stream",
-      visibility: "open",
-      description: "",
-      topic: null,
-      purpose: null,
-      memberCount: 1,
-      memberPubkeys: [PUBKEY],
-      lastMessageAt: null,
-      archivedAt: null,
-      participants: [],
-      participantPubkeys: [],
-      isMember: true,
-      ttlSeconds: null,
-      ttlDeadline: null,
-    },
-    {
-      id: "not-a-member",
-      name: "other",
-      channelType: "stream",
-      visibility: "open",
-      description: "",
-      topic: null,
-      purpose: null,
-      memberCount: 1,
-      memberPubkeys: ["b".repeat(64)],
-      lastMessageAt: null,
-      archivedAt: null,
-      participants: [],
-      participantPubkeys: [],
-      isMember: false,
-      ttlSeconds: null,
-      ttlDeadline: null,
-    },
-  ]);
+  const resolved = resolveCompanyAgentVisibleChannels(
+    agent,
+    [
+      {
+        id: "visible-room",
+        name: "general",
+        channelType: "stream",
+        visibility: "open",
+        description: "",
+        topic: null,
+        purpose: null,
+        memberCount: 1,
+        memberPubkeys: [PUBKEY],
+        lastMessageAt: null,
+        archivedAt: null,
+        participants: [],
+        participantPubkeys: [],
+        isMember: true,
+        ttlSeconds: null,
+        ttlDeadline: null,
+      },
+      {
+        id: "not-a-member",
+        name: "other",
+        channelType: "stream",
+        visibility: "open",
+        description: "",
+        topic: null,
+        purpose: null,
+        memberCount: 1,
+        memberPubkeys: ["b".repeat(64)],
+        lastMessageAt: null,
+        archivedAt: null,
+        participants: [],
+        participantPubkeys: [],
+        isMember: false,
+        ttlSeconds: null,
+        ttlDeadline: null,
+      },
+    ],
+    COMPANY_AGENT_PUBKEYS,
+  );
   assert.deepEqual(resolved?.[0].channels, ["general"]);
   assert.deepEqual(resolved?.[0].channelIds, ["visible-room"]);
+});
+
+test("company agent channels stay empty until native membership resolves", () => {
+  const companyAgent = {
+    pubkey: PUBKEY,
+    name: "ATRIS",
+    agentType: "hermes",
+    channels: ["claimed-private-room"],
+    channelIds: ["claimed-room"],
+    capabilities: ["company-vm"],
+    status: "offline",
+    respondTo: null,
+    respondToAllowlist: [],
+  };
+  const resolved = resolveCompanyAgentVisibleChannels(
+    [companyAgent],
+    undefined,
+    COMPANY_AGENT_PUBKEYS,
+  );
+  assert.deepEqual(resolved?.[0].channels, []);
+  assert.deepEqual(resolved?.[0].channelIds, []);
+});
+
+test("self-declared company capability cannot trigger catalog-only transforms", () => {
+  const relayOnlyPubkey = "b".repeat(64);
+  const relayOnly = {
+    pubkey: relayOnlyPubkey,
+    name: "Relay only",
+    agentType: "unknown",
+    channels: ["signed-room"],
+    channelIds: ["signed-room-id"],
+    capabilities: ["company-vm"],
+    status: "online",
+    respondTo: null,
+    respondToAllowlist: [],
+  };
+  const resolved = resolveCompanyAgentVisibleChannels(
+    [relayOnly],
+    [],
+    COMPANY_AGENT_PUBKEYS,
+  );
+  assert.strictEqual(resolved?.[0], relayOnly);
+});
+
+test("company agent liveness comes only from presence", () => {
+  const companyAgent = {
+    pubkey: PUBKEY,
+    name: "ATRIS",
+    agentType: "hermes",
+    channels: [],
+    channelIds: [],
+    capabilities: ["company-vm"],
+    status: "offline",
+    respondTo: null,
+    respondToAllowlist: [],
+  };
+  const unresolved = resolveCompanyAgentPresenceStatuses(
+    [companyAgent],
+    undefined,
+    COMPANY_AGENT_PUBKEYS,
+  );
+  assert.equal(unresolved?.[0].status, "unknown");
+
+  const online = resolveCompanyAgentPresenceStatuses(
+    [companyAgent],
+    { [PUBKEY]: "online" },
+    COMPANY_AGENT_PUBKEYS,
+  );
+  assert.equal(online?.[0].status, "online");
+
+  const away = resolveCompanyAgentPresenceStatuses(
+    [companyAgent],
+    { [PUBKEY]: "away" },
+    COMPANY_AGENT_PUBKEYS,
+  );
+  assert.equal(away?.[0].status, "unknown");
 });

@@ -337,11 +337,17 @@ export function useUsersBatchQuery(
   },
 ) {
   const queryClient = useQueryClient();
-  const normalizedPubkeys = [
+  const normalizedPubkeysKey = [
     ...new Set(pubkeys.map((pubkey) => pubkey.toLowerCase())),
   ]
     .filter((pubkey) => pubkey.length > 0)
-    .sort();
+    .sort()
+    .join("|");
+  const normalizedPubkeys = React.useMemo(
+    () =>
+      normalizedPubkeysKey.length > 0 ? normalizedPubkeysKey.split("|") : [],
+    [normalizedPubkeysKey],
+  );
   const enabled = (options?.enabled ?? true) && normalizedPubkeys.length > 0;
   const companyAgentsQuery = useHiveCompanyAgentsQuery({ enabled });
 
