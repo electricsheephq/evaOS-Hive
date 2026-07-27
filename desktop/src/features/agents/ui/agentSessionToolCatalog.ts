@@ -11,6 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import type { BuzzToolInfo, ToolStatus } from "./agentSessionTypes";
 
 export function normalizeToolStatus(status: string): ToolStatus {
@@ -148,8 +149,8 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
     return {
       icon: Workflow,
       label: isRead
-        ? "Reads workflow state from Buzz."
-        : "Updates workflow state in Buzz.",
+        ? desktopProductCopy("Reads workflow state from Buzz.")
+        : desktopProductCopy("Updates workflow state in Buzz."),
       tone: isWrite ? "write" : "read",
     };
   }
@@ -161,8 +162,8 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
     return {
       icon: Hash,
       label: isRead
-        ? "Reads channel context from the Buzz relay."
-        : "Changes channel state in the Buzz relay.",
+        ? desktopProductCopy("Reads channel context from the Buzz relay.")
+        : desktopProductCopy("Changes channel state in the Buzz relay."),
       tone: isWrite ? "write" : "read",
     };
   }
@@ -174,15 +175,15 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
     return {
       icon: Users,
       label: isRead
-        ? "Reads Buzz identity or presence data."
-        : "Updates Buzz identity or membership data.",
+        ? desktopProductCopy("Reads Buzz identity or presence data.")
+        : desktopProductCopy("Updates Buzz identity or membership data."),
       tone: isWrite ? "write" : "admin",
     };
   }
   if (name.includes("search") || name === "get_feed") {
     return {
       icon: Search,
-      label: "Searches relay-visible Buzz history.",
+      label: desktopProductCopy("Searches relay-visible Buzz history."),
       tone: "read",
     };
   }
@@ -193,14 +194,16 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
   ) {
     return {
       icon: Send,
-      label: "Publishes relay-visible Buzz activity.",
+      label: desktopProductCopy("Publishes relay-visible Buzz activity."),
       tone: "write",
     };
   }
 
   return {
     icon: MessageSquare,
-    label: isRead ? "Reads from Buzz." : "Writes to Buzz.",
+    label: isRead
+      ? desktopProductCopy("Reads from Buzz.")
+      : desktopProductCopy("Writes to Buzz."),
     tone: isWrite ? "write" : "read",
   };
 }

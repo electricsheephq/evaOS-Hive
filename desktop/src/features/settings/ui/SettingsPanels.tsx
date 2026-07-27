@@ -39,7 +39,10 @@ import {
 } from "@/features/channels/lib/threadViewModePreference";
 import { cn } from "@/shared/lib/cn";
 import { HiveAboutCard } from "@/features/evaosTeams/HiveAboutCard";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
+import {
+  desktopProductCopy,
+  desktopProductPolicy,
+} from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -244,10 +247,12 @@ export const settingsSections: SettingsSectionDescriptor[] = [
 ];
 
 function formatThemeLabel(name: string): string {
-  return name
-    .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  return desktopProductCopy(
+    name
+      .split("-")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" "),
+  );
 }
 
 /**

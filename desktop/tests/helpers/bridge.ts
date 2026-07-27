@@ -132,6 +132,19 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /** Desktop product policy returned by the Tauri bridge. */
+  desktopProductPolicy?: {
+    managed: boolean;
+    productName: string;
+    version: string;
+    bundleIdentifier: string;
+    deepLinkScheme: string;
+    artifactName: string;
+    updateChannel: string;
+    updaterEnabled: boolean;
+    upstreamHostedServicesEnabled: boolean;
+    originAttribution: string;
+  };
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */

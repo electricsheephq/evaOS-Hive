@@ -27,6 +27,7 @@ import { listPersonas } from "@/shared/api/tauriPersonas";
 import { relayClient } from "@/shared/api/relayClient";
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/shared/ui/dialog";
@@ -619,8 +620,9 @@ export function CommunityOnboardingFlow({
             <>
               <h1 className="text-title font-normal">Meet your starter team</h1>
               <p className="mx-auto mt-3 max-w-[400px] text-sm leading-6 text-foreground/80">
-                Buzz lets you bring multiple agents into the same workspace.
-                Your team will help you get started using Buzz.
+                {desktopProductCopy(
+                  "Buzz lets you bring multiple agents into the same workspace. Your team will help you get started using Buzz.",
+                )}
               </p>
               <div className="flex w-full flex-1 items-center justify-center py-10">
                 {starterPersonas.length > 0 ? (
@@ -678,7 +680,7 @@ export function CommunityOnboardingFlow({
                   ) : starterChannelFailureCount >= 2 ? (
                     "Skip for now"
                   ) : (
-                    "Take me to Buzz"
+                    desktopProductCopy("Take me to Buzz")
                   )}
                 </Button>
                 <Button

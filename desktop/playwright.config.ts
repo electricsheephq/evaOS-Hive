@@ -120,6 +120,7 @@ export default defineConfig({
         "**/inbox-live-update.spec.ts",
         "**/mesh-compute.spec.ts",
         "**/observer-archive-policy.spec.ts",
+        "**/managed-product-copy.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
