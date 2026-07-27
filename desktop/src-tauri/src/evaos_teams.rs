@@ -7,7 +7,7 @@
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Mutex, OnceLock},
     time::Duration,
 };
@@ -28,6 +28,19 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{app_state::AppState, secret_store::SecretStore};
+#[cfg(test)]
+use device_code::device_code_challenge;
+use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
+
+mod company_directory;
+mod device_code;
+
+use company_directory::{
+    sanitize_company_agents, sanitize_company_members, CollaborationProjection, HiveCompanyAgent,
+    HiveCompanyMember,
+};
+#[cfg(test)]
+use company_directory::{RawHiveCompanyAgent, RawHiveCompanyMember};
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
@@ -70,7 +83,7 @@ fn verify_managed_store_writable() -> Result<(), String> {
 
 /// Public, renderer-safe entitlement projection.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub(crate) struct EvaosTeamsEntitlement {
     community_id: String,
     relay_host: String,
@@ -225,29 +238,6 @@ struct IdentityBindingResponse {
     binding: IdentityBinding,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct HiveCompanyAgent {
-    agent_instance_id: String,
-    public_key: String,
-    display_name: String,
-    runtime: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawHiveCompanyAgent {
-    agent_instance_id: String,
-    public_key: String,
-    display_name: String,
-    runtime: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CollaborationProjection {
-    #[serde(default)]
-    agents: Vec<RawHiveCompanyAgent>,
-}
-
 #[derive(Debug, Deserialize)]
 struct CollaborationResponse {
     status: String,
@@ -301,7 +291,10 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
     let mut request = client
         .post(url)
         .header("apikey", SUPABASE_PUBLISHABLE_KEY)
-        .header("x-client-info", "evaos-teams-desktop/0.4.23")
+        .header(
+            "x-client-info",
+            concat!("hive-desktop/", env!("CARGO_PKG_VERSION")),
+        )
         .timeout(REQUEST_TIMEOUT)
         .json(&body);
     if let Some(token) = bearer {
@@ -331,27 +324,6 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
         status,
         code: "invalid_response".to_string(),
     })
-}
-
-fn normalize_device_code(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_uppercase)
-        .collect()
-}
-
-fn dashboard_login_url(callback: &str, state: &str, device_code: &str) -> Result<Url, String> {
-    let mut url = Url::parse(&format!("{DASHBOARD_ORIGIN}/desktop-auth"))
-        .map_err(|error| format!("invalid dashboard URL: {error}"))?;
-    url.query_pairs_mut()
-        .append_pair("desktop_callback", callback)
-        .append_pair("desktop_auth_state", state)
-        .append_pair("callback_scheme", "evaos-teams")
-        .append_pair("fresh", device_code)
-        .append_pair("switch_account", "1")
-        .append_pair("prompt", "select_account");
-    Ok(url)
 }
 
 fn relay_websocket_url(relay_host: &str) -> Result<String, String> {
@@ -392,40 +364,6 @@ fn validate_entitlement(
         return Err("managed entitlement has expired".to_string());
     }
     relay_websocket_url(&entitlement.relay_host)
-}
-
-fn sanitize_company_agents(agents: Vec<RawHiveCompanyAgent>) -> Vec<HiveCompanyAgent> {
-    let mut seen = HashSet::new();
-    agents
-        .into_iter()
-        .filter_map(|agent| {
-            let display_name = agent.display_name.trim();
-            let runtime = agent.runtime.trim();
-            let valid_public_key = agent.public_key.len() == 64
-                && agent.public_key.chars().all(|character| {
-                    character.is_ascii_hexdigit() && !character.is_ascii_uppercase()
-                });
-            let valid_text = |value: &str, max: usize| {
-                !value.is_empty()
-                    && value.len() <= max
-                    && value.chars().all(|character| !character.is_control())
-            };
-            if uuid::Uuid::parse_str(&agent.agent_instance_id).is_err()
-                || !valid_public_key
-                || !seen.insert(agent.public_key.clone())
-                || !valid_text(display_name, 128)
-                || !valid_text(runtime, 64)
-            {
-                return None;
-            }
-            Some(HiveCompanyAgent {
-                agent_instance_id: agent.agent_instance_id,
-                public_key: agent.public_key,
-                display_name: display_name.to_string(),
-                runtime: runtime.to_string(),
-            })
-        })
-        .collect()
 }
 
 fn bind_verified_entitlement(
@@ -963,9 +901,9 @@ pub(crate) async fn get_evaos_teams_auth_status(
     }
 }
 
-/// Return only the company-scoped public agent catalog. Room, member, seat,
-/// and control-plane data from the collaboration projection never crosses the
-/// Tauri boundary. Relay profiles remain the source of live status/channels.
+/// Return only the company-scoped public agent catalog. Room, seat, and
+/// control-plane data never crosses the Tauri boundary. The separate human
+/// directory command exposes only active public keys and display names.
 #[tauri::command]
 pub(crate) async fn list_hive_company_agents(
     state: State<'_, EvaosTeamsState>,
@@ -1004,35 +942,76 @@ pub(crate) async fn list_hive_company_agents(
     }
 }
 
+/// Return the active company's public human directory. Only durable public
+/// keys and display names cross the Tauri boundary; membership IDs, email,
+/// seats, rooms, Desktop sessions, and private identity data stay server-side.
+/// Native Buzz remains responsible for signing and publishing collaboration.
+#[tauri::command]
+pub(crate) async fn list_hive_company_members(
+    state: State<'_, EvaosTeamsState>,
+    app_state: State<'_, AppState>,
+) -> Result<Vec<HiveCompanyMember>, String> {
+    #[cfg(not(feature = "evaos-teams-managed"))]
+    {
+        let _ = (&state, &app_state);
+        Ok(Vec::new())
+    }
+
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        if !app_state
+            .evaos_teams_authorized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("Hive access is not active".to_string());
+        }
+        let (session, _, logout_pending) = current_credentials(&state).await?;
+        if logout_pending {
+            return Err("Hive sign-out is still pending".to_string());
+        }
+        let response: CollaborationResponse = post_json(
+            &app_state.http_client,
+            "evaos-teams-access",
+            Some(&session),
+            serde_json::json!({ "action": "get_collaboration_state" }),
+        )
+        .await
+        .map_err(|error| format!("Company member directory is unavailable: {error}"))?;
+        if response.status != "active" {
+            return Err("Company member directory is inactive".to_string());
+        }
+        Ok(sanitize_company_members(response.collaboration.members))
+    }
+}
+
 struct LoginCallback {
     expected_state: String,
-    expected_code: String,
     sender: Mutex<Option<oneshot::Sender<Result<String, String>>>>,
 }
 
 fn callback_device_code(
     query: &HashMap<String, String>,
     expected_state: &str,
-    expected_code: &str,
 ) -> Result<String, String> {
     let received_state = query.get("desktop_auth_state").map(String::as_str);
     let received_code = query.get("device_code").map(String::as_str);
-    match (received_state, received_code) {
-        (Some(received_state), Some(received_code))
-            if received_state == expected_state
-                && normalize_device_code(received_code) == expected_code =>
-        {
-            Ok(expected_code.to_string())
-        }
-        _ => Err("Authentication callback did not match this login attempt".to_string()),
+    if received_state != Some(expected_state) {
+        return Err("Authentication callback did not match this login attempt".to_string());
     }
+    if let Some(received_code) = received_code {
+        let normalized = normalize_device_code(received_code);
+        if (8..=40).contains(&normalized.len()) {
+            return Ok(normalized);
+        }
+    }
+    Err("Authentication callback did not match this login attempt".to_string())
 }
 
 async fn login_callback(
     Query(query): Query<HashMap<String, String>>,
     AxumState(state): AxumState<std::sync::Arc<LoginCallback>>,
 ) -> Response {
-    let result = callback_device_code(&query, &state.expected_state, &state.expected_code);
+    let result = callback_device_code(&query, &state.expected_state);
     match result {
         Ok(code) => {
             if let Ok(mut sender) = state.sender.lock() {
@@ -1058,6 +1037,7 @@ async fn login_callback(
 async fn claim_device_code(
     client: &reqwest::Client,
     device_code: &str,
+    device_code_verifier: &str,
 ) -> Result<ClaimResponse, String> {
     let response: ClaimResponse = post_json(
         client,
@@ -1066,6 +1046,7 @@ async fn claim_device_code(
         serde_json::json!({
             "action": "claim_desktop_device_code",
             "device_code": device_code,
+            "device_code_verifier": device_code_verifier,
         }),
     )
     .await
@@ -1210,13 +1191,12 @@ pub(crate) async fn start_evaos_teams_login(
             .map_err(|error| format!("could not read local sign-in callback: {error}"))?
             .port();
         let auth_state = uuid::Uuid::new_v4().simple().to_string();
-        let device_code = uuid::Uuid::new_v4().simple().to_string().to_uppercase();
+        let device_code_proof = DeviceCodeProof::new();
         let callback = format!("http://127.0.0.1:{port}/auth/callback");
-        let login_url = dashboard_login_url(&callback, &auth_state, &device_code)?;
+        let login_url = dashboard_login_url(&callback, &auth_state, &device_code_proof.challenge)?;
         let (sender, receiver) = oneshot::channel();
         let callback_state = std::sync::Arc::new(LoginCallback {
             expected_state: auth_state,
-            expected_code: device_code,
             sender: Mutex::new(Some(sender)),
         });
         let router = Router::new()
@@ -1247,7 +1227,8 @@ pub(crate) async fn start_evaos_teams_login(
         };
         server.abort();
 
-        let claim = claim_device_code(&app_state.http_client, &code).await?;
+        let claim =
+            claim_device_code(&app_state.http_client, &code, &device_code_proof.verifier).await?;
         let binding = get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
         let stored = managed_store().load_all_readonly()?.unwrap_or_default();
         let candidate_keys = select_login_keys(&stored, &binding)?;

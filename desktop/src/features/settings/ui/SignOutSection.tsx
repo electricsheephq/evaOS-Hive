@@ -7,6 +7,7 @@ import {
 } from "@/features/evaosTeams/api";
 import { NsecMaskedDisplay } from "@/features/onboarding/ui/NsecMaskedDisplay";
 import { getNsec, signOut } from "@/shared/api/tauriIdentity";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -244,9 +245,9 @@ function NativeSignOutSection() {
           <AlertDialogHeader>
             <AlertDialogTitle>Sign out and wipe all data?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will delete your identity key, all agent settings, and cached
-              data from this device, then relaunch Buzz into first-run setup.
-              This cannot be undone.
+              {desktopProductCopy(
+                "This will delete your identity key, all agent settings, and cached data from this device, then relaunch Buzz into first-run setup. This cannot be undone.",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
 

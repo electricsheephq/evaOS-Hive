@@ -61,7 +61,7 @@ import { Button } from "@/shared/ui/button";
 import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
 import { useRenderScopedReactionHydration } from "@/features/messages/lib/useRenderScopedReactionHydration";
 import type { TimelineMessage } from "@/features/messages/types";
-import { isWelcomeExperienceChannel as isWelcomeExperience } from "@/features/onboarding/welcome";
+import { isLocalWelcomeExperienceChannel as isWelcomeExperience } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";

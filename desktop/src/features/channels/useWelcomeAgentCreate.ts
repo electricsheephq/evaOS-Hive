@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { requestOpenCreateAgent } from "@/features/agents/openCreateAgentEvent";
 import { useSendMessageMutation } from "@/features/messages/hooks";
-import { isWelcomeExperienceChannel } from "@/features/onboarding/welcome";
+import { isLocalWelcomeExperienceChannel } from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { Channel, Identity } from "@/shared/api/types";
 
 type WelcomeGuideAgent = {
@@ -31,7 +31,7 @@ export function useWelcomeAgentCreate({
   const openAddAgent = React.useCallback(
     (openRegularPicker: () => void, options?: { beforeSend?: () => void }) => {
       setError(null);
-      if (isWelcomeExperienceChannel(activeChannel)) {
+      if (isLocalWelcomeExperienceChannel(activeChannel)) {
         beforeSendRef.current = options?.beforeSend ?? null;
         setIsOpen(true);
         return;

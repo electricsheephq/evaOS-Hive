@@ -43,7 +43,10 @@ export function installDesktopProductPolicy(
 }
 
 export async function loadDesktopProductPolicy(): Promise<void> {
-  if (!isTauri()) return;
+  const hasE2eBridge =
+    import.meta.env.MODE === "e2e" &&
+    Boolean((window as Window & { __BUZZ_E2E__?: unknown }).__BUZZ_E2E__);
+  if (!isTauri() && !hasE2eBridge) return;
   installDesktopProductPolicy(
     await invoke<DesktopProductPolicy>("get_desktop_product_policy"),
   );
@@ -51,6 +54,46 @@ export async function loadDesktopProductPolicy(): Promise<void> {
 
 export function desktopProductPolicy(): DesktopProductPolicy {
   return activeProductPolicy;
+}
+
+/**
+ * Replace the upstream application name in explicitly selected user-facing
+ * copy. Callers must not use this for protocol names, binary names, runtime
+ * IDs, storage paths, or legal attribution.
+ */
+export function desktopProductCopy(copy: string): string {
+  const policy = desktopProductPolicy();
+  return policy.managed ? copy.replace(/\bBuzz\b/g, policy.productName) : copy;
+}
+
+type RuntimePresentation = {
+  id: string;
+  label: string;
+  installHint: string;
+  loginHint: string | null;
+};
+
+/**
+ * Productize runtime presentation at the UI boundary while preserving native
+ * runtime IDs, commands, arguments, labels, and capabilities. Only the
+ * built-in desktop agent label changes; selected user-facing hints may mention
+ * the desktop product and therefore use the active product name.
+ */
+export function desktopRuntimePresentation<T extends RuntimePresentation>(
+  runtime: T,
+): T {
+  const policy = desktopProductPolicy();
+  if (!policy.managed) return runtime;
+  return {
+    ...runtime,
+    label:
+      runtime.id === "buzz-agent"
+        ? `${policy.productName} Agent`
+        : runtime.label,
+    installHint: desktopProductCopy(runtime.installHint),
+    loginHint:
+      runtime.loginHint === null ? null : desktopProductCopy(runtime.loginHint),
+  };
 }
 
 export function resetDesktopProductPolicyForTests(): void {

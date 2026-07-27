@@ -14,6 +14,7 @@ import {
   loadActiveCommunityId,
   loadCommunities,
   saveActiveCommunityId,
+  saveCommunitySelection,
   saveCommunities,
 } from "./communityStorage";
 import { removeSelfProfileCachesForRelay } from "@/features/profile/lib/selfProfileStorage";
@@ -24,6 +25,12 @@ import {
   clearCommunityDestinations,
   removeCommunityDestination,
 } from "./communityNavigationStorage";
+import type { EvaosTeamsEntitlement } from "@/features/evaosTeams/api";
+import {
+  forEachRetiredManagedCommunity,
+  isManagedCommunityStateReady,
+  resolveManagedCommunityState,
+} from "@/features/evaosTeams/managedCommunity";
 
 export type UpdateCommunityResult =
   | { kind: "updated"; requiresReinit: boolean }
@@ -114,6 +121,7 @@ export function applyCommunitiesOrder(
 
 export type UseCommunitiesReturn = {
   communities: Community[];
+  activeCommunityId: string | null;
   activeCommunity: Community | null;
   /** Counter bumped when the active community's config changes (relayUrl/token). */
   reinitKey: number;
@@ -124,6 +132,8 @@ export type UseCommunitiesReturn = {
   switchCommunity: (id: string) => void;
   /** Force the active community to re-init (e.g. after a deep-link reconnect). */
   reconnectCommunity: () => void;
+  /** Upsert and select the server-entitled community in managed Hive builds. */
+  reconcileManagedCommunity: (entitlement: EvaosTeamsEntitlement) => boolean;
   updateCommunity: (
     id: string,
     updates: Partial<
@@ -253,6 +263,40 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
     setReinitKey((k) => k + 1);
   }, []);
 
+  const reconcileManagedCommunity = useCallback(
+    (entitlement: EvaosTeamsEntitlement): boolean => {
+      if (
+        isManagedCommunityStateReady(
+          communitiesRef.current,
+          activeId,
+          entitlement,
+        )
+      ) {
+        return true;
+      }
+      const next = resolveManagedCommunityState(
+        communitiesRef.current,
+        entitlement,
+      );
+      if (!saveCommunitySelection(next.communities, next.activeId)) {
+        return false;
+      }
+      forEachRetiredManagedCommunity(next.retiredCommunities, (retired) => {
+        removeSelfProfileCachesForRelay(retired.relayUrl);
+        removeChannelSnapshotForRelay(retired.relayUrl);
+        removeMessageSnapshotsForRelay(retired.relayUrl);
+        clearSavedCommunitySnapshot(retired.id);
+        removeCommunityDestination(retired.id);
+      });
+      communitiesRef.current = next.communities;
+      setCommunitiesState(next.communities);
+      setActiveId(next.activeId);
+      setReinitKey((key) => key + 1);
+      return true;
+    },
+    [activeId],
+  );
+
   const updateCommunity = useCallback(
     (
       id: string,
@@ -296,6 +340,7 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
 
   return {
     communities,
+    activeCommunityId: activeId,
     activeCommunity,
     reinitKey,
     addCommunity,
@@ -303,6 +348,7 @@ function useCommunitiesInternal(): UseCommunitiesReturn {
     removeCommunity,
     switchCommunity,
     reconnectCommunity,
+    reconcileManagedCommunity,
     updateCommunity,
     reorderCommunities,
   };

@@ -14,6 +14,7 @@ import {
 } from "@/shared/api/customEmoji";
 import { pickAndUploadMedia } from "@/shared/api/tauri";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { SettingsOptionGroup } from "@/features/settings/ui/SettingsOptionGroup";
@@ -222,8 +223,9 @@ export function CustomEmojiSettingsCard() {
                   </p>
                 ) : pendingUpload === null ? (
                   <p className="text-sm font-normal text-muted-foreground">
-                    Choose an image first; Buzz will suggest a name from the
-                    filename.
+                    {desktopProductCopy(
+                      "Choose an image first; Buzz will suggest a name from the filename.",
+                    )}
                   </p>
                 ) : ownDuplicate ? (
                   <p className="text-sm font-normal text-muted-foreground">

@@ -209,22 +209,21 @@ test("@ trigger prioritizes channel members before runnable personas and other m
 
   const dropdown = autocomplete(page);
   await expect(dropdown).toBeVisible();
-  await expect(dropdown.getByText("alice")).toHaveCount(0);
+  await expect(dropdown.getByText("alice")).toBeVisible();
   await expect(dropdown.getByText("bob")).toBeVisible();
   await expect(dropdown.getByText("Fizz")).toBeVisible();
   await expect(dropdown.getByText("charlie")).toBeVisible();
   await expect(dropdown.getByText("outsider")).toHaveCount(0);
+  const aliceRow = dropdown.locator("button", { hasText: "alice" });
+  await expect(aliceRow.getByTestId("mention-agent-icon")).toBeVisible();
+  await expect(aliceRow.getByText("not in channel")).toHaveCount(0);
   const charlieRow = dropdown.locator("button", { hasText: "charlie" });
   await expect(charlieRow.getByTestId("mention-agent-icon")).toBeVisible();
   await expect(charlieRow.getByText("not in channel")).toBeVisible();
-  await expect(
-    dropdown
-      .locator("button", { hasText: "alice" })
-      .getByText("not in channel"),
-  ).not.toBeVisible();
 
   const suggestions = dropdown.locator("button");
   const suggestionText = await suggestions.allInnerTexts();
+  const aliceIndex = suggestionText.findIndex((text) => text.includes("alice"));
   const fizzIndex = suggestionText.findIndex((text) => text.includes("Fizz"));
   const bobIndex = suggestionText.findIndex((text) => text.includes("bob"));
   const charlieIndex = suggestionText.findIndex((text) =>
@@ -234,9 +233,11 @@ test("@ trigger prioritizes channel members before runnable personas and other m
     text.includes("outsider"),
   );
   expect(fizzIndex).toBeGreaterThanOrEqual(0);
+  expect(aliceIndex).toBeGreaterThanOrEqual(0);
   expect(bobIndex).toBeGreaterThanOrEqual(0);
   expect(charlieIndex).toBeGreaterThanOrEqual(0);
   expect(outsiderIndex).toEqual(-1);
+  expect(aliceIndex).toBeLessThan(fizzIndex);
   expect(bobIndex).toBeLessThan(fizzIndex);
   expect(fizzIndex).toBeLessThan(charlieIndex);
 });
@@ -953,7 +954,7 @@ test("remote bot members can be mentioned in direct rooms without local lifecycl
     .toBe(true);
 });
 
-test("remote in-channel bots with an excluding response policy stay hidden", async ({
+test("verified in-channel agents with member roles remain selectable despite stale response policy", async ({
   page,
 }) => {
   await installMockBridge(page, {
@@ -964,6 +965,7 @@ test("remote in-channel bots with an excluding response policy stay hidden", asy
         respondTo: "owner-only",
         channelNames: ["general"],
         memberChannelNames: ["general"],
+        memberRole: "member",
       },
     ],
   });
@@ -973,7 +975,9 @@ test("remote in-channel bots with an excluding response policy stay hidden", asy
 
   await page.getByTestId("message-input").fill("@Private");
 
-  await expect(autocomplete(page)).toHaveCount(0);
+  const dropdown = autocomplete(page);
+  await expect(dropdown.getByText("Private Goose")).toBeVisible();
+  await expect(dropdown.getByText("agent")).toBeVisible();
 });
 
 test("remote bots from another room stay hidden from the active room", async ({

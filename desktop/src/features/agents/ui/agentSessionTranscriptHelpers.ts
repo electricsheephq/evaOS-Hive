@@ -1,3 +1,4 @@
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import type { ObserverEvent, PromptSection } from "./agentSessionTypes";
 import {
   findBuzzToolName,
@@ -49,7 +50,9 @@ export function parsePromptText(text: string): {
   return {
     sections,
     userText: eventContent,
-    userTitle: eventKind ? titleCase(eventKind) : "Buzz event",
+    userTitle: eventKind
+      ? titleCase(eventKind)
+      : desktopProductCopy("Buzz event"),
     userPubkey: eventAuthorPubkey,
     userEventId: eventId,
   };

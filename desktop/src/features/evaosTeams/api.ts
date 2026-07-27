@@ -32,6 +32,11 @@ export type HiveCompanyAgent = {
   runtime: string;
 };
 
+export type HiveCompanyMember = {
+  publicKey: string;
+  displayName: string;
+};
+
 export function getEvaosTeamsAuthStatus() {
   return invoke<EvaosTeamsAuthStatus>("get_evaos_teams_auth_status");
 }
@@ -46,6 +51,10 @@ export function logoutEvaosTeams() {
 
 export function listHiveCompanyAgents() {
   return invoke<HiveCompanyAgent[]>("list_hive_company_agents");
+}
+
+export function listHiveCompanyMembers() {
+  return invoke<HiveCompanyMember[]>("list_hive_company_members");
 }
 
 export function evaosTeamsRefreshDelay(status: EvaosTeamsAuthStatus) {

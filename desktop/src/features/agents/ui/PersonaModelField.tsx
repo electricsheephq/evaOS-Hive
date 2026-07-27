@@ -2,6 +2,7 @@ import type * as React from "react";
 import { motion } from "motion/react";
 
 import { cn } from "@/shared/lib/cn";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { Input } from "@/shared/ui/input";
 import { PersonaModelCombobox } from "./PersonaModelCombobox";
 import type { PersonaModelDiscoveryStatus } from "./personaModelDiscoveryStatus";
@@ -92,7 +93,9 @@ export function PersonaModelField({
         ) : null}
         {showSharedComputeAutoHint ? (
           <p className="text-xs text-muted-foreground">
-            Buzz will choose an available shared model when the agent starts.
+            {desktopProductCopy(
+              "Buzz will choose an available shared model when the agent starts.",
+            )}
           </p>
         ) : null}
         {modelDiscoveryStatus ? (

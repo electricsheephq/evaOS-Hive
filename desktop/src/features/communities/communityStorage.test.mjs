@@ -5,6 +5,7 @@ import {
   clearCommunityStorage,
   initFirstCommunity,
   migrateLegacyCommunityStorage,
+  saveCommunitySelection,
   shouldAutoConnectDefaultRelay,
 } from "./communityStorage.ts";
 
@@ -101,4 +102,37 @@ test("clearCommunityStorage removes new and legacy state", () => {
   migrateLegacyCommunityStorage(storage);
 
   assert.equal(storage.length, 0);
+});
+
+test("managed community selection rolls back when the active ID cannot persist", () => {
+  const previousCommunities = '[{"id":"previous"}]';
+  const storage = createMemoryStorage({
+    "buzz-communities": previousCommunities,
+    "buzz-active-community-id": "previous",
+  });
+  storage.setItem = (key, value) => {
+    if (key === "buzz-active-community-id") {
+      throw new Error("QuotaExceededError");
+    }
+    storage.values.set(key, String(value));
+  };
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(
+    saveCommunitySelection(
+      [
+        {
+          id: "managed",
+          name: "Hive",
+          relayUrl: "wss://teams.example.invalid",
+          addedAt: "2026-07-26T00:00:00.000Z",
+        },
+      ],
+      "managed",
+    ),
+    false,
+  );
+  assert.equal(storage.getItem("buzz-communities"), previousCommunities);
+  assert.equal(storage.getItem("buzz-active-community-id"), "previous");
 });

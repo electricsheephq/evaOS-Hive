@@ -12,9 +12,13 @@ import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { Button } from "@/shared/ui/button";
 import { ProductMark } from "@/shared/product/ProductMark";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
+import { useCommunities } from "@/features/communities/useCommunities";
+import { isManagedCommunityStateReady } from "@/features/evaosTeams/managedCommunity";
 
 export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const tauri = isTauri();
+  const { communities, activeCommunityId, reconcileManagedCommunity } =
+    useCommunities();
   const [status, setStatus] = useState<EvaosTeamsAuthStatus | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +52,51 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [refresh, status]);
 
+  const activeEntitlement =
+    status?.phase === "active" ? status.entitlement : undefined;
+  let managedCommunityReady = false;
+  let managedCommunityError: string | null = null;
+  if (activeEntitlement) {
+    try {
+      managedCommunityReady = isManagedCommunityStateReady(
+        communities,
+        activeCommunityId,
+        activeEntitlement,
+      );
+    } catch (communityError) {
+      managedCommunityError =
+        communityError instanceof Error
+          ? communityError.message
+          : String(communityError);
+    }
+  }
+
+  const reconcileActiveCommunity = useCallback(() => {
+    if (!activeEntitlement) return;
+    try {
+      if (!reconcileManagedCommunity(activeEntitlement)) {
+        setError("Hive could not save the selected company community.");
+      }
+    } catch (communityError) {
+      setError(
+        communityError instanceof Error
+          ? communityError.message
+          : String(communityError),
+      );
+    }
+  }, [activeEntitlement, reconcileManagedCommunity]);
+
+  useEffect(() => {
+    if (!activeEntitlement || managedCommunityReady || managedCommunityError)
+      return;
+    reconcileActiveCommunity();
+  }, [
+    activeEntitlement,
+    managedCommunityError,
+    managedCommunityReady,
+    reconcileActiveCommunity,
+  ]);
+
   async function run(action: () => Promise<EvaosTeamsAuthStatus>) {
     setWorking(true);
     setError(null);
@@ -68,15 +117,21 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   if (
     !tauri ||
     (status && !status.managed) ||
-    (status?.phase === "active" && status.entitlement)
+    (activeEntitlement && managedCommunityReady)
   )
     return children;
-  const copy = status
-    ? evaosTeamsStatusCopy(status)
-    : {
-        title: "Checking managed access",
-        body: "Hive is checking Keychain and your Electric Sheep access.",
-      };
+  const copy =
+    activeEntitlement && !managedCommunityReady
+      ? {
+          title: "Opening your Hive community",
+          body: "Electric Sheep verified this device. Hive is selecting the authorized company community.",
+        }
+      : status
+        ? evaosTeamsStatusCopy(status)
+        : {
+            title: "Checking managed access",
+            body: "Hive is checking Keychain and your Electric Sheep access.",
+          };
   const maySignIn =
     status?.phase === "signed_out" || status?.phase === "reauth_required";
 
@@ -97,12 +152,12 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
           {copy.body}
         </p>
 
-        {error ? (
+        {error || managedCommunityError ? (
           <p
             className="mt-5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
             role="alert"
           >
-            {error}
+            {error ?? managedCommunityError}
           </p>
         ) : null}
 
@@ -123,6 +178,15 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
               disabled={working}
               variant="outline"
               onClick={() => void run(async () => (await refresh()) ?? status)}
+            >
+              Try again
+            </Button>
+          ) : null}
+          {activeEntitlement && !managedCommunityReady ? (
+            <Button
+              disabled={working || Boolean(managedCommunityError)}
+              variant="outline"
+              onClick={reconcileActiveCommunity}
             >
               Try again
             </Button>

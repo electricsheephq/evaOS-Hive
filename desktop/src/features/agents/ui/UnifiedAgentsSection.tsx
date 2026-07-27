@@ -26,7 +26,11 @@ import { AgentIdentityCard } from "./AgentIdentityCard";
 import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { PersonaActionsMenu } from "./PersonaActionsMenu";
-import { buildUnifiedGroups, pickProfileAgent } from "./unifiedAgentGroups";
+import {
+  buildUnifiedGroups,
+  filterManagedLocalWelcomeRecords,
+  pickProfileAgent,
+} from "./unifiedAgentGroups";
 
 type UnifiedAgentsSectionProps = {
   defaultModel: string;
@@ -64,6 +68,8 @@ type UnifiedAgentsSectionProps = {
   onDeletePersona: (persona: AgentPersona) => void;
   onImportSnapshotFile: (fileBytes: number[], fileName: string) => void;
   companyAgents: RelayAgent[];
+  companyAgentsError: Error | null;
+  isCompanyAgentsLoading: boolean;
   onRefreshCompanyAgents: () => void;
 };
 
@@ -101,13 +107,19 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onDeletePersona,
     onImportSnapshotFile,
     companyAgents,
+    companyAgentsError,
+    isCompanyAgentsLoading,
     onRefreshCompanyAgents,
   } = props;
   const isManagedHive = desktopProductPolicy().managed;
 
   const { groups, ungrouped, unknown } = React.useMemo(
-    () => buildUnifiedGroups(personas, agents),
-    [personas, agents],
+    () =>
+      filterManagedLocalWelcomeRecords(
+        buildUnifiedGroups(personas, agents),
+        isManagedHive,
+      ),
+    [agents, isManagedHive, personas],
   );
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const {
@@ -202,6 +214,8 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
           {isManagedHive ? (
             <CompanyVmAgentsSection
               agents={companyAgents}
+              error={companyAgentsError}
+              isLoading={isCompanyAgentsLoading}
               onOpenAgentProfile={onOpenAgentProfile}
             />
           ) : null}
@@ -503,9 +517,13 @@ function NewAgentCard({
 
 function CompanyVmAgentsSection({
   agents,
+  error,
+  isLoading,
   onOpenAgentProfile,
 }: {
   agents: RelayAgent[];
+  error: Error | null;
+  isLoading: boolean;
   onOpenAgentProfile: (
     pubkey: string,
     options?: ProfilePanelOpenOptions,
@@ -520,21 +538,20 @@ function CompanyVmAgentsSection({
           remains in Hermes.
         </p>
       </div>
-      {agents.length > 0 ? (
+      {isLoading ? (
+        <LoadingSkeleton />
+      ) : error ? (
+        <p className="px-1 text-sm text-destructive">
+          Company VM agents could not be loaded. Refresh the registered VM
+          agents to try again.
+        </p>
+      ) : agents.length > 0 ? (
         <div className={AGENT_CARD_GRID_CLASS}>
           {agents.map((agent) => (
-            <AgentIdentityCard
-              ariaLabel={`${agent.name} company VM agent profile`}
-              dataTestId={`company-vm-agent-${agent.pubkey}`}
+            <CompanyVmAgentCard
+              agent={agent}
               key={agent.pubkey}
-              label={agent.name}
-              modelLabel={`${agent.agentType} · ${agent.status}`}
-              onClick={() => onOpenAgentProfile(agent.pubkey)}
-              statusBadge={
-                <Badge className="mt-1 w-fit" variant="outline">
-                  VM hosted
-                </Badge>
-              }
+              onOpenAgentProfile={onOpenAgentProfile}
             />
           ))}
         </div>
@@ -545,6 +562,36 @@ function CompanyVmAgentsSection({
         </p>
       )}
     </div>
+  );
+}
+
+function CompanyVmAgentCard({
+  agent,
+  onOpenAgentProfile,
+}: {
+  agent: RelayAgent;
+  onOpenAgentProfile: (
+    pubkey: string,
+    options?: ProfilePanelOpenOptions,
+  ) => void;
+}) {
+  const profileQuery = useUserProfileQuery(agent.pubkey);
+  const label = profileQuery.data?.displayName?.trim() || agent.name;
+
+  return (
+    <AgentIdentityCard
+      ariaLabel={`${label} company VM agent profile`}
+      avatarUrl={profileQuery.data?.avatarUrl}
+      dataTestId={`company-vm-agent-${agent.pubkey}`}
+      label={label}
+      modelLabel={`${agent.agentType} · ${agent.status}`}
+      onClick={() => onOpenAgentProfile(agent.pubkey)}
+      statusBadge={
+        <Badge className="mt-1 w-fit" variant="outline">
+          VM hosted
+        </Badge>
+      }
+    />
   );
 }
 

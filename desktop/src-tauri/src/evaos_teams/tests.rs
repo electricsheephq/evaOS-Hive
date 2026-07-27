@@ -30,10 +30,12 @@ fn challenge(keys: &Keys) -> ChallengeResponse {
 
 #[test]
 fn login_url_is_account_selecting_and_callback_bound() {
+    let verifier = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let challenge = device_code_challenge(verifier);
     let url = dashboard_login_url(
         "http://127.0.0.1:4567/auth/callback",
         "state-12345678",
-        "AABBCCDDEEFF00112233445566778899",
+        &challenge,
     )
     .unwrap();
     let pairs: HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -42,6 +44,9 @@ fn login_url_is_account_selecting_and_callback_bound() {
     assert_eq!(pairs.get("callback_scheme").unwrap(), "evaos-teams");
     assert_eq!(pairs.get("switch_account").unwrap(), "1");
     assert_eq!(pairs.get("prompt").unwrap(), "select_account");
+    assert_eq!(pairs.get("desktop_code_challenge").unwrap(), &challenge);
+    assert_ne!(pairs.get("desktop_code_challenge").unwrap(), verifier);
+    assert!(!pairs.contains_key("fresh"));
     assert_eq!(
         pairs.get("desktop_callback").unwrap(),
         "http://127.0.0.1:4567/auth/callback"
@@ -91,8 +96,7 @@ fn altered_challenge_template_is_rejected() {
 }
 
 #[test]
-fn callback_requires_exact_state_and_normalized_code() {
-    let expected_code = "AABBCCDDEEFF00112233445566778899";
+fn callback_requires_exact_state_and_a_valid_server_code() {
     let expected_state = "state-12345678";
     let valid = HashMap::from([
         ("desktop_auth_state".to_string(), expected_state.to_string()),
@@ -102,18 +106,15 @@ fn callback_requires_exact_state_and_normalized_code() {
         ),
     ]);
     assert_eq!(
-        callback_device_code(&valid, expected_state, expected_code).unwrap(),
-        expected_code
+        callback_device_code(&valid, expected_state).unwrap(),
+        "AABBCCDDEEFF00112233445566778899"
     );
     let mut wrong_state = valid.clone();
     wrong_state.insert("desktop_auth_state".to_string(), "other-state".to_string());
-    assert!(callback_device_code(&wrong_state, expected_state, expected_code).is_err());
-    let mut wrong_code = valid;
-    wrong_code.insert(
-        "device_code".to_string(),
-        "BBBBCCDDEEFF00112233445566778899".to_string(),
-    );
-    assert!(callback_device_code(&wrong_code, expected_state, expected_code).is_err());
+    assert!(callback_device_code(&wrong_state, expected_state).is_err());
+    let mut invalid_code = valid;
+    invalid_code.insert("device_code".to_string(), "short".to_string());
+    assert!(callback_device_code(&invalid_code, expected_state).is_err());
 }
 
 #[test]
@@ -166,6 +167,52 @@ fn entitlement_rejects_wrong_key_expiry_and_relay_injection() {
         &public_key,
     )
     .is_err());
+}
+
+#[test]
+fn entitlement_deserializes_server_snake_case_and_serializes_renderer_camel_case() {
+    let response: EntitlementResponse = serde_json::from_value(serde_json::json!({
+        "status": "active",
+        "entitlement": {
+            "community_id": "10000000-0000-4000-8000-000000000003",
+            "relay_host": "https://relay.example.com",
+            "public_key": "a".repeat(64),
+            "role": "member",
+            "access_revision": 7,
+            "expires_at": "2026-07-26T16:00:00Z",
+            "refresh_after_seconds": 300,
+            "assignment_status": "assigned",
+            "reconciliation_status": "current"
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        response.entitlement.community_id,
+        "10000000-0000-4000-8000-000000000003"
+    );
+
+    let renderer = serde_json::to_value(response.entitlement).unwrap();
+    assert_eq!(
+        renderer["communityId"],
+        "10000000-0000-4000-8000-000000000003"
+    );
+    assert_eq!(renderer["refreshAfterSeconds"], 300);
+    assert!(renderer.get("community_id").is_none());
+    assert!(renderer.get("refresh_after_seconds").is_none());
+
+    let verification: EntitlementResponse = serde_json::from_value(serde_json::json!({
+        "status": "active",
+        "entitlement": {
+            "community_id": "10000000-0000-4000-8000-000000000003",
+            "relay_host": "https://relay.example.com",
+            "role": "member",
+            "access_revision": 7,
+            "expires_at": "2026-07-26T16:00:00Z",
+            "refresh_after_seconds": 300
+        }
+    }))
+    .unwrap();
+    assert!(verification.entitlement.public_key.is_none());
 }
 
 #[test]
@@ -231,6 +278,21 @@ fn logout_retry_treats_only_missing_remote_sessions_as_complete() {
 #[test]
 fn device_code_normalization_matches_dashboard_contract() {
     assert_eq!(normalize_device_code("aabb-ccdd eeff"), "AABBCCDDEEFF");
+}
+
+#[test]
+fn device_code_verifier_is_bound_by_a_one_way_challenge() {
+    let verifier = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let challenge = device_code_challenge(verifier);
+    assert_eq!(challenge.len(), 64);
+    assert!(challenge
+        .chars()
+        .all(|character| character.is_ascii_hexdigit()));
+    assert_ne!(challenge, verifier);
+    assert_ne!(
+        challenge,
+        device_code_challenge("1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    );
 }
 
 #[test]
@@ -426,6 +488,37 @@ fn company_agent_catalog_drops_invalid_and_duplicate_rows() {
 }
 
 #[test]
+fn company_member_catalog_drops_unbound_invalid_and_duplicate_rows() {
+    let public_key = "a".repeat(64);
+    let members = sanitize_company_members(vec![
+        RawHiveCompanyMember {
+            public_key: Some(public_key.clone()),
+            display_name: "  Andrew  ".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: Some(public_key),
+            display_name: "duplicate".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: None,
+            display_name: "not enrolled".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: Some("B".repeat(64)),
+            display_name: "uppercase key".to_string(),
+        },
+        RawHiveCompanyMember {
+            public_key: Some("c".repeat(64)),
+            display_name: "in\nvalid".to_string(),
+        },
+    ]);
+
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].display_name, "Andrew");
+    assert_eq!(members[0].public_key, "a".repeat(64));
+}
+
+#[test]
 fn public_company_agent_projection_contains_no_session_or_membership_data() {
     let agent = HiveCompanyAgent {
         agent_instance_id: "10000000-0000-4000-8000-000000000001".to_string(),
@@ -438,4 +531,18 @@ fn public_company_agent_projection_contains_no_session_or_membership_data() {
     assert!(!json.contains("membership"));
     assert!(!json.contains("room"));
     assert!(!json.contains("email"));
+}
+
+#[test]
+fn public_company_member_projection_contains_no_private_or_membership_data() {
+    let member = HiveCompanyMember {
+        public_key: "a".repeat(64),
+        display_name: "Andrew".to_string(),
+    };
+    let json = serde_json::to_string(&member).unwrap();
+    assert!(!json.contains("desktop_session"));
+    assert!(!json.contains("membership"));
+    assert!(!json.contains("room"));
+    assert!(!json.contains("email"));
+    assert!(!json.contains("nsec"));
 }

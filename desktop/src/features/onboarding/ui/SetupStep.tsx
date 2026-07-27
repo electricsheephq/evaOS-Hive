@@ -12,6 +12,7 @@ import { describeResolvedCommand } from "@/features/agents/ui/agentUi";
 import type { AcpAuthMethod, AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { getInstallErrorMessage } from "@/shared/lib/installError";
 import { cn } from "@/shared/lib/cn";
+import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
@@ -624,8 +625,9 @@ function RuntimeProvidersSection({
           Set up your agent harnesses
         </h1>
         <p className="mx-auto mt-3 max-w-[760px] text-sm leading-6 text-foreground/90">
-          Buzz checks for command-line harnesses on this machine. Install the
-          CLI or sign in to at least one to continue.
+          {desktopProductCopy(
+            "Buzz checks for command-line harnesses on this machine. Install the CLI or sign in to at least one to continue.",
+          )}
         </p>
       </div>
 

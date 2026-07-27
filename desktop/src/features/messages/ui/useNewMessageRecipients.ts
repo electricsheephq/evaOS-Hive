@@ -1,12 +1,16 @@
 import * as React from "react";
 
 import {
+  useHiveCompanyAgentsQuery,
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
+import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
+import { retainManagedSelectedRecipients } from "@/features/evaosTeams/lib/companyMemberDirectory";
 import {
   coalesceAgentAutocompleteCandidates,
-  getMentionableAgentPubkeys,
+  getDirectMessageAgentPubkeys,
   getSharedChannelIds,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { useChannelsQuery } from "@/features/channels/hooks";
@@ -86,6 +90,7 @@ export function useNewMessageRecipients({
   );
 
   const identityQuery = useIdentityQuery();
+  const companyAgentsQuery = useHiveCompanyAgentsQuery({ enabled: active });
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: active });
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: active });
   const channelsQuery = useChannelsQuery({ enabled: active });
@@ -96,6 +101,27 @@ export function useNewMessageRecipients({
     limit: DIRECTORY_PAGE_SIZE,
   });
   const userSearchResults = useFlattenedUserSearchResults(userSearchQuery.data);
+  const companyDirectory = useHiveCompanyUserDirectory({
+    enabled: active,
+    relayUsers: userSearchResults,
+  });
+  React.useEffect(() => {
+    if (!active) return;
+    setSelectedUsers((current) => {
+      const retained = retainManagedSelectedRecipients({
+        managed: companyDirectory.managed,
+        memberPubkeys: companyDirectory.memberPubkeys,
+        selected: current,
+        settled: companyDirectory.settled,
+      });
+      return retained.length === current.length ? current : retained;
+    });
+  }, [
+    active,
+    companyDirectory.managed,
+    companyDirectory.memberPubkeys,
+    companyDirectory.settled,
+  ]);
   const isArchivedDiscovery = useIsArchivedPredicate();
 
   const searchResults = React.useMemo(() => {
@@ -109,7 +135,10 @@ export function useNewMessageRecipients({
     const currentPubkeyNormalized = currentPubkey
       ? normalizePubkey(currentPubkey)
       : null;
-    const eligibleAgentPubkeys = getMentionableAgentPubkeys({
+    const eligibleAgentPubkeys = getDirectMessageAgentPubkeys({
+      companyAgentPubkeys: (companyAgentsQuery.data ?? []).map(
+        (agent) => agent.publicKey,
+      ),
       currentPubkey,
       managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
         (agent) => agent.pubkey,
@@ -146,11 +175,9 @@ export function useNewMessageRecipients({
         pubkey,
         avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
         displayName:
-          candidate.isAgent && candidateName
-            ? candidateName
-            : current.isAgent
-              ? currentName
-              : (currentName ?? candidateName),
+          current.isAgent || candidate.isAgent
+            ? preferIdentityDisplayName(currentName, candidateName, pubkey)
+            : (currentName ?? candidateName),
         nip05Handle: current.nip05Handle ?? candidate.nip05Handle ?? null,
         ownerPubkey: current.ownerPubkey ?? candidate.ownerPubkey ?? null,
         isAgent: current.isAgent || candidate.isAgent,
@@ -160,7 +187,7 @@ export function useNewMessageRecipients({
       });
     };
 
-    for (const user of userSearchResults) {
+    for (const user of companyDirectory.candidates) {
       addCandidate(candidateWithAgentMetadata(user, managedAgentsByPubkey), {
         includeSelected: deferredSearchQuery.length > 0,
       });
@@ -175,6 +202,20 @@ export function useNewMessageRecipients({
         {
           pubkey: agent.pubkey,
           displayName: agent.name,
+          avatarUrl: null,
+          nip05Handle: null,
+          ownerPubkey: null,
+          isAgent: true,
+        },
+        { includeSelected: deferredSearchQuery.length > 0 },
+      );
+    }
+
+    for (const agent of companyAgentsQuery.data ?? []) {
+      addCandidate(
+        {
+          pubkey: agent.publicKey,
+          displayName: agent.displayName,
           avatarUrl: null,
           nip05Handle: null,
           ownerPubkey: null,
@@ -217,17 +258,20 @@ export function useNewMessageRecipients({
     });
   }, [
     channelsQuery.data,
+    companyAgentsQuery.data,
+    companyDirectory.candidates,
     currentPubkey,
     deferredSearchQuery,
     isArchivedDiscovery,
     managedAgentsQuery.data,
     relayAgentsQuery.data,
     selectedPubkeys,
-    userSearchResults,
   ]);
 
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
+    companyAgentsQuery.isLoading ||
+    companyDirectory.isLoading ||
     managedAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;
@@ -319,7 +363,11 @@ export function useNewMessageRecipients({
     removeUser,
     reset,
     searchError:
-      userSearchQuery.error instanceof Error ? userSearchQuery.error : null,
+      companyDirectory.error instanceof Error
+        ? companyDirectory.error
+        : userSearchQuery.error instanceof Error
+          ? userSearchQuery.error
+          : null,
     searchQuery,
     searchResults,
     selectUser,

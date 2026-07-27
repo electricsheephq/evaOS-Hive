@@ -9,6 +9,8 @@ import {
   useChannelMembersQuery,
   useChannelsQuery,
 } from "@/features/channels/hooks";
+import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
+import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import {
@@ -129,6 +131,10 @@ export function useMentions(
     () => userSearchQuery.data?.pages.flatMap((page) => page.users) ?? [],
     [userSearchQuery.data],
   );
+  const companyDirectory = useHiveCompanyUserDirectory({
+    enabled: true,
+    relayUsers: userSearchResults,
+  });
   const managedAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
@@ -176,15 +182,6 @@ export function useMentions(
           normalizePubkey(agent.pubkey),
           agent.name,
         ]),
-      ),
-    [relayAgentsQuery.data],
-  );
-  const directoryAgentPubkeys = React.useMemo(
-    () =>
-      new Set(
-        (relayAgentsQuery.data ?? []).map((agent) =>
-          normalizePubkey(agent.pubkey),
-        ),
       ),
     [relayAgentsQuery.data],
   );
@@ -243,6 +240,7 @@ export function useMentions(
 
     const addCandidate = (candidate: MentionCandidate & { pubkey: string }) => {
       const pubkey = normalizePubkey(candidate.pubkey);
+      if (!companyDirectory.allows(candidate)) return;
       if (isArchivedDiscovery(pubkey)) {
         return;
       }
@@ -255,7 +253,6 @@ export function useMentions(
           isMember: candidate.isMember === true,
           pubkey,
           mentionableAgentPubkeys,
-          directoryAgentPubkeys,
         })
       ) {
         return;
@@ -270,11 +267,13 @@ export function useMentions(
         ...current,
         avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
         displayName:
-          current.isAgent && !candidate.isAgent
-            ? current.displayName
-            : candidate.isAgent && !current.isAgent
-              ? (candidate.displayName ?? current.displayName)
-              : (current.displayName ?? candidate.displayName),
+          current.isAgent || candidate.isAgent
+            ? preferIdentityDisplayName(
+                current.displayName,
+                candidate.displayName,
+                pubkey,
+              )
+            : (current.displayName ?? candidate.displayName),
         isAgent: current.isAgent || candidate.isAgent,
         isMember: current.isMember || candidate.isMember,
         personaId: current.personaId ?? candidate.personaId,
@@ -306,10 +305,9 @@ export function useMentions(
         kind: "identity",
         pubkey,
         displayName:
-          member.displayName?.trim() ||
-          agentName ||
-          profile?.displayName?.trim() ||
-          profile?.nip05Handle?.trim() ||
+          preferIdentityDisplayName(profile?.displayName, agentName, pubkey) ??
+          preferIdentityDisplayName(member.displayName, null, pubkey) ??
+          profile?.nip05Handle?.trim() ??
           null,
         avatarUrl: profile?.avatarUrl ?? null,
         isMember: true,
@@ -362,7 +360,7 @@ export function useMentions(
     }
 
     if (canSearchGlobalUsers) {
-      for (const user of userSearchResults) {
+      for (const user of companyDirectory.candidates) {
         const pubkey = normalizePubkey(user.pubkey);
         addCandidate({
           kind: "identity",
@@ -412,10 +410,10 @@ export function useMentions(
   }, [
     activePersonaById,
     activePersonas,
-    userSearchResults,
     canSearchGlobalUsers,
+    companyDirectory.allows,
+    companyDirectory.candidates,
     currentPubkey,
-    directoryAgentPubkeys,
     isArchivedDiscovery,
     managedAgentNamesByPubkey,
     managedAgentPersonaIds,

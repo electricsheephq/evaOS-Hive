@@ -98,6 +98,7 @@ type MockRelayAgentSeed = {
   channelNames?: string[];
   channelIds?: string[];
   memberChannelNames?: string[];
+  memberRole?: "bot" | "member";
   status?: PresenceStatus;
 };
 
@@ -132,9 +133,24 @@ type MockSearchProfileSeed = {
   isAgent?: boolean;
 };
 
+type MockDesktopProductPolicy = {
+  managed: boolean;
+  productName: string;
+  version: string;
+  bundleIdentifier: string;
+  deepLinkScheme: string;
+  artifactName: string;
+  updateChannel: string;
+  updaterEnabled: boolean;
+  upstreamHostedServicesEnabled: boolean;
+  originAttribution: string;
+};
+
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /** Desktop product policy returned by the Tauri bridge. */
+    desktopProductPolicy?: MockDesktopProductPolicy;
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -2076,7 +2092,7 @@ function resetMockRelayAgents(config?: E2eConfig) {
       }
       channel.members.push({
         pubkey: seed.pubkey,
-        role: "bot",
+        role: seed.memberRole ?? "bot",
         is_agent: true,
         joined_at: new Date().toISOString(),
         display_name: seed.name,
@@ -9307,19 +9323,21 @@ export function maybeInstallE2eTauriMocks() {
 
     switch (command) {
       case "get_desktop_product_policy":
-        return {
-          managed: false,
-          productName: "Buzz",
-          version: "0.4.26",
-          bundleIdentifier: "xyz.block.buzz.app",
-          deepLinkScheme: "buzz",
-          artifactName: "",
-          updateChannel: "upstream",
-          updaterEnabled: false,
-          upstreamHostedServicesEnabled: true,
-          originAttribution:
-            "Buzz by Block, licensed under the Apache License 2.0.",
-        };
+        return (
+          activeConfig?.mock?.desktopProductPolicy ?? {
+            managed: false,
+            productName: "Buzz",
+            version: "0.4.26",
+            bundleIdentifier: "xyz.block.buzz.app",
+            deepLinkScheme: "buzz",
+            artifactName: "",
+            updateChannel: "upstream",
+            updaterEnabled: false,
+            upstreamHostedServicesEnabled: true,
+            originAttribution:
+              "Buzz by Block, licensed under the Apache License 2.0.",
+          }
+        );
       case "get_evaos_teams_auth_status":
         return {
           managed: false,
@@ -10092,6 +10110,8 @@ export function maybeInstallE2eTauriMocks() {
       case "list_relay_agents":
         return handleListRelayAgents(activeConfig);
       case "list_hive_company_agents":
+        return [];
+      case "list_hive_company_members":
         return [];
       case "list_personas":
         return handleListPersonas();

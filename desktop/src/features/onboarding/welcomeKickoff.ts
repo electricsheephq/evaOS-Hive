@@ -9,6 +9,7 @@ import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { clearActiveTurnsForAgentOnStop } from "@/features/agents/managedAgentRuntimeHooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { welcomeKickoffMarker } from "@/features/onboarding/devFreshOnboarding";
+import { shouldUseLocalWelcomeTeam } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { resolveAgentReadiness } from "@/features/onboarding/ui/agentReadiness";
 import {
   ensureWelcomeTeam,
@@ -29,6 +30,7 @@ import { getPresence, listManagedAgents } from "@/shared/api/tauri";
 import { getProfile } from "@/shared/api/tauriProfiles";
 import type { Channel, ManagedAgent, RelayEvent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { useQueryClient } from "@tanstack/react-query";
 
 export const WELCOME_KICKOFF_OPENER_MARKER = "buzz-welcome-kickoff.opener.v1";
@@ -497,6 +499,9 @@ export function useWelcomeKickoff(
   const runtimesQuery = useAcpRuntimesQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
   const { globalConfig, isLoading: configLoading } = useGlobalAgentConfig();
+  const localWelcomeTeamEnabled = shouldUseLocalWelcomeTeam(
+    desktopProductPolicy().managed,
+  );
   const channelId = activeChannel?.id ?? null;
   const isActiveWelcome = isWelcomeChannel(activeChannel);
   const focusedWelcomeChannelRef = React.useRef<string | null>(null);
@@ -525,7 +530,9 @@ export function useWelcomeKickoff(
   >(null);
   const kickoffResolved = channelId !== null && resolvedChannelId === channelId;
   const openerThreadQuery = useThreadReplies(
-    isActiveWelcome && !kickoffResolved ? activeChannel : null,
+    localWelcomeTeamEnabled && isActiveWelcome && !kickoffResolved
+      ? activeChannel
+      : null,
     openerEvent?.id ?? null,
   );
   const kickoffEvents = React.useMemo(
@@ -553,6 +560,7 @@ export function useWelcomeKickoff(
   );
   React.useEffect(() => {
     if (
+      !localWelcomeTeamEnabled ||
       !channelId ||
       !isActiveWelcome ||
       configLoading ||
@@ -690,6 +698,7 @@ export function useWelcomeKickoff(
     channelId,
     configLoading,
     isActiveWelcome,
+    localWelcomeTeamEnabled,
     onKickoffOpenerPosted,
     queryClient,
     readiness,
@@ -712,6 +721,7 @@ export function useWelcomeKickoff(
 
   React.useEffect(() => {
     if (
+      !localWelcomeTeamEnabled ||
       !channelId ||
       !isActiveWelcome ||
       !agentSet ||
@@ -850,6 +860,7 @@ export function useWelcomeKickoff(
     kickoffResolved,
     channelId,
     isActiveWelcome,
+    localWelcomeTeamEnabled,
     queryClient,
   ]);
 }
