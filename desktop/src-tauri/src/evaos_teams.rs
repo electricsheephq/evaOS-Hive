@@ -26,10 +26,14 @@ use crate::{app_state::AppState, secret_store::SecretStore};
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
 
+mod company_agent_policy;
 mod company_directory;
 mod device_code;
 mod login;
 
+pub(crate) use company_agent_policy::{
+    get_hive_company_agent_policy, set_hive_company_agent_policy,
+};
 use company_directory::{
     sanitize_company_agents, sanitize_company_members, CollaborationProjection, HiveCompanyAgent,
     HiveCompanyMember,
@@ -941,10 +945,10 @@ pub(crate) async fn list_hive_company_agents(
     }
 }
 
-/// Return the active company's public human directory. Only durable public
-/// keys and display names cross the Tauri boundary; membership IDs, email,
-/// seats, rooms, Desktop sessions, and private identity data stay server-side.
-/// Native Buzz remains responsible for signing and publishing collaboration.
+/// Return the active company's public human directory. Durable public keys,
+/// display names, and opaque membership selectors cross the Tauri boundary;
+/// email, seats, rooms, Desktop sessions, and private identity data stay
+/// server-side. Native Buzz remains responsible for collaboration signing.
 #[tauri::command]
 pub(crate) async fn list_hive_company_members(
     state: State<'_, EvaosTeamsState>,

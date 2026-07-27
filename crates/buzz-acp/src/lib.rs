@@ -9,6 +9,7 @@ mod pool;
 mod pool_lifecycle;
 mod queue;
 mod relay;
+mod responder_policy;
 mod session_store;
 mod setup_mode;
 mod usage;
@@ -44,10 +45,229 @@ use pool::{
 use pool_lifecycle::PoolLifecycle;
 use queue::{CancelReason, EventQueue, FlushBatch, QueuedEvent, ThreadTags};
 use relay::{HarnessRelay, RelayEventPublisher};
+use responder_policy::{PolicyAck, ResponderPolicy};
 use session_store::{SessionScope, SessionStore};
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
+
+enum PolicyHttpEvent {
+    Pulled(Result<serde_json::Value, String>),
+    Acknowledged {
+        ack: PolicyAck,
+        result: Result<(), String>,
+    },
+}
+
+fn managed_policy_effective_rooms(
+    policy: &ResponderPolicy,
+    native_non_dm_rooms: &HashSet<Uuid>,
+    static_filters: &HashMap<Uuid, config::ChannelFilter>,
+) -> HashSet<Uuid> {
+    policy
+        .selected_rooms()
+        .into_iter()
+        .filter(|room| native_non_dm_rooms.contains(room) && static_filters.contains_key(room))
+        .collect()
+}
+
+fn register_managed_policy_room_filter(
+    room: Uuid,
+    is_dm: bool,
+    filter: Option<config::ChannelFilter>,
+    static_filters: &mut HashMap<Uuid, config::ChannelFilter>,
+) -> Option<config::ChannelFilter> {
+    if is_dm {
+        return None;
+    }
+    let filter = filter?;
+    static_filters.insert(room, filter.clone());
+    Some(filter)
+}
+
+fn managed_policy_permits(
+    policy: &ResponderPolicy,
+    native_non_dm_rooms: &HashSet<Uuid>,
+    room_id: Uuid,
+    author: &str,
+    is_dm: bool,
+    now: std::time::Instant,
+) -> bool {
+    native_non_dm_rooms.contains(&room_id) && policy.permits(room_id, author, is_dm, now)
+}
+
+struct ManagedPolicySubscriptions<'a> {
+    native_non_dm_rooms: &'a HashSet<Uuid>,
+    static_filters: &'a HashMap<Uuid, config::ChannelFilter>,
+    subscribed_rooms: &'a mut HashSet<Uuid>,
+    queue: &'a mut EventQueue,
+    typing_channels: &'a mut HashMap<Uuid, ThreadTags>,
+}
+
+async fn reconcile_managed_policy_subscriptions(
+    relay: &mut HarnessRelay,
+    policy: &ResponderPolicy,
+    state: ManagedPolicySubscriptions<'_>,
+    drain_existing: bool,
+) -> bool {
+    let ManagedPolicySubscriptions {
+        native_non_dm_rooms,
+        static_filters,
+        subscribed_rooms,
+        queue,
+        typing_channels,
+    } = state;
+    if drain_existing {
+        for room in subscribed_rooms.iter().copied().collect::<Vec<_>>() {
+            queue.drain_channel(room);
+            typing_channels.remove(&room);
+        }
+    }
+
+    let desired = managed_policy_effective_rooms(policy, native_non_dm_rooms, static_filters);
+    let mut reconciled = true;
+    for room in subscribed_rooms
+        .difference(&desired)
+        .copied()
+        .collect::<Vec<_>>()
+    {
+        if let Err(error) = relay.unsubscribe_channel(room).await {
+            tracing::warn!(channel_id = %room, "managed policy unsubscribe failed: {error}");
+            reconciled = false;
+        }
+        subscribed_rooms.remove(&room);
+    }
+
+    let replay_since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    for room in desired
+        .difference(subscribed_rooms)
+        .copied()
+        .collect::<Vec<_>>()
+    {
+        let Some(filter) = static_filters.get(&room).cloned() else {
+            continue;
+        };
+        if let Err(error) = relay
+            .subscribe_channel_from(room, filter, Some(replay_since))
+            .await
+        {
+            tracing::warn!(channel_id = %room, "managed policy subscribe failed: {error}");
+            reconciled = false;
+        } else {
+            subscribed_rooms.insert(room);
+        }
+    }
+    reconciled
+}
+
+#[cfg(test)]
+mod managed_policy_subscription_tests {
+    use super::*;
+
+    #[test]
+    fn policy_rooms_intersect_native_membership_and_static_rules() {
+        let allowed = Uuid::new_v4();
+        let foreign = Uuid::new_v4();
+        let static_only = Uuid::new_v4();
+        let mut policy = ResponderPolicy::new(Some(
+            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
+        ));
+        policy.apply_pull(
+            serde_json::json!({
+                "schema_version": "hive.company_agent_responder_policy.v1",
+                "desired_revision": 1,
+                "allowed_room_ids": [allowed.to_string(), foreign.to_string()],
+                "allowed_author_public_keys": ["a".repeat(64)],
+            }),
+            std::time::Instant::now(),
+        );
+        let native = HashSet::from([allowed, static_only]);
+        let filter = config::ChannelFilter {
+            kinds: None,
+            require_mention: true,
+        };
+        let static_filters = HashMap::from([
+            (allowed, filter.clone()),
+            (foreign, filter.clone()),
+            (static_only, filter),
+        ]);
+        assert_eq!(
+            managed_policy_effective_rooms(&policy, &native, &static_filters),
+            HashSet::from([allowed])
+        );
+    }
+
+    #[test]
+    fn joined_room_is_registered_before_a_later_policy_revision_selects_it() {
+        let room = Uuid::new_v4();
+        let author = "a".repeat(64);
+        let now = std::time::Instant::now();
+        let mut policy = ResponderPolicy::new(Some(
+            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
+        ));
+        policy.apply_pull(
+            serde_json::json!({
+                "schema_version": "hive.company_agent_responder_policy.v1",
+                "desired_revision": 1,
+                "allowed_room_ids": [],
+                "allowed_author_public_keys": [author],
+            }),
+            now,
+        );
+        let native = HashSet::from([room]);
+        let mut static_filters = HashMap::new();
+        let filter = config::ChannelFilter {
+            kinds: None,
+            require_mention: true,
+        };
+        register_managed_policy_room_filter(room, false, Some(filter), &mut static_filters);
+        assert!(managed_policy_effective_rooms(&policy, &native, &static_filters).is_empty());
+
+        policy.apply_pull(
+            serde_json::json!({
+                "schema_version": "hive.company_agent_responder_policy.v1",
+                "desired_revision": 2,
+                "allowed_room_ids": [room.to_string()],
+                "allowed_author_public_keys": ["a".repeat(64)],
+            }),
+            now,
+        );
+        assert_eq!(
+            managed_policy_effective_rooms(&policy, &native, &static_filters),
+            HashSet::from([room])
+        );
+    }
+
+    #[test]
+    fn final_gate_requires_current_native_membership() {
+        let room = Uuid::new_v4();
+        let author = "a".repeat(64);
+        let now = std::time::Instant::now();
+        let mut policy = ResponderPolicy::new(Some(
+            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
+        ));
+        policy.apply_pull(
+            serde_json::json!({
+                "schema_version": "hive.company_agent_responder_policy.v1",
+                "desired_revision": 1,
+                "allowed_room_ids": [room.to_string()],
+                "allowed_author_public_keys": [author.clone()],
+            }),
+            now,
+        );
+        let mut native = HashSet::from([room]);
+        assert!(managed_policy_permits(
+            &policy, &native, room, &author, false, now
+        ));
+        native.remove(&room);
+        assert!(!managed_policy_permits(
+            &policy, &native, room, &author, false, now
+        ));
+    }
+}
 
 /// Check if argv[1] matches a subcommand name, before any clap parsing.
 ///
@@ -1455,6 +1675,12 @@ async fn tokio_main() -> Result<()> {
 
     tracing::info!("discovered {} channel(s)", channel_info_map.len());
     let channel_ids: Vec<Uuid> = channel_info_map.keys().copied().collect();
+    let mut native_non_dm_rooms: HashSet<Uuid> = channel_info_map
+        .iter()
+        .filter_map(|(id, info)| {
+            (info.channel_type != "dm" && info.channel_type != "unknown").then_some(*id)
+        })
+        .collect();
 
     let rules: Vec<SubscriptionRule> = match config.subscribe_mode {
         SubscribeMode::Mentions => {
@@ -1493,12 +1719,23 @@ async fn tokio_main() -> Result<()> {
         }
     };
 
-    let channel_filters = config::resolve_channel_filters(&config, &channel_ids, &rules);
-    if channel_filters.is_empty() {
+    let mut static_channel_filters = config::resolve_channel_filters(&config, &channel_ids, &rules);
+    let mut responder_policy = ResponderPolicy::new(config.company_agent_policy_url.clone());
+    if static_channel_filters.is_empty() {
         tracing::warn!("no channel subscriptions resolved — agent will sit idle");
     }
-    let mut subscribed_channel_ids = HashSet::with_capacity(channel_filters.len());
-    for (channel_id, filter) in &channel_filters {
+    if responder_policy.enabled() {
+        tracing::info!(
+            "company-agent responder policy enabled — failing closed until the first signed pull"
+        );
+    }
+    let initial_channel_filters = if responder_policy.enabled() {
+        HashMap::new()
+    } else {
+        static_channel_filters.clone()
+    };
+    let mut subscribed_channel_ids = HashSet::with_capacity(initial_channel_filters.len());
+    for (channel_id, filter) in &initial_channel_filters {
         if let Err(e) = relay.subscribe_channel(*channel_id, filter.clone()).await {
             tracing::warn!("failed to subscribe to channel {channel_id}: {e}");
         } else {
@@ -1677,6 +1914,19 @@ async fn tokio_main() -> Result<()> {
             let _ = tx.send(());
         });
     }
+
+    // A single bounded request lane keeps policy HTTP latency off the relay
+    // loop. The expiry arm below is independent, so a stalled request cannot
+    // extend an already-applied policy beyond the fail-closed window.
+    let (policy_http_tx, mut policy_http_rx) = mpsc::channel::<PolicyHttpEvent>(1);
+    let mut policy_http_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut policy_poll = responder_policy.enabled().then(|| {
+        tokio::time::interval_at(
+            tokio::time::Instant::now(),
+            responder_policy::POLICY_POLL_INTERVAL,
+        )
+    });
+    let mut policy_applied_ack_revision: Option<u64> = None;
 
     // Track the newest membership notification timestamp per channel.
     // On reconnect the relay replays events newest-first, so the first event
@@ -1939,6 +2189,151 @@ async fn tokio_main() -> Result<()> {
                     }
                     None
                 }
+                _ = async {
+                    match responder_policy.expiry_deadline() {
+                        Some(deadline) => {
+                            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await
+                        }
+                        None => std::future::pending().await,
+                    }
+                }, if responder_policy.enabled() => {
+                    let _ = result_rx;
+                    if responder_policy.expire_if_stale(std::time::Instant::now()) {
+                        tracing::warn!(
+                            "company-agent responder policy expired — denying new invocations"
+                        );
+                        policy_applied_ack_revision = None;
+                        let _ = reconcile_managed_policy_subscriptions(
+                            &mut relay,
+                            &responder_policy,
+                            ManagedPolicySubscriptions {
+                                native_non_dm_rooms: &native_non_dm_rooms,
+                                static_filters: &static_channel_filters,
+                                subscribed_rooms: &mut subscribed_channel_ids,
+                                queue: &mut queue,
+                                typing_channels: &mut typing_channels,
+                            },
+                            true,
+                        )
+                        .await;
+                    }
+                    None
+                }
+                policy_event = policy_http_rx.recv(), if responder_policy.enabled() => {
+                    let _ = result_rx;
+                    policy_http_task.take();
+                    if let Some(policy_event) = policy_event {
+                        match policy_event {
+                            PolicyHttpEvent::Pulled(Ok(value)) => {
+                                let update = responder_policy
+                                    .apply_pull(value, std::time::Instant::now());
+                                let reconciled = reconcile_managed_policy_subscriptions(
+                                    &mut relay,
+                                    &responder_policy,
+                                    ManagedPolicySubscriptions {
+                                        native_non_dm_rooms: &native_non_dm_rooms,
+                                        static_filters: &static_channel_filters,
+                                        subscribed_rooms: &mut subscribed_channel_ids,
+                                        queue: &mut queue,
+                                        typing_channels: &mut typing_channels,
+                                    },
+                                    update.changed,
+                                )
+                                .await;
+                                let ack = if let Some(error_ack) = update
+                                    .ack
+                                    .filter(|ack| ack.result == "error")
+                                {
+                                    Some(error_ack)
+                                } else {
+                                    responder_policy.current_revision().and_then(|revision| {
+                                        if revision == 0 || policy_applied_ack_revision == Some(revision) {
+                                            None
+                                        } else if reconciled {
+                                            Some(PolicyAck {
+                                                revision,
+                                                result: "applied",
+                                                error_code: None,
+                                            })
+                                        } else {
+                                            Some(PolicyAck {
+                                                revision,
+                                                result: "error",
+                                                error_code: Some("subscription_reconcile_failed"),
+                                            })
+                                        }
+                                    })
+                                };
+                                if let (Some(ack), Some(endpoint)) =
+                                    (ack, responder_policy.endpoint().map(str::to_string))
+                                {
+                                    let rest = ctx.rest_client.clone();
+                                    let tx = policy_http_tx.clone();
+                                    policy_http_task = Some(tokio::spawn(async move {
+                                        let result = responder_policy::acknowledge_policy(
+                                            &rest, &endpoint, &ack,
+                                        )
+                                        .await;
+                                        let _ = tx
+                                            .send(PolicyHttpEvent::Acknowledged { ack, result })
+                                            .await;
+                                    }));
+                                }
+                            }
+                            PolicyHttpEvent::Pulled(Err(error)) => {
+                                tracing::warn!("company-agent policy pull failed: {error}");
+                            }
+                            PolicyHttpEvent::Acknowledged { ack, result } => match result {
+                                Ok(()) => {
+                                    if ack.result == "applied" {
+                                        policy_applied_ack_revision = Some(ack.revision);
+                                        tracing::info!(
+                                            revision = ack.revision,
+                                            "company-agent responder policy acknowledged"
+                                        );
+                                    } else {
+                                        tracing::warn!(
+                                            revision = ack.revision,
+                                            error_code = ack.error_code.unwrap_or("unknown"),
+                                            "company-agent responder policy rejection acknowledged"
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    if ack.result == "applied" && error.contains("409") {
+                                        // A lost successful ACK and a superseded ACK both
+                                        // return 409. Mark this local attempt complete; the
+                                        // next signed pull immediately exposes any newer
+                                        // server revision and reopens the ACK path.
+                                        policy_applied_ack_revision = Some(ack.revision);
+                                    }
+                                    tracing::warn!(
+                                        revision = ack.revision,
+                                        "company-agent policy acknowledgement failed: {error}"
+                                    );
+                                }
+                            },
+                        }
+                    }
+                    None
+                }
+                _ = async {
+                    match policy_poll.as_mut() {
+                        Some(interval) => interval.tick().await,
+                        None => std::future::pending().await,
+                    }
+                }, if responder_policy.enabled() && policy_http_task.is_none() => {
+                    let _ = result_rx;
+                    if let Some(endpoint) = responder_policy.endpoint().map(str::to_string) {
+                        let rest = ctx.rest_client.clone();
+                        let tx = policy_http_tx.clone();
+                        policy_http_task = Some(tokio::spawn(async move {
+                            let result = responder_policy::pull_policy(&rest, &endpoint).await;
+                            let _ = tx.send(PolicyHttpEvent::Pulled(result)).await;
+                        }));
+                    }
+                    None
+                }
                 // Remaining branches don't touch pool — evaluated when pool is idle.
                 buzz_event = relay.next_event() => {
                     let _ = result_rx; // end split borrow before relay handling
@@ -2003,8 +2398,36 @@ async fn tokio_main() -> Result<()> {
                                     // stripped for a legitimately re-added channel.
                                     removed_channels.remove(&ch);
 
+                                    let is_dm =
+                                        is_dm_channel(ch, &ctx.channel_info).await;
+                                    if !is_dm {
+                                        native_non_dm_rooms.insert(ch);
+                                    }
+
                                     if subscribed_channel_ids.contains(&ch) {
                                         tracing::debug!(channel_id = %ch, "membership notification: channel already subscribed");
+                                    } else if responder_policy.enabled() {
+                                        let filter = register_managed_policy_room_filter(
+                                            ch,
+                                            is_dm,
+                                            config::resolve_dynamic_channel_filter(&config, ch, &rules),
+                                            &mut static_channel_filters,
+                                        );
+                                        if responder_policy.selects_room(
+                                            ch,
+                                            std::time::Instant::now(),
+                                        ) {
+                                            if let Some(filter) = filter {
+                                                tracing::info!(channel_id = %ch, "managed policy: subscribing to newly joined room");
+                                                if let Err(e) = relay.subscribe_channel_from(ch, filter, Some(ts)).await {
+                                                    tracing::warn!("failed to subscribe to managed room {ch}: {e}");
+                                                } else {
+                                                    subscribed_channel_ids.insert(ch);
+                                                }
+                                            }
+                                        } else {
+                                            tracing::debug!(channel_id = %ch, is_dm, "managed policy: joined room is not selected");
+                                        }
                                     } else if let Some(filter) = config::resolve_dynamic_channel_filter(&config, ch, &rules) {
                                         tracing::info!(channel_id = %ch, "membership notification: subscribing to new channel");
                                         if let Err(e) = relay.subscribe_channel_from(ch, filter, Some(ts)).await {
@@ -2016,6 +2439,7 @@ async fn tokio_main() -> Result<()> {
                                         tracing::debug!(channel_id = %ch, "membership notification: no matching rules — skipping");
                                     }
                                 } else {
+                                    native_non_dm_rooms.remove(&ch);
                                     subscribed_channel_ids.remove(&ch);
                                     tracing::info!(channel_id = %ch, "membership notification: unsubscribing from channel");
                                     if let Err(e) = relay.unsubscribe_channel(ch).await {
@@ -2218,20 +2642,31 @@ async fn tokio_main() -> Result<()> {
                                 // exercised by non-owner authors inside DMs.
                                 let is_dm =
                                     is_dm_channel(buzz_event.channel_id, &ctx.channel_info).await;
-                                let allowed = author_allowed(
-                                    &config.respond_to,
-                                    &config.respond_to_allowlist,
-                                    &author,
-                                    is_dm,
-                                    &owner_cache,
-                                    &ctx.rest_client,
-                                )
-                                .await;
+                                let allowed = if responder_policy.enabled() {
+                                    managed_policy_permits(
+                                        &responder_policy,
+                                        &native_non_dm_rooms,
+                                        buzz_event.channel_id,
+                                        &author,
+                                        is_dm,
+                                        std::time::Instant::now(),
+                                    )
+                                } else {
+                                    author_allowed(
+                                        &config.respond_to,
+                                        &config.respond_to_allowlist,
+                                        &author,
+                                        is_dm,
+                                        &owner_cache,
+                                        &ctx.rest_client,
+                                    )
+                                    .await
+                                };
                                 if !allowed {
                                     tracing::debug!(
                                         channel_id = %buzz_event.channel_id,
                                         author = %buzz_event.event.pubkey.to_hex(),
-                                        mode = %config.respond_to,
+                                        mode = if responder_policy.enabled() { "company-policy" } else { "static" },
                                         is_dm,
                                         "inbound author gate — dropping event"
                                     );
@@ -2648,6 +3083,10 @@ async fn tokio_main() -> Result<()> {
             }
             None => {} // relay/heartbeat/shutdown branches handled inline above
         }
+    }
+
+    if let Some(task) = policy_http_task.take() {
+        task.abort();
     }
 
     // Drain wake tasks gracefully rather than aborting: an in-flight
@@ -5175,6 +5614,7 @@ mod build_mcp_servers_tests {
             relay_observer: false,
             lazy_pool: false,
             agent_owner: None,
+            company_agent_policy_url: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }
@@ -5342,6 +5782,7 @@ mod error_outcome_emission_tests {
             relay_observer: false,
             lazy_pool: false,
             agent_owner: None,
+            company_agent_policy_url: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }

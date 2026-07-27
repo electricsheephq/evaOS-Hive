@@ -33,8 +33,27 @@ export type HiveCompanyAgent = {
 };
 
 export type HiveCompanyMember = {
+  membershipId: string;
   publicKey: string;
   displayName: string;
+};
+
+export type HiveCompanyAgentPolicy = {
+  agentInstanceId: string;
+  desiredRevision: number;
+  appliedRevision: number;
+  allowedRoomIds: string[];
+  allowedAuthorMembershipIds: string[];
+  status: "pending" | "applied" | "error";
+  appliedAt: string | null;
+  lastErrorCode: string | null;
+};
+
+export type SetHiveCompanyAgentPolicyInput = {
+  agentInstanceId: string;
+  expectedRevision: number;
+  allowedRoomIds: string[];
+  allowedAuthorMembershipIds: string[];
 };
 
 export function getEvaosTeamsAuthStatus() {
@@ -59,6 +78,20 @@ export function listHiveCompanyAgents() {
 
 export function listHiveCompanyMembers() {
   return invoke<HiveCompanyMember[]>("list_hive_company_members");
+}
+
+export function getHiveCompanyAgentPolicy(agentInstanceId: string) {
+  return invoke<HiveCompanyAgentPolicy>("get_hive_company_agent_policy", {
+    agentInstanceId,
+  });
+}
+
+export function setHiveCompanyAgentPolicy(
+  input: SetHiveCompanyAgentPolicyInput,
+) {
+  return invoke<HiveCompanyAgentPolicy>("set_hive_company_agent_policy", {
+    input,
+  });
 }
 
 export function evaosTeamsRefreshDelay(status: EvaosTeamsAuthStatus) {

@@ -12,6 +12,8 @@ import type {
 } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
+export type CompanyVmAgent = RelayAgent & { agentInstanceId: string };
+
 export function mergeRelayAgentsWithCompanyCatalog(
   relayAgents: readonly RelayAgent[],
   companyAgents: readonly HiveCompanyAgent[],
@@ -117,19 +119,24 @@ export function resolveCompanyAgentPresenceStatuses(
 export function companyVmAgentsFromCatalog(
   relayAgents: readonly RelayAgent[],
   companyAgents: readonly HiveCompanyAgent[],
-): RelayAgent[] {
-  const catalogPubkeys = new Set(
-    companyAgents.map((agent) => normalizePubkey(agent.publicKey)),
+): CompanyVmAgent[] {
+  const catalogByPubkey = new Map(
+    companyAgents.map((agent) => [normalizePubkey(agent.publicKey), agent]),
   );
-  return mergeRelayAgentsWithCompanyCatalog(relayAgents, companyAgents).filter(
-    (agent) => catalogPubkeys.has(normalizePubkey(agent.pubkey)),
+  return mergeRelayAgentsWithCompanyCatalog(relayAgents, companyAgents).flatMap(
+    (agent) => {
+      const catalogAgent = catalogByPubkey.get(normalizePubkey(agent.pubkey));
+      return catalogAgent
+        ? [{ ...agent, agentInstanceId: catalogAgent.agentInstanceId }]
+        : [];
+    },
   );
 }
 
-export function excludeLocalAgentDuplicates(
-  companyAgents: readonly RelayAgent[],
+export function excludeLocalAgentDuplicates<T extends RelayAgent>(
+  companyAgents: readonly T[],
   localAgents: readonly ManagedAgent[],
-): RelayAgent[] {
+): T[] {
   const localPubkeys = new Set(
     localAgents.map((agent) => normalizePubkey(agent.pubkey)),
   );

@@ -152,6 +152,10 @@ test("relay-only profiles are not labeled as registered company VM agents", () =
   assert.equal(selected.length, 1);
   assert.equal(selected[0].pubkey, PUBKEY);
   assert.equal(selected[0].name, "ATRIS");
+  assert.equal(
+    selected[0].agentInstanceId,
+    "10000000-0000-4000-8000-000000000001",
+  );
 });
 
 test("signed native profile name wins consistently after catalog merge", () => {

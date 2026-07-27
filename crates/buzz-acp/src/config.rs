@@ -247,6 +247,12 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_AGENT_OWNER")]
     pub agent_owner: Option<String>,
 
+    /// Optional revisioned company-agent responder policy endpoint. When set,
+    /// the signed remote policy can only narrow native relay memberships and
+    /// replaces the static author gate for ordinary prompt events.
+    #[arg(long, env = "BUZZ_ACP_COMPANY_AGENT_POLICY_URL")]
+    pub company_agent_policy_url: Option<String>,
+
     #[arg(long, env = "BUZZ_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
@@ -551,6 +557,9 @@ pub struct Config {
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
     /// Replaces the old REST-based owner lookup.
     pub agent_owner: Option<String>,
+    /// Validated HTTPS endpoint for the optional signed responder policy.
+    /// `None` preserves native/static buzz-acp behavior.
+    pub company_agent_policy_url: Option<String>,
     /// Disable the [Base] platform-context section prepended to every prompt.
     pub no_base_prompt: bool,
     /// Resolved content from `--base-prompt-file`, read and validated in
@@ -966,6 +975,11 @@ impl Config {
         let session_store_path = args
             .session_store
             .unwrap_or_else(|| args.config.with_extension("sessions.json"));
+        let company_agent_policy_url = args
+            .company_agent_policy_url
+            .as_deref()
+            .map(validate_company_agent_policy_url)
+            .transpose()?;
         let config = Config {
             keys,
             relay_url: args.relay_url,
@@ -1010,6 +1024,7 @@ impl Config {
             relay_observer: args.relay_observer,
             lazy_pool: args.lazy_pool,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
+            company_agent_policy_url,
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
         };
@@ -1033,7 +1048,7 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} company_policy={} {}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1054,10 +1069,34 @@ impl Config {
             self.memory_enabled,
             self.model.as_deref().unwrap_or("(agent default)"),
             self.permission_mode,
+            if self.company_agent_policy_url.is_some() {
+                "enabled"
+            } else {
+                "disabled"
+            },
             respond_to_detail,
             allowed_respond_to_detail,
         )
     }
+}
+
+fn validate_company_agent_policy_url(raw: &str) -> Result<String, ConfigError> {
+    let url = Url::parse(raw.trim())
+        .map_err(|_| ConfigError::ConfigFile("company agent policy URL is invalid".to_string()))?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/functions/v1/company-agent-responder-policy"
+        || url.host_str().is_none()
+    {
+        return Err(ConfigError::ConfigFile(
+            "company agent policy URL must be a credential-free HTTPS function endpoint"
+                .to_string(),
+        ));
+    }
+    Ok(url.to_string())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1339,6 +1378,37 @@ mod tests {
     use crate::filter::{ChannelScope, SubscriptionRule};
     use clap::{Parser, ValueEnum};
 
+    #[test]
+    fn company_policy_endpoint_is_exact_https_function_url() {
+        let accepted = validate_company_agent_policy_url(
+            "https://example.supabase.co/functions/v1/company-agent-responder-policy",
+        )
+        .unwrap();
+        assert_eq!(
+            accepted,
+            "https://example.supabase.co/functions/v1/company-agent-responder-policy"
+        );
+        for rejected in [
+            "http://example.test/functions/v1/company-agent-responder-policy",
+            "https://user@example.test/functions/v1/company-agent-responder-policy",
+            "https://example.test/functions/v1/other",
+            "https://example.test/functions/v1/company-agent-responder-policy?tenant=a",
+        ] {
+            assert!(validate_company_agent_policy_url(rejected).is_err());
+        }
+    }
+
+    #[test]
+    fn config_summary_reports_policy_state_without_endpoint() {
+        let endpoint =
+            "https://example.test/functions/v1/company-agent-responder-policy".to_string();
+        let mut config = test_config(SubscribeMode::All);
+        config.company_agent_policy_url = Some(endpoint.clone());
+        let summary = config.summary();
+        assert!(summary.contains("company_policy=enabled"));
+        assert!(!summary.contains(&endpoint));
+    }
+
     /// Build a minimal Config for testing without CLI parsing.
     fn test_config(mode: SubscribeMode) -> Config {
         Config {
@@ -1380,6 +1450,7 @@ mod tests {
             relay_observer: false,
             lazy_pool: false,
             agent_owner: None,
+            company_agent_policy_url: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }

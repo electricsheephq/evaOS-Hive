@@ -1,20 +1,23 @@
 import * as React from "react";
-import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  MoreVertical,
+  RefreshCw,
+} from "lucide-react";
 
 import { formatAgentModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { excludeLocalAgentDuplicates } from "@/features/agents/lib/companyAgentCatalog";
+import type { CompanyVmAgent } from "@/features/agents/lib/companyAgentCatalog";
 import { useUserProfileQuery } from "@/features/profile/hooks";
-import type {
-  AgentPersona,
-  ManagedAgent,
-  RelayAgent,
-} from "@/shared/api/types";
+import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import type { ProfilePanelOpenOptions } from "@/shared/context/ProfilePanelContext";
 import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import { Badge } from "@/shared/ui/badge";
+import { Button } from "@/shared/ui/button";
 import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   DropdownMenu,
@@ -64,10 +67,11 @@ type UnifiedAgentsSectionProps = {
   onDeactivatePersona: (persona: AgentPersona) => void;
   onDeletePersona: (persona: AgentPersona) => void;
   onImportSnapshotFile: (fileBytes: number[], fileName: string) => void;
-  companyAgents: RelayAgent[];
+  companyAgents: CompanyVmAgent[];
   companyAgentsError: Error | null;
   isCompanyAgentsLoading: boolean;
   onRefreshCompanyAgents: () => void;
+  onEditCompanyAgentPolicy?: (agent: CompanyVmAgent) => void;
 };
 
 const AGENT_CARD_COLUMN_CLASS = "w-full";
@@ -107,6 +111,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     companyAgentsError,
     isCompanyAgentsLoading,
     onRefreshCompanyAgents,
+    onEditCompanyAgentPolicy,
   } = props;
   const isManagedHive = desktopProductPolicy().managed;
 
@@ -219,6 +224,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               agents={visibleCompanyAgents}
               error={companyAgentsError}
               isLoading={isCompanyAgentsLoading}
+              onEditPolicy={onEditCompanyAgentPolicy}
               onOpenAgentProfile={onOpenAgentProfile}
             />
           ) : null}
@@ -510,11 +516,13 @@ function CompanyVmAgentsSection({
   agents,
   error,
   isLoading,
+  onEditPolicy,
   onOpenAgentProfile,
 }: {
-  agents: RelayAgent[];
+  agents: CompanyVmAgent[];
   error: Error | null;
   isLoading: boolean;
+  onEditPolicy?: (agent: CompanyVmAgent) => void;
   onOpenAgentProfile: (
     pubkey: string,
     options?: ProfilePanelOpenOptions,
@@ -542,6 +550,7 @@ function CompanyVmAgentsSection({
             <CompanyVmAgentCard
               agent={agent}
               key={agent.pubkey}
+              onEditPolicy={onEditPolicy}
               onOpenAgentProfile={onOpenAgentProfile}
             />
           ))}
@@ -558,9 +567,11 @@ function CompanyVmAgentsSection({
 
 function CompanyVmAgentCard({
   agent,
+  onEditPolicy,
   onOpenAgentProfile,
 }: {
-  agent: RelayAgent;
+  agent: CompanyVmAgent;
+  onEditPolicy?: (agent: CompanyVmAgent) => void;
   onOpenAgentProfile: (
     pubkey: string,
     options?: ProfilePanelOpenOptions,
@@ -571,6 +582,27 @@ function CompanyVmAgentCard({
 
   return (
     <AgentIdentityCard
+      actions={
+        onEditPolicy ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label={`Open ${label} agent actions`}
+                onClick={(event) => event.stopPropagation()}
+                size="icon"
+                variant="ghost"
+              >
+                <MoreVertical aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => onEditPolicy(agent)}>
+                Edit responder access
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : undefined
+      }
       ariaLabel={`${label} company VM agent profile`}
       avatarUrl={profileQuery.data?.avatarUrl}
       dataTestId={`company-vm-agent-${agent.pubkey}`}

@@ -102,6 +102,14 @@ with a TypeScript lookup table or an id comparison in a component.
    Edit. In Edit,
    selecting Custom command keeps its required command field beside the harness
    picker rather than hiding it in Advanced.
+10. **Company VM responder access is a separate narrowing adapter, not local
+    harness configuration.** The native Agents route may select existing native
+    non-DM room IDs and opaque active-company membership IDs for a registered
+    VM agent. The server resolves tenant, agent, and author public keys; the VM
+    applies and acknowledges the exact revision. Never route this surface
+    through `AgentInstanceEditDialog`, persist raw public-key selectors in the
+    renderer, or expose Hermes-owned instructions, model, memory, tools,
+    provider, credentials, profile, or private identity.
 
 ## The tests that enforce this
 
@@ -120,6 +128,8 @@ with a TypeScript lookup table or an id comparison in a component.
   acceptance coverage for readiness, failure states, defaults, navigation,
   successful-empty vs failed optional-model discovery, and persistence races.
 - Rust: `runtime_metadata_env_vars` tests pin spawn-time key application.
+- `lib/companyAgentResponderPolicy.test.mjs` — owner/admin visibility and the
+  native non-DM exact-agent room projection for the company VM adapter.
 
 ## Keep this file true
 

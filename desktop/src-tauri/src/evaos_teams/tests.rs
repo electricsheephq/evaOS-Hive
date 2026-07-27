@@ -517,22 +517,27 @@ fn company_member_catalog_drops_unbound_invalid_and_duplicate_rows() {
     let public_key = "a".repeat(64);
     let members = sanitize_company_members(vec![
         RawHiveCompanyMember {
+            membership_id: "10000000-0000-4000-8000-000000000001".to_string(),
             public_key: Some(public_key.clone()),
             display_name: "  Andrew  ".to_string(),
         },
         RawHiveCompanyMember {
+            membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
             public_key: Some(public_key),
             display_name: "duplicate".to_string(),
         },
         RawHiveCompanyMember {
+            membership_id: "10000000-0000-4000-8000-000000000003".to_string(),
             public_key: None,
             display_name: "not enrolled".to_string(),
         },
         RawHiveCompanyMember {
+            membership_id: "10000000-0000-4000-8000-000000000004".to_string(),
             public_key: Some("B".repeat(64)),
             display_name: "uppercase key".to_string(),
         },
         RawHiveCompanyMember {
+            membership_id: "not-a-uuid".to_string(),
             public_key: Some("c".repeat(64)),
             display_name: "in\nvalid".to_string(),
         },
@@ -541,6 +546,10 @@ fn company_member_catalog_drops_unbound_invalid_and_duplicate_rows() {
     assert_eq!(members.len(), 1);
     assert_eq!(members[0].display_name, "Andrew");
     assert_eq!(members[0].public_key, "a".repeat(64));
+    assert_eq!(
+        members[0].membership_id,
+        "10000000-0000-4000-8000-000000000001"
+    );
 }
 
 #[test]
@@ -559,14 +568,15 @@ fn public_company_agent_projection_contains_no_session_or_membership_data() {
 }
 
 #[test]
-fn public_company_member_projection_contains_no_private_or_membership_data() {
+fn public_company_member_projection_contains_only_opaque_membership_selector() {
     let member = HiveCompanyMember {
+        membership_id: "10000000-0000-4000-8000-000000000001".to_string(),
         public_key: "a".repeat(64),
         display_name: "Andrew".to_string(),
     };
     let json = serde_json::to_string(&member).unwrap();
     assert!(!json.contains("desktop_session"));
-    assert!(!json.contains("membership"));
+    assert!(json.contains("membershipId"));
     assert!(!json.contains("room"));
     assert!(!json.contains("email"));
     assert!(!json.contains("nsec"));
