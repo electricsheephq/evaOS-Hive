@@ -1,5 +1,6 @@
 import * as React from "react";
 import { OctagonX } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import {
   consumePendingSnapshotImport,
   subscribeSnapshotImport,
@@ -21,6 +22,7 @@ import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamsSection } from "./TeamsSection";
 import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
+import { CompanyAgentResponderPolicyDialog } from "./CompanyAgentResponderPolicyDialog";
 import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
@@ -31,6 +33,14 @@ import {
 } from "@/features/agents/hooks";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { companyVmAgentsFromCatalog } from "@/features/agents/lib/companyAgentCatalog";
+import type { CompanyVmAgent } from "@/features/agents/lib/companyAgentCatalog";
+import {
+  canManageCompanyAgentPolicy,
+  companyAgentRoomOptions,
+} from "@/features/agents/lib/companyAgentResponderPolicy";
+import { useChannelsQuery } from "@/features/channels/hooks";
+import { getEvaosTeamsAuthStatus } from "@/features/evaosTeams/api";
+import { useHiveCompanyMembersQuery } from "@/features/evaosTeams/hooks";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
@@ -41,6 +51,17 @@ export function AgentsView() {
   const { globalConfig } = useGlobalAgentConfig();
   const { data: bakedEnv } = useBakedBuildEnvQuery({ enabled: true });
   const companyAgentsQuery = useHiveCompanyAgentsQuery();
+  const managedAuthQuery = useQuery({
+    queryKey: ["hive-company-policy-auth"],
+    queryFn: getEvaosTeamsAuthStatus,
+    staleTime: 30_000,
+  });
+  const policyScope = managedAuthQuery.data?.entitlement?.communityId ?? null;
+  const companyMembersQuery = useHiveCompanyMembersQuery({
+    enabled: policyScope !== null,
+    scope: policyScope,
+  });
+  const channelsQuery = useChannelsQuery();
   const inheritedDefaults = getInheritedAgentDefaults(globalConfig, bakedEnv);
   const agents = useManagedAgentActions();
   const personas = usePersonaActions();
@@ -50,6 +71,27 @@ export function AgentsView() {
   // Exclusivity: create never sets `personaDialogState` (edit/dup/import do),
   // so the create-mode and definition-edit AgentDialog mounts never coexist.
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
+  const [policyAgent, setPolicyAgent] = React.useState<CompanyVmAgent | null>(
+    null,
+  );
+  const companyVmAgents = React.useMemo(
+    () =>
+      companyVmAgentsFromCatalog(
+        agents.relayAgentsQuery.data ?? [],
+        companyAgentsQuery.data ?? [],
+      ),
+    [agents.relayAgentsQuery.data, companyAgentsQuery.data],
+  );
+  const policyRooms = React.useMemo(
+    () =>
+      policyAgent
+        ? companyAgentRoomOptions(channelsQuery.data ?? [], policyAgent.pubkey)
+        : [],
+    [channelsQuery.data, policyAgent],
+  );
+  const canManagePolicy = canManageCompanyAgentPolicy(
+    managedAuthQuery.data?.entitlement?.role,
+  );
 
   function openUnifiedCreate() {
     personas.prepareCreate();
@@ -205,10 +247,7 @@ export function AgentsView() {
               onImportSnapshotFile={(fileBytes, fileName) => {
                 void personas.handleImportSnapshotFile(fileBytes, fileName);
               }}
-              companyAgents={companyVmAgentsFromCatalog(
-                agents.relayAgentsQuery.data ?? [],
-                companyAgentsQuery.data ?? [],
-              )}
+              companyAgents={companyVmAgents}
               companyAgentsError={
                 companyAgentsQuery.error instanceof Error
                   ? companyAgentsQuery.error
@@ -219,6 +258,9 @@ export function AgentsView() {
                 void agents.refetchRelayAgents();
                 void companyAgentsQuery.refetch();
               }}
+              onEditCompanyAgentPolicy={
+                canManagePolicy ? (agent) => setPolicyAgent(agent) : undefined
+              }
             />
 
             <TeamsSection
@@ -254,6 +296,18 @@ export function AgentsView() {
         open={isAiDefaultsOpen}
         returnFocusRef={aiDefaultsTriggerRef}
       />
+
+      {policyAgent && canManagePolicy ? (
+        <CompanyAgentResponderPolicyDialog
+          agent={policyAgent}
+          members={companyMembersQuery.data ?? []}
+          onOpenChange={(open) => {
+            if (!open) setPolicyAgent(null);
+          }}
+          open
+          rooms={policyRooms}
+        />
+      ) : null}
 
       {isCreateDialogOpen ? (
         <AgentDialog

@@ -307,6 +307,41 @@ impl RestClient {
         Ok(format!("Nostr {}", self.sign_nip98(method, url, body)?))
     }
 
+    /// POST payload-bound NIP-98 JSON to an exact external HTTPS endpoint.
+    ///
+    /// This intentionally does not forward the relay's `x-auth-tag`: the
+    /// responder-policy service selects the registered agent solely from the
+    /// signing key. Callers own retry cadence so a policy outage cannot tie up
+    /// the relay event loop behind the bridge retry ladder.
+    pub(crate) async fn post_external_nip98_json(
+        &self,
+        url: &str,
+        body: &Value,
+    ) -> Result<Value, RelayError> {
+        let body_bytes = serde_json::to_vec(body)?;
+        let authorization = self.nip98_header("POST", url, Some(&body_bytes))?;
+        let response = self
+            .http
+            .post(url)
+            .header("Authorization", authorization)
+            .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(5))
+            .body(body_bytes)
+            .send()
+            .await
+            .map_err(|error| RelayError::Http(error.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(RelayError::Http(format!(
+                "external signed endpoint returned HTTP {status}"
+            )));
+        }
+        response
+            .json::<Value>()
+            .await
+            .map_err(|error| RelayError::Http(error.to_string()))
+    }
+
     /// Retry helper: executes `build_request` up to 4 times (1 attempt + 3 retries)
     /// on transient failures (429, 502, 503, 504, timeout, connect errors).
     ///
@@ -3994,6 +4029,47 @@ async fn wait_for_any_ok(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_policy_auth_is_payload_bound_and_agent_signed() {
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+
+        let keys = Keys::generate();
+        let client = RestClient {
+            http: reqwest::Client::new(),
+            base_url: "https://relay.example.test".to_string(),
+            keys: keys.clone(),
+            auth_tag_json: Some("must-not-be-needed-for-signing".to_string()),
+        };
+        let url = "https://example.test/functions/v1/company-agent-responder-policy";
+        let body = br#"{"action":"pull_policy"}"#;
+        let encoded = client.sign_nip98("POST", url, Some(body)).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let event: Event = serde_json::from_slice(&bytes).unwrap();
+        event.verify().unwrap();
+        assert_eq!(event.pubkey, keys.public_key());
+        assert_eq!(event.kind, Kind::HttpAuth);
+
+        let tags = event
+            .tags
+            .iter()
+            .map(|tag| {
+                tag.as_slice()
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert!(tags.contains(&vec!["u".to_string(), url.to_string()]));
+        assert!(tags.contains(&vec!["method".to_string(), "POST".to_string()]));
+        assert!(tags.contains(&vec![
+            "payload".to_string(),
+            hex::encode(Sha256::digest(body)),
+        ]));
+    }
 
     #[test]
     fn relay_ws_to_http_plain() {

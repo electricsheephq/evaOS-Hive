@@ -14,6 +14,7 @@ pub(crate) struct HiveCompanyAgent {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HiveCompanyMember {
+    pub(super) membership_id: String,
     pub(super) public_key: String,
     pub(super) display_name: String,
 }
@@ -28,6 +29,7 @@ pub(super) struct RawHiveCompanyAgent {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RawHiveCompanyMember {
+    pub(super) membership_id: String,
     pub(super) public_key: Option<String>,
     pub(super) display_name: String,
 }
@@ -81,6 +83,9 @@ pub(super) fn sanitize_company_members(
     members
         .into_iter()
         .filter_map(|member| {
+            if uuid::Uuid::parse_str(&member.membership_id).is_err() {
+                return None;
+            }
             let public_key = member.public_key?;
             let display_name = member.display_name.trim();
             let valid_public_key = public_key.len() == 64
@@ -96,6 +101,7 @@ pub(super) fn sanitize_company_members(
                 return None;
             }
             Some(HiveCompanyMember {
+                membership_id: member.membership_id,
                 public_key,
                 display_name: display_name.to_string(),
             })
