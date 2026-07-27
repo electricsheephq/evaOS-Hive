@@ -6,10 +6,7 @@ on:
       - .github/workflows/buzz-admin-linux.yml
       - Cargo.lock
       - Cargo.toml
-      - crates/buzz-admin/**
-      - crates/buzz-auth/**
-      - crates/buzz-core/**
-      - crates/buzz-db/**
+      - crates/**
   workflow_dispatch:
 
 permissions:
@@ -28,6 +25,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
 
@@ -46,7 +44,7 @@ jobs:
 
       - name: Verify and record provenance
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           BINARY="target/$TARGET/release/buzz-admin"
@@ -62,7 +60,7 @@ jobs:
       - name: Upload exact-head artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: buzz-admin-linux-x86_64-${{ github.sha }}
+          name: buzz-admin-linux-x86_64-${{ github.event.pull_request.head.sha || github.sha }}
           path: artifact/
           if-no-files-found: error
           retention-days: 7
