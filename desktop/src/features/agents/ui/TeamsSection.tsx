@@ -9,7 +9,9 @@ import {
 } from "lucide-react";
 
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
+import { shouldPresentLocalAgentTeam } from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,6 +56,10 @@ export function TeamsSection({
   onShare,
   onImport,
 }: TeamsSectionProps) {
+  const visibleTeams = teams.filter((team) =>
+    shouldPresentLocalAgentTeam(desktopProductPolicy().managed, team.id),
+  );
+
   return (
     <section className="relative space-y-4" data-testid="agents-library-teams">
       <div className={TEAM_CARD_COLUMN_CLASS}>
@@ -85,7 +91,7 @@ export function TeamsSection({
 
       {!isLoading ? (
         <div className={TEAM_CARD_GRID_CLASS}>
-          {teams.map((team) => {
+          {visibleTeams.map((team) => {
             const resolution = resolveTeamPersonas(team, personas);
             const missingPersonaCount = resolution.missingPersonaCount;
             const hasMissingPersonas = resolution.hasMissingPersonas;
