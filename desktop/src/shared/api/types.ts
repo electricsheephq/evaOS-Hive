@@ -309,7 +309,7 @@ export type RelayAgent = {
   channels: string[];
   channelIds: string[];
   capabilities: string[];
-  status: "online" | "away" | "offline";
+  status: "online" | "away" | "offline" | "unknown";
   respondTo: RespondToMode | null;
   respondToAllowlist: string[];
 };

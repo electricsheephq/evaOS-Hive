@@ -14,10 +14,14 @@ import {
 import { resolveSnapshotAvatarPng } from "@/features/agents/ui/snapshotAvatarPng";
 import {
   channelsQueryKey,
+  useChannelsQuery,
   upsertCachedChannelMember,
 } from "@/features/channels/hooks";
 import { updateCachedChannelMemberDisplayName } from "@/features/channels/channelMemberProfileCache";
-import { evictUsersBatchEntries } from "@/features/profile/hooks";
+import {
+  evictUsersBatchEntries,
+  useUsersBatchQuery,
+} from "@/features/profile/hooks";
 import {
   createManagedAgent,
   deleteManagedAgent,
@@ -42,9 +46,12 @@ import {
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauriManagedAgents";
-import { listHiveCompanyAgents } from "@/features/evaosTeams/api";
-import { mergeRelayAgentsWithCompanyCatalog } from "@/features/agents/lib/companyAgentCatalog";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
+import {
+  mergeRelayAgentsWithCompanyCatalog,
+  resolveCompanyAgentVisibleChannels,
+  resolveRelayAgentProfiles,
+} from "@/features/agents/lib/companyAgentCatalog";
+import { useHiveCompanyAgentsQuery } from "@/features/evaosTeams/hooks";
 import { bootstrapManagedAgentRuntimePairs } from "@/features/agents/managedAgentRuntimeHooks";
 import {
   createPersona,
@@ -105,7 +112,6 @@ export type {
 } from "@/features/agents/channelAgents";
 
 export const relayAgentsQueryKey = ["relay-agents"] as const;
-export const hiveCompanyAgentsQueryKey = ["hive-company-agents"] as const;
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
@@ -113,7 +119,6 @@ export const acpAuthMethodsQueryKey = ["acp-auth-methods"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 export const backendProvidersQueryKey = ["backend-providers"] as const;
 export const gitBashPrerequisiteQueryKey = ["git-bash-prerequisite"] as const;
-
 type InvalidateAgentQueriesOptions = {
   refetchChannels?: boolean;
 };
@@ -295,22 +300,9 @@ export function useManagedAgentPrereqsQuery(
 }
 
 export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
-  return useQuery({
+  const relayAgentsQuery = useQuery({
     queryKey: relayAgentsQueryKey,
-    queryFn: async () => {
-      const relayAgents = await listRelayAgents();
-      if (!desktopProductPolicy().managed) return relayAgents;
-      try {
-        const companyAgents = await listHiveCompanyAgents();
-        return mergeRelayAgentsWithCompanyCatalog(relayAgents, companyAgents);
-      } catch (error) {
-        console.warn(
-          "Company VM agent catalog is unavailable; using relay profiles.",
-          error,
-        );
-        return relayAgents;
-      }
-    },
+    queryFn: listRelayAgents,
     staleTime: 30_000,
     // Relay agent profiles (kind:10100) are near-static and the backing
     // `list_relay_agents` command is an unfiltered relay query for the whole
@@ -324,17 +316,48 @@ export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
     refetchIntervalInBackground: false,
     enabled: options?.enabled,
   });
-}
-
-export function useHiveCompanyAgentsQuery(options?: { enabled?: boolean }) {
-  const managed = desktopProductPolicy().managed;
-  return useQuery({
-    queryKey: hiveCompanyAgentsQueryKey,
-    queryFn: listHiveCompanyAgents,
-    staleTime: 30_000,
-    enabled: managed && (options?.enabled ?? true),
+  const companyAgentsQuery = useHiveCompanyAgentsQuery(options);
+  const mergedRelayAgents = React.useMemo(
+    () =>
+      (companyAgentsQuery.data?.length ?? 0) > 0
+        ? mergeRelayAgentsWithCompanyCatalog(
+            relayAgentsQuery.data ?? [],
+            companyAgentsQuery.data ?? [],
+          )
+        : (relayAgentsQuery.data ?? []),
+    [companyAgentsQuery.data, relayAgentsQuery.data],
+  );
+  const hasCompanyVmAgents = mergedRelayAgents.some((agent) =>
+    agent.capabilities.includes("company-vm"),
+  );
+  const channelsQuery = useChannelsQuery({
+    enabled: (options?.enabled ?? true) && hasCompanyVmAgents,
   });
+  const agentPubkeys = React.useMemo(
+    () =>
+      mergedRelayAgents
+        .filter((agent) => agent.capabilities.includes("company-vm"))
+        .map((agent) => agent.pubkey),
+    [mergedRelayAgents],
+  );
+  const profilesQuery = useUsersBatchQuery(agentPubkeys, {
+    enabled: (options?.enabled ?? true) && agentPubkeys.length > 0,
+  });
+  const agentsWithProfiles = resolveRelayAgentProfiles(
+    relayAgentsQuery.data === undefined && companyAgentsQuery.data === undefined
+      ? undefined
+      : mergedRelayAgents,
+    profilesQuery.data?.profiles,
+  );
+  return {
+    ...relayAgentsQuery,
+    data: resolveCompanyAgentVisibleChannels(
+      agentsWithProfiles,
+      channelsQuery.data,
+    ),
+  };
 }
+export { useHiveCompanyAgentsQuery };
 
 export function useManagedAgentsQuery(options?: { enabled?: boolean }) {
   return useQuery({

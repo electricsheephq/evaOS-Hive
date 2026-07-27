@@ -32,6 +32,7 @@ import type {
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { getAvatarSnapshotUrl } from "@/shared/lib/animatedAvatar";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   SELF_PROFILE_CACHE_EVENT,
   type SelfProfileCache,
@@ -43,6 +44,12 @@ import {
 } from "@/features/profile/lib/selfProfileStorage";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { updateCachedChannelMemberDisplayName } from "@/features/channels/channelMemberProfileCache";
+import { useHiveCompanyAgentsQuery } from "@/features/evaosTeams/hooks";
+import {
+  mergeCompanyAgentSearchResults,
+  resolveCompanyAgentBatch,
+  resolveCompanyAgentProfile,
+} from "@/features/evaosTeams/lib/companyAgentIdentity";
 
 export const profileQueryKey = ["profile"] as const;
 export const contactListQueryKey = (pubkey: string) =>
@@ -271,12 +278,25 @@ export function useUnfollowMutation(currentPubkey?: string) {
 }
 
 export function useUserProfileQuery(pubkey?: string) {
-  return useQuery({
+  const query = useQuery({
     enabled: typeof pubkey === "string" && pubkey.length > 0,
     queryKey: ["user-profile", pubkey?.toLowerCase() ?? ""],
     queryFn: () => getUserProfile(pubkey),
     staleTime: 60_000,
   });
+  const companyAgentsQuery = useHiveCompanyAgentsQuery({
+    enabled: typeof pubkey === "string" && pubkey.length > 0,
+  });
+  const companyAgent = companyAgentsQuery.data?.find(
+    (agent) =>
+      normalizePubkey(agent.publicKey) === normalizePubkey(pubkey ?? ""),
+  );
+  return {
+    ...query,
+    data: query.data
+      ? resolveCompanyAgentProfile(query.data, companyAgent)
+      : query.data,
+  };
 }
 
 // Per-pubkey resolution cache backing `useUsersBatchQuery`'s delta fetch.
@@ -323,6 +343,7 @@ export function useUsersBatchQuery(
     .filter((pubkey) => pubkey.length > 0)
     .sort();
   const enabled = (options?.enabled ?? true) && normalizedPubkeys.length > 0;
+  const companyAgentsQuery = useHiveCompanyAgentsQuery({ enabled });
 
   const query = useQuery<UsersBatchResponse>({
     enabled,
@@ -371,11 +392,20 @@ export function useUsersBatchQuery(
     staleTime: 60_000,
     gcTime: 5 * 60 * 1_000,
   });
+  const resolvedData = React.useMemo(
+    () =>
+      resolveCompanyAgentBatch(
+        query.data,
+        normalizedPubkeys,
+        companyAgentsQuery.data ?? [],
+      ),
+    [companyAgentsQuery.data, normalizedPubkeys, query.data],
+  );
 
   // Seed individual "user-profile" cache entries so avatar clicks are instant
   // cache hits instead of fresh network requests.
   React.useEffect(() => {
-    const profiles = query.data?.profiles;
+    const profiles = resolvedData?.profiles;
     if (!profiles) return;
     for (const [pubkey, summary] of Object.entries(profiles)) {
       queryClient.setQueryData<Profile>(
@@ -391,9 +421,9 @@ export function useUsersBatchQuery(
           },
       );
     }
-  }, [query.data, queryClient]);
+  }, [queryClient, resolvedData]);
 
-  return query;
+  return { ...query, data: resolvedData };
 }
 
 export function useUserSearchQuery(
@@ -409,14 +439,28 @@ export function useUserSearchQuery(
     (options?.enabled ?? true) &&
     (options?.allowEmpty === true || normalizedQuery.length > 0);
 
-  return useQuery<UserSearchResult[]>({
+  const limit = options?.limit ?? 8;
+  const queryResult = useQuery<UserSearchResult[]>({
     enabled,
-    queryKey: ["user-search", normalizedQuery, options?.limit ?? 8],
-    queryFn: async () =>
-      (await searchUsers(normalizedQuery, options?.limit ?? 8)).users,
+    queryKey: ["user-search", normalizedQuery, limit],
+    queryFn: async () => (await searchUsers(normalizedQuery, limit)).users,
     staleTime: 30_000,
     gcTime: 5 * 60 * 1_000,
   });
+  const companyAgentsQuery = useHiveCompanyAgentsQuery({ enabled });
+  const data = React.useMemo(
+    () =>
+      queryResult.data && (companyAgentsQuery.data?.length ?? 0) > 0
+        ? mergeCompanyAgentSearchResults({
+            companyAgents: companyAgentsQuery.data ?? [],
+            limit,
+            query: normalizedQuery,
+            relayUsers: queryResult.data,
+          })
+        : queryResult.data,
+    [companyAgentsQuery.data, limit, normalizedQuery, queryResult.data],
+  );
+  return { ...queryResult, data };
 }
 
 export function useInfiniteUserSearchQuery(

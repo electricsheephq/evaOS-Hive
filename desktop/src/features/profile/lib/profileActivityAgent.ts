@@ -39,6 +39,9 @@ export function resolveProfileActivityAgent({
     avatarUrl: profile?.avatarUrl ?? null,
     name: relayAgent?.name ?? profile?.displayName?.trim() ?? "Agent",
     pubkey: effectivePubkey,
-    status: relayAgent?.status === "offline" ? "stopped" : "deployed",
+    status:
+      relayAgent?.status === "online" || relayAgent?.status === "away"
+        ? "deployed"
+        : "stopped",
   };
 }

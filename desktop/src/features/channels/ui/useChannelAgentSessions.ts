@@ -48,7 +48,7 @@ type UseChannelAgentSessionsOptions = {
 function relayStatusToManagedStatus(
   status: RelayAgent["status"],
 ): ManagedAgent["status"] {
-  return status === "offline" ? "stopped" : "deployed";
+  return status === "online" || status === "away" ? "deployed" : "stopped";
 }
 
 export function buildChannelAgentSessionCandidates({
