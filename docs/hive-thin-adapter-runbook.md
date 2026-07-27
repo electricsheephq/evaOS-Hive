@@ -75,7 +75,8 @@ Allowed:
 - login/session and device status;
 - Hive update-channel and support information;
 - registered VM-agent catalog and truthful bridge state;
-- the native-equivalent responder policy for registered VM agents.
+- the native-equivalent responder policy for registered VM agents;
+- a link or handoff to the current Electric Sheep website People/Access flow.
 
 Not allowed:
 
@@ -84,12 +85,21 @@ Not allowed:
 - copying Hermes model, provider, memory, tool, permission, instruction, or
   secret controls into Hive;
 - a second profile/avatar, search, memory, or retrieval subsystem;
-- an indefinite loading state without a terminal error or empty state.
+- an indefinite loading state without a terminal error or empty state;
+- a second invitation, membership, or seat authority.
+
+Current invitations and seat changes stay in the Electric Sheep website. A
+future Hive integration may adapt the native People/Access surface to that same
+backend after a separate issue and proof; it must not duplicate the workflow or
+authority.
 
 ## 5. Relay rule
 
-For the guarded business beta, one company receives one relay instance and
-hostname.
+For the guarded business beta, one company receives one customer VM containing
+that company's relay and Hermes gateway. The company's people receive separate
+Hermes profiles on that VM. Different companies do not share a VM or relay.
+
+Each company relay has its own hostname.
 
 - Company and relay are selected server-side after OAuth.
 - Unknown or ambiguous hosts fail closed.
@@ -104,9 +114,20 @@ Do not add shared multi-company relay logic to Hive. A future shared deployment
 requires its own decision, threat model, operating-cost comparison, and runtime
 proof.
 
+Electric Sheep has no permanent support identity inside the relay. Current
+support uses customer-controlled screen sharing or remote control of the
+customer's visible Hive session. A future cross-company super-admin/support view
+requires a separate owner decision, customer policy, audit, revocation, and
+security review.
+
 ## 6. VM-agent rule
 
 Hive consumes already-registered public agent identities.
+
+Hive may separately replace the names, avatars, and default instructions of the
+three upstream bundled starter personas with TARS, Samantha, and HAL 9000. This
+is build-time presentation data only. Their native creation, editing, runtime,
+sandbox, permission, and storage behavior must remain unchanged.
 
 Allowed:
 

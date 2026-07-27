@@ -30,6 +30,10 @@ Hive owns only these seams:
 - **Product identity:** visible Hive name, icon, support destination, bundle
   identity, and signed Hive update channel while retaining required upstream
   license and attribution.
+- **Bundled persona presentation:** Hive may replace the names, avatars, and
+  default instructions of upstream's bundled starter personas with TARS,
+  Samantha, and HAL 9000. Their native lifecycle, editing, runtime, and
+  permission behavior remain upstream.
 - **Company admission:** Electric OAuth, membership and seat entitlement,
   server-selected company, and server-selected relay.
 - **Local identity custody:** the person's private key remains in the operating
@@ -63,8 +67,12 @@ copy Hermes state or turn Electric services into a broker for routine messages.
 
 ## One company, one relay
 
-During the internal canary and guarded business beta, each company receives a
-separate relay instance and hostname. Database, cache, object storage, search,
+During the internal canary and guarded business beta, each company receives one
+customer VM containing that company's relay and Hermes gateway. The company's
+people use separate Hermes profiles on that VM. Different companies do not
+share a VM or relay.
+
+Each relay has a separate hostname. Database, cache, object storage, search,
 secrets, backups, restore targets, and operational lifecycle are scoped to that
 company.
 
@@ -100,9 +108,15 @@ Hive may display their public identity, truthful capability and presence
 metadata, visible native room membership, and an adapter for the native
 responder-policy controls.
 
-Hive does not create or configure those agents. A catalog refresh discovers only
-identities already registered by an authorized server-side process. Names such
-as ATRIS, TARS, Samantha, or HAL 9000 are data, not hardcoded product behavior.
+Hive does not create or configure company VM agents. A catalog refresh
+discovers only identities already registered by an authorized server-side
+process. ATRIS and other VM-agent names are catalog/profile data.
+
+TARS, Samantha, and HAL 9000 are a separate case: Hive may ship them as
+build-time replacements for the names, avatars, and default instructions of
+the three native bundled starter personas. This is a data-only product overlay.
+It does not turn them into company VM agents or change native agent creation,
+editing, runtime, sandbox, permission, or storage behavior.
 
 ## Settings model
 
@@ -113,6 +127,22 @@ support, and registered-agent information that genuinely differs from upstream.
 It must not fork the Settings shell, replace native pages, or use a managed mode
 as a reason to hide unrelated upstream capabilities. Unsupported features must
 be labeled truthfully and narrowly.
+
+For the current release, company invitations and seat changes remain in the
+Electric Sheep website's People/Access experience. A future Hive integration
+may adapt the native People/Access surface to that backend, but must not create
+a second invitation or membership authority.
+
+## Support model
+
+Electric Sheep has no permanent support identity inside a customer relay and no
+default access to customer messages or VM state. Current support is
+customer-controlled screen sharing or remote control of the customer's visible
+Hive session.
+
+Any future cross-company super-admin or support view requires a separate owner
+decision, explicit customer policy, audit, revocation, and security review. It
+is not part of the current adapter.
 
 ## Staying close to upstream
 
