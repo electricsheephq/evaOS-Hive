@@ -1,15 +1,22 @@
 import { isWelcomeExperienceChannel } from "@/features/onboarding/welcome";
 import type { Channel } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
-/** Hive keeps the native Buzz welcome-team lifecycle in every product mode. */
-export function shouldUseLocalWelcomeTeam(_managedProduct: boolean): boolean {
-  return true;
+/**
+ * Managed Hive communities use company-registered VM agents. The native local
+ * welcome team remains available only to unmanaged Buzz.
+ */
+export function shouldUseLocalWelcomeTeam(managedProduct: boolean): boolean {
+  return !managedProduct;
 }
 
 export function isLocalWelcomeExperienceChannel(
   channel: Channel | null | undefined,
 ): boolean {
-  return isWelcomeExperienceChannel(channel);
+  return (
+    shouldUseLocalWelcomeTeam(desktopProductPolicy().managed) &&
+    isWelcomeExperienceChannel(channel)
+  );
 }
 
 export const LOCAL_WELCOME_TEAM_ID = "builtin-team:welcome";
@@ -41,9 +48,19 @@ export function isLocalWelcomeAgentRecord(agent: {
   );
 }
 
-export function shouldPresentLocalAgentTeam(
-  _managedProduct: boolean,
-  _teamId: string,
+export function shouldRunLocalWelcomeAgent(
+  managedProduct: boolean,
+  agent: {
+    personaId?: string | null;
+    teamId?: string | null;
+  },
 ): boolean {
-  return true;
+  return !managedProduct || !isLocalWelcomeAgentRecord(agent);
+}
+
+export function shouldPresentLocalAgentTeam(
+  managedProduct: boolean,
+  teamId: string,
+): boolean {
+  return !managedProduct || teamId !== LOCAL_WELCOME_TEAM_ID;
 }

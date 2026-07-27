@@ -14,6 +14,8 @@ import { listManagedAgents } from "@/shared/api/tauri";
 import type { ManagedAgent } from "@/shared/api/types";
 import { getAgentObserverSnapshot } from "../observerRelayStore";
 import { getAgentWorkingState } from "../agentWorkingSignal";
+import { shouldRunLocalWelcomeAgent } from "@/features/onboarding/localWelcomeTeamPolicy";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   decideAutoRestart,
   nextEdgeState,
@@ -54,8 +56,13 @@ export function useAutoRestartPolicy() {
     if (!agents) return;
     const now = Date.now();
     const edges = edgesRef.current;
+    const managedProduct = desktopProductPolicy().managed;
 
     for (const agent of agents) {
+      if (!shouldRunLocalWelcomeAgent(managedProduct, agent)) {
+        edges.delete(agent.pubkey);
+        continue;
+      }
       const isRunning = agent.status === "running";
       const edge = nextEdgeState(edges.get(agent.pubkey), {
         needsRestart: agent.needsRestart,
@@ -105,6 +112,7 @@ export function useAutoRestartPolicy() {
             !current?.needsRestart ||
             !current.autoRestartOnConfigChange ||
             current.status !== "running" ||
+            !shouldRunLocalWelcomeAgent(managedProduct, current) ||
             getAgentWorkingState(agent.pubkey).source !== "none"
           ) {
             return;
