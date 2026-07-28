@@ -6,13 +6,14 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
+    commands::metadata_poll::poll_metadata,
     events,
     managed_agents::persona_events::monotonic_created_at,
     models::{ProfileInfo, SearchUsersResponse, UserNotesResponse, UsersBatchResponse},
     nostr_convert,
     relay::{
-        query_relay, query_relay_at_with_keys, relay_http_base_url, submit_event,
-        submit_event_at_with_keys,
+        query_relay, query_relay_at_with_keys, relay_api_base_url_with_override,
+        relay_http_base_url, submit_event_at_with_keys,
     },
 };
 
@@ -45,57 +46,52 @@ pub async fn update_profile(
     state: State<'_, AppState>,
 ) -> Result<ProfileInfo, String> {
     // Read-merge-write: kind 0 is a full profile snapshot.
-    let my_pubkey = current_pubkey_hex(&state)?;
-    let prior_events = query_relay(
+    let signer = state.signing_keys()?;
+    let my_pubkey = signer.public_key().to_hex();
+    let api_base_url = relay_api_base_url_with_override(&state);
+    let profile_filter = serde_json::json!({
+        "kinds": [0],
+        "authors": [my_pubkey],
+        "limit": 1
+    });
+    let prior_events = query_relay_at_with_keys(
         &state,
-        &[serde_json::json!({
-            "kinds": [0],
-            "authors": [my_pubkey],
-            "limit": 1
-        })],
+        &api_base_url,
+        std::slice::from_ref(&profile_filter),
+        &signer,
+        None,
     )
     .await?;
 
     // Pull the current content as a JSON object so we can merge with
     // the caller's overrides.
-    let current: Value = prior_events
-        .first()
-        .and_then(|ev| serde_json::from_str::<Value>(&ev.content).ok())
-        .unwrap_or(Value::Null);
+    let prior_event = prior_events.first();
+    let current = profile_content_json(prior_event);
 
-    let dn = display_name
-        .as_deref()
-        .or_else(|| current.get("display_name").and_then(Value::as_str));
-    let name = current.get("name").and_then(Value::as_str);
-    let picture = avatar_url
-        .as_deref()
-        .or_else(|| current.get("picture").and_then(Value::as_str));
-    let ab = about
-        .as_deref()
-        .or_else(|| current.get("about").and_then(Value::as_str));
-    let nip05 = nip05_handle
-        .as_deref()
-        .or_else(|| current.get("nip05").and_then(Value::as_str));
+    let builder = build_updated_profile_event(
+        &current,
+        display_name.as_deref(),
+        avatar_url.as_deref(),
+        about.as_deref(),
+        nip05_handle.as_deref(),
+        prior_event,
+    )?;
+    let submitted = submit_event_at_with_keys(builder, &state, &api_base_url, &signer).await?;
 
-    let builder = events::build_profile(dn, name, picture, ab, nip05)?;
-    submit_event(builder, &state).await?;
-
-    // Re-fetch to return canonical profile.
-    let events = query_relay(
+    // Relay acceptance can precede read-index visibility on multi-node relay
+    // paths. Poll for the exact event we just submitted so a successful save
+    // cannot hand the frontend the older kind:0 snapshot.
+    let event = poll_profile_event_at_with_keys(
         &state,
-        &[serde_json::json!({
-            "kinds": [0],
-            "authors": [current_pubkey_hex(&state)?],
-            "limit": 1
-        })],
+        &api_base_url,
+        &signer,
+        &my_pubkey,
+        &submitted.event_id,
     )
-    .await?;
+    .await?
+    .ok_or_else(|| "profile updated but metadata not yet available".to_string())?;
 
-    Ok(events
-        .first()
-        .map(nostr_convert::profile_info_from_event)
-        .transpose()?
-        .unwrap_or_else(|| empty_profile_info(&current_pubkey_hex_unwrap(&state))))
+    nostr_convert::profile_info_from_event(&event)
 }
 
 #[tauri::command]
@@ -137,14 +133,45 @@ pub async fn update_profile_at_relay(
     }
 
     let builder = build_deferred_profile_event(&current, &avatar_url, prior_event)?;
-    submit_event_at_with_keys(builder, &state, &api_base_url, &signer).await?;
+    let submitted = submit_event_at_with_keys(builder, &state, &api_base_url, &signer).await?;
 
-    let events = query_relay_at_with_keys(&state, &api_base_url, &[filter], &signer, None).await?;
-    Ok(events
-        .first()
-        .map(nostr_convert::profile_info_from_event)
-        .transpose()?
-        .unwrap_or_else(|| empty_profile_info(&expected_pubkey)))
+    let event = poll_profile_event_at_with_keys(
+        &state,
+        &api_base_url,
+        &signer,
+        &expected_pubkey,
+        &submitted.event_id,
+    )
+    .await?
+    .ok_or_else(|| "profile avatar updated but metadata not yet available".to_string())?;
+    nostr_convert::profile_info_from_event(&event)
+}
+
+fn profile_content_json(event: Option<&nostr::Event>) -> Value {
+    event
+        .and_then(|event| serde_json::from_str::<Value>(&event.content).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn build_updated_profile_event(
+    current: &Value,
+    display_name: Option<&str>,
+    avatar_url: Option<&str>,
+    about: Option<&str>,
+    nip05_handle: Option<&str>,
+    prior_event: Option<&nostr::Event>,
+) -> Result<nostr::EventBuilder, String> {
+    let dn = display_name.or_else(|| current.get("display_name").and_then(Value::as_str));
+    let name = current.get("name").and_then(Value::as_str);
+    let picture = avatar_url.or_else(|| current.get("picture").and_then(Value::as_str));
+    let ab = about.or_else(|| current.get("about").and_then(Value::as_str));
+    let nip05 = nip05_handle.or_else(|| current.get("nip05").and_then(Value::as_str));
+
+    Ok(
+        events::build_profile(dn, name, picture, ab, nip05)?.custom_created_at(
+            monotonic_created_at(prior_event.map(|event| event.created_at.as_secs() as i64)),
+        ),
+    )
 }
 
 fn build_deferred_profile_event(
@@ -163,6 +190,37 @@ fn build_deferred_profile_event(
                 prior_event.map(|event| event.created_at.as_secs() as i64),
             )),
     )
+}
+
+async fn poll_profile_event_at_with_keys(
+    state: &AppState,
+    api_base_url: &str,
+    signer: &nostr::Keys,
+    expected_pubkey: &str,
+    event_id: &str,
+) -> Result<Option<nostr::Event>, String> {
+    poll_metadata(|| async {
+        let events = query_relay_at_with_keys(
+            state,
+            api_base_url,
+            &[serde_json::json!({
+                "ids": [event_id],
+                "kinds": [0],
+                "authors": [expected_pubkey],
+                "limit": 1,
+            })],
+            signer,
+            None,
+        )
+        .await?;
+
+        Ok(events.into_iter().find(|event| {
+            event.id.to_hex() == event_id
+                && event.pubkey.to_hex() == expected_pubkey
+                && event.kind == nostr::Kind::Metadata
+        }))
+    })
+    .await
 }
 
 fn capture_expected_signer(state: &AppState, expected_pubkey: &str) -> Result<nostr::Keys, String> {
@@ -466,6 +524,45 @@ mod tests {
             serde_json::from_str::<Value>(&event.content).unwrap()["picture"],
             "https://example.com/avatar.png"
         );
+    }
+
+    #[test]
+    fn profile_update_event_is_strictly_newer_than_prior_head_and_merges_fields() {
+        let keys = nostr::Keys::generate();
+        let prior_created_at = nostr::Timestamp::now().as_secs() + 60;
+        let prior_event = nostr::EventBuilder::new(
+            nostr::Kind::Metadata,
+            serde_json::json!({
+                "display_name": "Old Name",
+                "name": "stable-handle",
+                "picture": "https://example.com/old.png",
+                "about": "Old about",
+                "nip05": "old@example.com"
+            })
+            .to_string(),
+        )
+        .custom_created_at(nostr::Timestamp::from(prior_created_at))
+        .sign_with_keys(&keys)
+        .expect("sign prior profile");
+
+        let builder = build_updated_profile_event(
+            &profile_content_json(Some(&prior_event)),
+            Some("New Name"),
+            None,
+            Some("New about"),
+            None,
+            Some(&prior_event),
+        )
+        .expect("build profile update");
+        let event = builder.sign_with_keys(&keys).expect("sign profile update");
+        let content: Value = serde_json::from_str(&event.content).expect("profile json");
+
+        assert_eq!(event.created_at.as_secs(), prior_created_at + 1);
+        assert_eq!(content["display_name"], "New Name");
+        assert_eq!(content["name"], "stable-handle");
+        assert_eq!(content["picture"], "https://example.com/old.png");
+        assert_eq!(content["about"], "New about");
+        assert_eq!(content["nip05"], "old@example.com");
     }
 
     #[test]
