@@ -96,3 +96,27 @@ fn present_keyring_read_failure_uses_legacy_file_when_no_marker_exists() {
         "keyring entry must remain intact"
     );
 }
+
+#[test]
+fn present_keyring_read_failure_keeps_corrupt_legacy_file_locked() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy_path = dir.path().join("identity.key");
+    std::fs::write(&legacy_path, "not-a-valid-nsec").unwrap();
+
+    let store = FailingLoadStore::new();
+    let resolved = resolve_identity_with_store(&store, &legacy_path, dir.path()).unwrap();
+
+    assert_eq!(resolved.recovery, RecoveryState::KeyringLocked);
+    assert!(
+        legacy_path.exists(),
+        "corrupt fallback must be left untouched"
+    );
+    assert!(
+        store.slot.borrow().is_empty(),
+        "keyring must not be rewritten"
+    );
+    assert!(
+        store.deleted.borrow().is_empty(),
+        "keyring entry must remain intact"
+    );
+}

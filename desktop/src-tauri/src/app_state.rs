@@ -476,16 +476,23 @@ fn resolve_identity_with_store(
             let loaded = match store.load(IDENTITY_KEY_NAME) {
                 Ok(value) => value,
                 Err(error) => {
-                    if legacy_path.exists() && !migration_marker_path(data_dir).exists() {
-                        eprintln!(
-                            "buzz-desktop: keyring identity present but unreadable ({error}); \
-                             using legacy identity.key fallback for this boot"
-                        );
-                        let keys = load_key_file(legacy_path)?;
-                        return Ok(ResolvedIdentity {
-                            keys,
-                            recovery: RecoveryState::None,
-                        });
+                    if legacy_path.exists() {
+                        match load_key_file(legacy_path) {
+                            Ok(keys) => {
+                                eprintln!(
+                                    "buzz-desktop: keyring identity present but unreadable \
+                                     ({error}); using identity.key fallback for this boot"
+                                );
+                                return Ok(ResolvedIdentity {
+                                    keys,
+                                    recovery: RecoveryState::None,
+                                });
+                            }
+                            Err(file_error) => eprintln!(
+                                "buzz-desktop: keyring identity present but unreadable \
+                                 ({error}); identity.key fallback failed ({file_error})"
+                            ),
+                        }
                     }
                     let ephemeral = Keys::generate();
                     eprintln!(
