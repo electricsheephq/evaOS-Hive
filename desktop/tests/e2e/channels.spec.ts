@@ -2883,6 +2883,53 @@ test("channel header omits the add agent action", async ({ page }) => {
   await expect(page.getByTestId("channel-management-trigger")).toBeVisible();
 });
 
+test("sidebar surfaces active huddles in authorized channels", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await waitForMockLiveSubscription(page, "random", KIND_HUDDLE_STARTED);
+
+  const ephemeralChannelId = "10000000-0000-4000-8000-000000000002";
+  const createdAt = Math.floor(Date.now() / 1000);
+
+  await page.evaluate(
+    ({ createdAt, ephemeralChannelId, kind }) => {
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "random",
+        content: JSON.stringify({
+          ephemeral_channel_id: ephemeralChannelId,
+        }),
+        createdAt,
+        id: "3".repeat(64),
+        kind,
+      });
+    },
+    { createdAt, ephemeralChannelId, kind: KIND_HUDDLE_STARTED },
+  );
+
+  await expect(page.getByTestId("channel-active-huddle-random")).toHaveText(
+    "1",
+  );
+
+  await page.evaluate(
+    ({ createdAt, ephemeralChannelId, kind }) => {
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "random",
+        content: JSON.stringify({
+          ephemeral_channel_id: ephemeralChannelId,
+        }),
+        createdAt,
+        id: "4".repeat(64),
+        kind,
+      });
+    },
+    { createdAt: createdAt + 1, ephemeralChannelId, kind: KIND_HUDDLE_ENDED },
+  );
+
+  await expect(page.getByTestId("channel-active-huddle-random")).toHaveCount(0);
+});
+
 test("huddle rollback end event clears the active header action", async ({
   page,
 }) => {

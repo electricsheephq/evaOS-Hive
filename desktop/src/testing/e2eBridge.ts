@@ -8756,8 +8756,9 @@ function sendToMockSocket(args: {
       const kinds = new Set<number>();
       const ownerPubkeys = new Set<string>();
       for (const f of filters) {
-        const cid = f["#h"]?.[0];
-        if (cid) channelIds.add(cid);
+        for (const cid of f["#h"] ?? []) {
+          channelIds.add(cid);
+        }
         for (const kind of f.kinds ?? []) {
           kinds.add(kind);
         }
