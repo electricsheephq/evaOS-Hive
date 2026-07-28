@@ -473,7 +473,41 @@ fn resolve_identity_with_store(
 
     match store.probe(IDENTITY_KEY_NAME) {
         KeyringProbe::Present => {
-            if let Some(nsec) = store.load(IDENTITY_KEY_NAME)? {
+            let loaded = match store.load(IDENTITY_KEY_NAME) {
+                Ok(value) => value,
+                Err(error) => {
+                    if legacy_path.exists() {
+                        match load_key_file(legacy_path) {
+                            Ok(keys) => {
+                                eprintln!(
+                                    "buzz-desktop: keyring identity present but unreadable \
+                                     ({error}); using identity.key fallback for this boot"
+                                );
+                                return Ok(ResolvedIdentity {
+                                    keys,
+                                    recovery: RecoveryState::None,
+                                });
+                            }
+                            Err(file_error) => eprintln!(
+                                "buzz-desktop: keyring identity present but unreadable \
+                                 ({error}); identity.key fallback failed ({file_error})"
+                            ),
+                        }
+                    }
+                    let ephemeral = Keys::generate();
+                    eprintln!(
+                        "buzz-desktop: keyring identity present but unreadable ({error}); \
+                         booting keyring-locked recovery with ephemeral key {} — \
+                         unlock the keyring and relaunch",
+                        ephemeral.public_key().to_hex()
+                    );
+                    return Ok(ResolvedIdentity {
+                        keys: ephemeral,
+                        recovery: RecoveryState::KeyringLocked,
+                    });
+                }
+            };
+            if let Some(nsec) = loaded {
                 match Keys::parse(nsec.trim()) {
                     Ok(keyring_keys) => {
                         eprintln!(
@@ -1069,6 +1103,9 @@ pub(crate) fn save_key_file(path: &std::path::Path, keys: &Keys) -> Result<(), S
         .map_err(|e| format!("commit identity.key: {e}"))
 }
 
+#[cfg(test)]
+#[path = "app_state_keyring_read_failure_tests.rs"]
+mod keyring_read_failure_tests;
 #[cfg(test)]
 #[path = "app_state_tests.rs"]
 mod tests;
