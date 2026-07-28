@@ -23,3 +23,15 @@ test("a failed login refresh cannot erase the visible action error", () => {
   assert.notEqual(actionErrorIndex, -1);
   assert.ok(refreshIndex < actionErrorIndex);
 });
+
+test("lost-device identity replacement is explicit, consequential, and command-backed", () => {
+  assert.match(authGateSource, /I no longer have an authorized device/);
+  assert.match(authGateSource, /old key[\s\S]*loses relay access/);
+  assert.match(
+    authGateSource,
+    /offline messages addressed only to[\s\S]*old key may not be recoverable/,
+  );
+  assert.match(authGateSource, /Replace identity on this Mac/);
+  assert.match(authGateSource, /replaceLostEvaosTeamsIdentity/);
+  assert.match(apiSource, /replace_lost_evaos_teams_identity/);
+});

@@ -709,6 +709,7 @@ pub fn run() {
             start_evaos_teams_identity_recovery,
             confirm_evaos_teams_identity_recovery_sas,
             cancel_evaos_teams_identity_recovery,
+            replace_lost_evaos_teams_identity,
             logout_evaos_teams,
             list_hive_company_agents,
             list_hive_company_members,

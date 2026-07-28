@@ -14,6 +14,7 @@ import {
   cancelEvaosTeamsIdentityRecovery,
   confirmEvaosTeamsIdentityRecoverySas,
   getEvaosTeamsAuthStatus,
+  replaceLostEvaosTeamsIdentity,
   startEvaosTeamsLogin,
   startEvaosTeamsIdentityRecovery,
   submitEvaosTeamsLoginCode,
@@ -42,6 +43,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const [recoveryStarted, setRecoveryStarted] = useState(false);
   const [recoverySas, setRecoverySas] = useState<string | null>(null);
   const [recoveryWorking, setRecoveryWorking] = useState(false);
+  const [lostDeviceConfirmed, setLostDeviceConfirmed] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -270,6 +272,12 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     }
   }
 
+  async function replaceLostIdentity() {
+    if (working) return;
+    await run(replaceLostEvaosTeamsIdentity);
+    setLostDeviceConfirmed(false);
+  }
+
   if (
     !tauri ||
     (status && !status.managed) ||
@@ -433,6 +441,44 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 both devices. Hive will import only the exact identity selected
                 by Electric Sheep.
               </p>
+              {!lostDeviceConfirmed ? (
+                <Button
+                  disabled={recoveryWorking || recoveryStarted || working}
+                  onClick={() => setLostDeviceConfirmed(true)}
+                  type="button"
+                  variant="ghost"
+                >
+                  I no longer have an authorized device
+                </Button>
+              ) : (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+                  <p className="text-sm leading-6 text-foreground">
+                    This replaces this member&apos;s Hive identity. The old key
+                    loses relay access, and offline messages addressed only to
+                    that old key may not be recoverable.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      disabled={working}
+                      onClick={() => setLostDeviceConfirmed(false)}
+                      type="button"
+                      variant="outline"
+                    >
+                      Keep existing identity
+                    </Button>
+                    <Button
+                      disabled={working}
+                      onClick={() => void replaceLostIdentity()}
+                      type="button"
+                      variant="destructive"
+                    >
+                      {working
+                        ? "Replacing identity…"
+                        : "Replace identity on this Mac"}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </form>
           ) : null}
           {status?.phase === "keychain_locked" ||
