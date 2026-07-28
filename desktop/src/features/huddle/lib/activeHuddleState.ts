@@ -72,9 +72,9 @@ function eventOrder(kind: number): number {
   switch (kind) {
     case KIND_HUDDLE_STARTED:
       return 0;
-    case KIND_HUDDLE_PARTICIPANT_JOINED:
-      return 1;
     case KIND_HUDDLE_PARTICIPANT_LEFT:
+      return 1;
+    case KIND_HUDDLE_PARTICIPANT_JOINED:
       return 2;
     case KIND_HUDDLE_ENDED:
       return 3;
@@ -150,7 +150,14 @@ export function reconstructActiveHuddlesByParentChannel(
     if (isHuddleStartStale(state.startedAt, nowMs)) continue;
 
     const existing = activeByParent.get(state.parentChannelId);
-    if (existing && existing.lastEventAt >= state.lastEventAt) continue;
+    if (
+      existing &&
+      (existing.startedAt > state.startedAt ||
+        (existing.startedAt === state.startedAt &&
+          existing.lastEventAt >= state.lastEventAt))
+    ) {
+      continue;
+    }
 
     activeByParent.set(state.parentChannelId, {
       ephemeralChannelId: state.ephemeralChannelId,

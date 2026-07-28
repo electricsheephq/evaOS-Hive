@@ -156,6 +156,71 @@ test("reconstructActiveHuddlesByParentChannel ignores lifecycle rows without a s
   assert.equal(active.size, 0);
 });
 
+test("reconstructActiveHuddlesByParentChannel preserves same-second leave and rejoin transitions", () => {
+  const events = [
+    huddleEvent({
+      id: "start",
+      kind: KIND_HUDDLE_STARTED,
+      createdAt: 100,
+    }),
+    huddleEvent({
+      id: "join-benji",
+      kind: KIND_HUDDLE_PARTICIPANT_JOINED,
+      createdAt: 101,
+      participant: BENJI,
+      pubkey: "relay",
+    }),
+    huddleEvent({
+      id: "z-left-benji",
+      kind: KIND_HUDDLE_PARTICIPANT_LEFT,
+      createdAt: 102,
+      participant: BENJI,
+      pubkey: "relay",
+    }),
+    huddleEvent({
+      id: "a-rejoin-benji",
+      kind: KIND_HUDDLE_PARTICIPANT_JOINED,
+      createdAt: 102,
+      participant: BENJI,
+      pubkey: "relay",
+    }),
+  ];
+
+  const active = reconstructActiveHuddlesByParentChannel(events, 110_000);
+
+  assert.equal(active.get("general")?.participantPubkeys.has(BENJI), true);
+});
+
+test("reconstructActiveHuddlesByParentChannel prefers the newest active huddle for a channel", () => {
+  const events = [
+    huddleEvent({
+      id: "old-start",
+      kind: KIND_HUDDLE_STARTED,
+      createdAt: 100,
+      ephemeralChannelId: "old-huddle",
+    }),
+    huddleEvent({
+      id: "new-start",
+      kind: KIND_HUDDLE_STARTED,
+      createdAt: 110,
+      ephemeralChannelId: "new-huddle",
+      pubkey: BENJI,
+    }),
+    huddleEvent({
+      id: "old-late-join",
+      kind: KIND_HUDDLE_PARTICIPANT_JOINED,
+      createdAt: 120,
+      ephemeralChannelId: "old-huddle",
+      participant: ANDREW,
+      pubkey: "relay",
+    }),
+  ];
+
+  const active = reconstructActiveHuddlesByParentChannel(events, 125_000);
+
+  assert.equal(active.get("general")?.ephemeralChannelId, "new-huddle");
+});
+
 test("reconstructActiveHuddlesByParentChannel keeps parent channels isolated", () => {
   const events = [
     huddleEvent({
