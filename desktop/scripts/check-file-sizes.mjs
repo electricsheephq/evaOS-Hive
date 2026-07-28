@@ -54,7 +54,11 @@ const overrides = new Map([
   // revocable desktop-session adapter isolated from native Buzz behavior in
   // one feature-gated module. Splitting that security boundary during the
   // canary reset would add risk without reducing the reachable surface.
-  ["src-tauri/src/evaos_teams.rs", 1300],
+  // Hive #66 adds OAuth-authenticated NIP-AB identity recovery for devices
+  // missing the already-bound membership key. Keep the temporary ratchet here
+  // so the recovery/session revocation boundary remains reviewable as one unit;
+  // split this module after the internal canary gate closes.
+  ["src-tauri/src/evaos_teams.rs", 1900],
   // Native Builderlab auth/community commands add a small registration surface
   // to the existing Tauri composition root. The implementation lives in
   // builderlab.rs; this narrowly ratchets the command wiring while lib.rs is

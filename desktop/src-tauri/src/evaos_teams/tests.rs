@@ -355,14 +355,18 @@ fn account_switch_selects_only_the_server_bound_membership_key() {
         ),
     ]);
 
-    let selected = select_login_keys(
+    let selected = match select_login_keys(
         &stored,
         &IdentityBinding {
             membership_id: membership_b.to_string(),
             public_key: Some(keys_b.public_key().to_hex()),
         },
     )
-    .unwrap();
+    .unwrap()
+    {
+        LoginKeySelection::Ready(keys) => keys,
+        LoginKeySelection::RecoveryRequired { .. } => panic!("matching key should be ready"),
+    };
     assert_eq!(selected.public_key(), keys_b.public_key());
 }
 
@@ -372,14 +376,18 @@ fn legacy_identity_is_reused_only_when_the_server_binding_matches() {
     let keys = Keys::generate();
     let stored = identity_only_entries(&keys).unwrap();
 
-    let selected = select_login_keys(
+    let selected = match select_login_keys(
         &stored,
         &IdentityBinding {
             membership_id: membership_id.to_string(),
             public_key: Some(keys.public_key().to_hex()),
         },
     )
-    .unwrap();
+    .unwrap()
+    {
+        LoginKeySelection::Ready(keys) => keys,
+        LoginKeySelection::RecoveryRequired { .. } => panic!("matching key should be ready"),
+    };
     assert_eq!(selected.public_key(), keys.public_key());
 }
 
@@ -428,14 +436,20 @@ fn account_switch_never_reuses_another_memberships_key() {
         encode_managed_identity(&keys_a).unwrap(),
     )]);
 
-    let selected = select_login_keys(
+    let selected = match select_login_keys(
         &stored,
         &IdentityBinding {
             membership_id: membership_b.to_string(),
             public_key: None,
         },
     )
-    .unwrap();
+    .unwrap()
+    {
+        LoginKeySelection::Ready(keys) => keys,
+        LoginKeySelection::RecoveryRequired { .. } => {
+            panic!("unbound membership should generate a fresh key")
+        }
+    };
     assert_ne!(selected.public_key(), keys_a.public_key());
 }
 
@@ -460,12 +474,95 @@ fn active_scoped_identity_restores_with_its_membership() {
 }
 
 #[test]
-fn bound_membership_without_its_private_key_fails_closed() {
+fn bound_membership_without_its_private_key_requires_recovery() {
+    let public_key = "a".repeat(64);
     let binding = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000001".to_string(),
-        public_key: Some("a".repeat(64)),
+        public_key: Some(public_key.clone()),
     };
-    assert!(select_login_keys(&HashMap::new(), &binding).is_err());
+    match select_login_keys(&HashMap::new(), &binding).unwrap() {
+        LoginKeySelection::RecoveryRequired {
+            public_key: selected,
+        } => assert_eq!(selected, public_key),
+        LoginKeySelection::Ready(_) => panic!("missing bound key must not be generated"),
+    }
+}
+
+#[test]
+#[cfg(feature = "evaos-teams-managed")]
+fn pending_identity_recovery_status_exposes_no_secret_material() {
+    let state = EvaosTeamsState::default();
+    let public_key = "b".repeat(64);
+    let status = set_pending_identity_recovery(
+        &state,
+        "opaque-desktop-session".to_string(),
+        IdentityBinding {
+            membership_id: "10000000-0000-4000-8000-000000000001".to_string(),
+            public_key: Some(public_key.clone()),
+        },
+        public_key,
+    )
+    .unwrap();
+
+    assert_eq!(status.phase, "identity_recovery_required");
+    assert!(!status.authenticated);
+    let message = status.message.unwrap();
+    assert!(!message.contains("opaque-desktop-session"));
+    assert!(!message.contains("nsec"));
+    assert!(pending_identity_recovery_status(&state).is_some());
+}
+
+#[test]
+#[cfg(feature = "evaos-teams-managed")]
+fn recovery_payload_accepts_only_the_server_bound_identity() {
+    let keys = Keys::generate();
+    let expected_public_key = keys.public_key().to_hex();
+    let nsec = encode_managed_identity(&keys).unwrap();
+    let payload = serde_json::json!({
+        "relayUrl": "https://attacker.example.com",
+        "pubkey": expected_public_key,
+        "nsec": nsec,
+    });
+
+    let recovered = recovery_payload_keys(
+        PayloadType::Custom,
+        Zeroizing::new(payload.to_string()),
+        &expected_public_key,
+    )
+    .unwrap();
+    assert_eq!(recovered.public_key(), keys.public_key());
+}
+
+#[test]
+#[cfg(feature = "evaos-teams-managed")]
+fn recovery_payload_rejects_a_different_public_identity() {
+    let keys = Keys::generate();
+    let other_keys = Keys::generate();
+    let payload = serde_json::json!({
+        "pubkey": other_keys.public_key().to_hex(),
+        "nsec": encode_managed_identity(&other_keys).unwrap(),
+    });
+
+    let error = recovery_payload_keys(
+        PayloadType::Custom,
+        Zeroizing::new(payload.to_string()),
+        &keys.public_key().to_hex(),
+    )
+    .unwrap_err();
+    assert!(error.contains("different identity"));
+}
+
+#[test]
+#[cfg(feature = "evaos-teams-managed")]
+fn recovery_payload_rejects_unsupported_payload_types() {
+    let keys = Keys::generate();
+    let error = recovery_payload_keys(
+        PayloadType::Bunker,
+        Zeroizing::new("nostrconnect://example".to_string()),
+        &keys.public_key().to_hex(),
+    )
+    .unwrap_err();
+    assert!(error.contains("unsupported"));
 }
 
 #[test]
