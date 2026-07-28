@@ -17,6 +17,7 @@ export type EvaosTeamsAuthStatus = {
     | "signed_out"
     | "active"
     | "keychain_locked"
+    | "identity_recovery_required"
     | "reauth_required"
     | "logout_pending";
   authenticated: boolean;
@@ -66,6 +67,18 @@ export function startEvaosTeamsLogin() {
 
 export function submitEvaosTeamsLoginCode(deviceCode: string) {
   return invoke<void>("submit_evaos_teams_login_code", { deviceCode });
+}
+
+export function startEvaosTeamsIdentityRecovery(pairingCode: string) {
+  return invoke<void>("start_evaos_teams_identity_recovery", { pairingCode });
+}
+
+export function confirmEvaosTeamsIdentityRecoverySas() {
+  return invoke<void>("confirm_evaos_teams_identity_recovery_sas");
+}
+
+export function cancelEvaosTeamsIdentityRecovery() {
+  return invoke<EvaosTeamsAuthStatus>("cancel_evaos_teams_identity_recovery");
 }
 
 export function logoutEvaosTeams() {
@@ -121,6 +134,13 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
         body:
           status.message ??
           "Your managed access could not be refreshed. Hive remains disconnected.",
+      };
+    case "identity_recovery_required":
+      return {
+        title: "Recover this Hive identity",
+        body:
+          status.message ??
+          "Electric Sheep verified this account. Recover the existing Hive identity from an already authorized device to continue.",
       };
     case "active":
       return {

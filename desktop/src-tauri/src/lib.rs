@@ -84,6 +84,34 @@ fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
     }
 }
 
+fn reveal_main_webview_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("buzz-desktop: failed to find main window for reveal");
+        return;
+    };
+    if let Err(error) = window.unminimize() {
+        eprintln!("buzz-desktop: failed to unminimize main window: {error}");
+    }
+    if let Err(error) = window.show() {
+        eprintln!("buzz-desktop: failed to show main window: {error}");
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        eprintln!("buzz-desktop: failed to focus main window: {error}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_main_webview_window_if_hidden(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    match window.is_visible() {
+        Ok(true) => {}
+        Ok(false) | Err(_) => reveal_main_webview_window(app),
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn set_initial_window_backing<R: tauri::Runtime>(window: &tauri::Window<R>) {
     // The window remains transparent at runtime for vibrancy. Use an opaque
@@ -171,9 +199,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Focus the existing window when a duplicate instance launches.
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
+            reveal_main_webview_window(app);
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
                 if is_supported_deep_link_url(arg) {
@@ -589,6 +615,15 @@ pub fn run() {
                     .store(true, Ordering::Release);
             }
 
+            #[cfg(target_os = "macos")]
+            {
+                let reveal_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+                    reveal_main_webview_window_if_hidden(&reveal_handle);
+                });
+            }
+
             // Periodic sweep: reap orphaned agents from dead instances every 60s.
             // Catches agents that escaped both the Justfile trap and boot-time
             // reaping (e.g. a `just staging` Ctrl+C leak that only gets collected
@@ -671,6 +706,9 @@ pub fn run() {
             get_evaos_teams_auth_status,
             start_evaos_teams_login,
             submit_evaos_teams_login_code,
+            start_evaos_teams_identity_recovery,
+            confirm_evaos_teams_identity_recovery_sas,
+            cancel_evaos_teams_identity_recovery,
             logout_evaos_teams,
             list_hive_company_agents,
             list_hive_company_members,
@@ -956,6 +994,10 @@ pub fn run() {
             // deliberately skipping those native global destructors.
             #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
             hard_exit_after_mesh_shutdown();
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            reveal_main_webview_window(app_handle);
         }
         _ => {}
     });

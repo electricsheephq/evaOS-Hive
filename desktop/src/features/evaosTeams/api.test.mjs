@@ -19,6 +19,23 @@ test("managed auth copy never claims authentication while refresh is unknown", (
   );
 });
 
+test("managed identity recovery copy never claims active authentication", () => {
+  const status = {
+    managed: true,
+    phase: "identity_recovery_required",
+    authenticated: false,
+    keychainAvailable: true,
+    message: "Recover the Hive identity key ending in abcdef12.",
+  };
+  const copy = evaosTeamsStatusCopy(status);
+  assert.equal(copy.title, "Recover this Hive identity");
+  assert.match(copy.body, /Recover/);
+  assert.doesNotMatch(
+    JSON.stringify(copy),
+    /authenticated|desktop_session|nsec|private key/i,
+  );
+});
+
 test("managed entitlement controls a bounded refresh delay", () => {
   const status = {
     managed: true,

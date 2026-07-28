@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   type FormEvent,
   type ReactNode,
@@ -10,8 +11,11 @@ import {
 import {
   evaosTeamsRefreshDelay,
   evaosTeamsStatusCopy,
+  cancelEvaosTeamsIdentityRecovery,
+  confirmEvaosTeamsIdentityRecoverySas,
   getEvaosTeamsAuthStatus,
   startEvaosTeamsLogin,
+  startEvaosTeamsIdentityRecovery,
   submitEvaosTeamsLoginCode,
   type EvaosTeamsAuthStatus,
 } from "@/features/evaosTeams/api";
@@ -34,6 +38,10 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const [backupCode, setBackupCode] = useState("");
   const [backupCodeSent, setBackupCodeSent] = useState(false);
   const [submittingCode, setSubmittingCode] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [recoveryStarted, setRecoveryStarted] = useState(false);
+  const [recoverySas, setRecoverySas] = useState<string | null>(null);
+  const [recoveryWorking, setRecoveryWorking] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -55,6 +63,55 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     if (!tauri) return;
     void refresh();
   }, [refresh, tauri]);
+
+  useEffect(() => {
+    if (!tauri || status?.phase !== "identity_recovery_required") return;
+    let cancelled = false;
+    const unlisteners: (() => void)[] = [];
+
+    listen<{ sas: string }>("evaos-teams-identity-recovery-sas", (event) => {
+      if (!cancelled) {
+        setRecoverySas(event.payload.sas);
+        setRecoveryWorking(false);
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisteners.push(fn);
+    });
+
+    listen("evaos-teams-identity-recovery-complete", () => {
+      if (!cancelled) {
+        setRecoveryStarted(false);
+        setRecoverySas(null);
+        setRecoveryCode("");
+        setRecoveryWorking(false);
+        void refresh();
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisteners.push(fn);
+    });
+
+    listen<{ message: string }>(
+      "evaos-teams-identity-recovery-error",
+      (event) => {
+        if (!cancelled) {
+          setError(event.payload.message);
+          setRecoveryStarted(false);
+          setRecoverySas(null);
+          setRecoveryWorking(false);
+        }
+      },
+    ).then((fn) => {
+      if (cancelled) fn();
+      else unlisteners.push(fn);
+    });
+
+    return () => {
+      cancelled = true;
+      for (const fn of unlisteners) fn();
+    };
+  }, [refresh, status?.phase, tauri]);
 
   useEffect(() => {
     if (!status?.managed || status.phase !== "active") return;
@@ -158,6 +215,61 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     }
   }
 
+  async function startIdentityRecovery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!recoveryCode.trim() || recoveryWorking) return;
+    setError(null);
+    setRecoverySas(null);
+    setRecoveryStarted(true);
+    setRecoveryWorking(true);
+    try {
+      await startEvaosTeamsIdentityRecovery(recoveryCode);
+    } catch (recoveryError) {
+      setError(
+        recoveryError instanceof Error
+          ? recoveryError.message
+          : String(recoveryError),
+      );
+      setRecoveryStarted(false);
+      setRecoveryWorking(false);
+    }
+  }
+
+  async function confirmIdentityRecovery() {
+    if (recoveryWorking) return;
+    setRecoveryWorking(true);
+    setError(null);
+    try {
+      await confirmEvaosTeamsIdentityRecoverySas();
+    } catch (recoveryError) {
+      setError(
+        recoveryError instanceof Error
+          ? recoveryError.message
+          : String(recoveryError),
+      );
+      setRecoveryWorking(false);
+    }
+  }
+
+  async function cancelIdentityRecovery() {
+    setRecoveryWorking(true);
+    setError(null);
+    try {
+      setStatus(await cancelEvaosTeamsIdentityRecovery());
+      setRecoveryStarted(false);
+      setRecoverySas(null);
+      setRecoveryCode("");
+    } catch (recoveryError) {
+      setError(
+        recoveryError instanceof Error
+          ? recoveryError.message
+          : String(recoveryError),
+      );
+    } finally {
+      setRecoveryWorking(false);
+    }
+  }
+
   if (
     !tauri ||
     (status && !status.managed) ||
@@ -177,7 +289,9 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
             body: "Hive is checking Keychain and your Electric Sheep access.",
           };
   const maySignIn =
-    status?.phase === "signed_out" || status?.phase === "reauth_required";
+    status?.phase === "signed_out" ||
+    status?.phase === "reauth_required" ||
+    status?.phase === "identity_recovery_required";
 
   return (
     <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-background px-6 py-12">
@@ -243,6 +357,81 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 If the browser does not return here automatically, copy the
                 one-time code shown on the Electric Sheep page. It works only
                 for this sign-in attempt.
+              </p>
+            </form>
+          ) : null}
+          {status?.phase === "identity_recovery_required" ? (
+            <form
+              className="flex flex-col gap-2"
+              onSubmit={startIdentityRecovery}
+            >
+              <Input
+                aria-label="Hive identity pairing code"
+                autoCapitalize="none"
+                autoComplete="off"
+                disabled={recoveryStarted}
+                inputMode="text"
+                onChange={(event) => setRecoveryCode(event.target.value)}
+                placeholder="Paste pairing code from an authorized Hive device"
+                spellCheck={false}
+                value={recoveryCode}
+              />
+              <Button
+                disabled={
+                  !recoveryCode.trim() || recoveryWorking || recoveryStarted
+                }
+                type="submit"
+                variant="outline"
+              >
+                {recoveryWorking && !recoverySas
+                  ? "Waiting for security code…"
+                  : recoveryStarted
+                    ? "Recovery started"
+                    : "Start identity recovery"}
+              </Button>
+              {recoverySas || recoveryStarted ? (
+                <div className="rounded-lg border border-border/70 p-3">
+                  {recoverySas ? (
+                    <>
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Verify this code matches the authorized Hive device
+                      </p>
+                      <p className="mt-2 font-mono text-2xl font-semibold tracking-[0.2em]">
+                        {recoverySas.slice(0, 3)} {recoverySas.slice(3)}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Waiting for the authorized Hive device. You can cancel
+                      this recovery attempt at any time.
+                    </p>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      disabled={recoveryWorking}
+                      onClick={() => void cancelIdentityRecovery()}
+                      type="button"
+                      variant="outline"
+                    >
+                      Cancel
+                    </Button>
+                    {recoverySas ? (
+                      <Button
+                        disabled={recoveryWorking}
+                        onClick={() => void confirmIdentityRecovery()}
+                        type="button"
+                      >
+                        Codes match
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              <p className="text-xs leading-5 text-muted-foreground">
+                Open Hive on a device that already has this account, use Mobile
+                pairing, copy the pairing code, and verify the security code on
+                both devices. Hive will import only the exact identity selected
+                by Electric Sheep.
               </p>
             </form>
           ) : null}

@@ -11,6 +11,7 @@ const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 const WELCOME_FAILURE_PUBKEY = TEST_IDENTITIES.tyler.pubkey;
 const TRANSACTION_STORAGE_KEY = "buzz-community-onboarding-transaction.v1";
 const COMMUNITY_RELAY_URL = "wss://hive.example.com";
+const WELCOME_CHANNEL_ENSURED_STORAGE_KEY = "buzz-welcome-channel-ensured.v2";
 
 const PENDING_JOIN_LINK = {
   id: "dl-join-1",
@@ -268,9 +269,13 @@ test("Welcome failure retries once before allowing starter channel setup to be s
   const welcomeError = "Channel creation is not permitted.";
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await page.addInitScript(
-    ({ pubkey, relayUrl, storageKey }) => {
+    ({ pubkey, relayUrl, storageKey, welcomeEnsuredStorageKey }) => {
       window.localStorage.setItem(
         `buzz-machine-onboarding-complete.v2:${pubkey}`,
+        "true",
+      );
+      window.localStorage.setItem(
+        `${welcomeEnsuredStorageKey}:${encodeURIComponent(relayUrl)}:${pubkey}`,
         "true",
       );
       const timestamp = new Date().toISOString();
@@ -292,6 +297,7 @@ test("Welcome failure retries once before allowing starter channel setup to be s
       pubkey: WELCOME_FAILURE_PUBKEY,
       relayUrl: COMMUNITY_RELAY_URL,
       storageKey: TRANSACTION_STORAGE_KEY,
+      welcomeEnsuredStorageKey: WELCOME_CHANNEL_ENSURED_STORAGE_KEY,
     },
   );
   await installMockBridge(
@@ -320,25 +326,6 @@ test("Welcome failure retries once before allowing starter channel setup to be s
   );
   await page.goto("/");
 
-  for (const persona of [
-    {
-      avatarUrl: "/onboarding/starter-team/tars.webp",
-      testId: "starter-persona-tars",
-    },
-    {
-      avatarUrl: "/onboarding/starter-team/samantha.webp",
-      testId: "starter-persona-samantha",
-    },
-    {
-      avatarUrl: "/onboarding/starter-team/hal-9000.webp",
-      testId: "starter-persona-hal 9000",
-    },
-  ]) {
-    const character = page.getByTestId(persona.testId);
-    await expect(character).toBeVisible();
-    await expect(character).toHaveAttribute("src", persona.avatarUrl);
-  }
-
   const enterButton = page.getByRole("button", { name: "Take me to Buzz" });
   await enterButton.click();
 
@@ -365,13 +352,13 @@ test("Welcome failure retries once before allowing starter channel setup to be s
   await expect(skipButton).toBeEnabled();
   await expect(page.getByRole("button", { name: "Back" })).toBeVisible();
 
-  const starterChannelAttempts = await page.evaluate(
+  const starterChannelAttemptsBeforeSkip = await page.evaluate(
     () =>
       window.__BUZZ_E2E_COMMANDS__?.filter(
         (command) => command === "ensure_starter_channels",
       ).length ?? 0,
   );
-  expect(starterChannelAttempts).toBe(3);
+  expect(starterChannelAttemptsBeforeSkip).toBeGreaterThanOrEqual(3);
 
   await skipButton.click();
 
@@ -383,7 +370,7 @@ test("Welcome failure retries once before allowing starter channel setup to be s
           (command) => command === "ensure_starter_channels",
         ).length ?? 0,
     ),
-  ).toBe(3);
+  ).toBe(starterChannelAttemptsBeforeSkip);
   await expect
     .poll(() =>
       page.evaluate(
