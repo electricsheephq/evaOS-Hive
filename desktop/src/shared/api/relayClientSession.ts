@@ -358,14 +358,12 @@ export class RelayClient {
     // Fire-and-forget: no need to wait for relay acknowledgement.
     void this.sendRaw(["EVENT", event]).catch(() => {});
   }
-
   async subscribeToChannel(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
   ) {
     return this.subscribe(buildChannelFilter(channelId, 50), onEvent);
   }
-
   /** Subscribe to channel rows and aux starting now, with no history replay. */
   async subscribeToChannelLive(
     channelId: string,
@@ -384,27 +382,31 @@ export class RelayClient {
       onEvent,
     );
   }
-
-  /**
-   * Subscribe to huddle lifecycle events (kinds 48100–48103) for a channel.
-   * Used by HuddleIndicator to detect active huddles without being drowned
-   * out by regular channel messages in the generic subscription window.
-   * Includes both historical (last 10) and live events.
-   */
   async subscribeToHuddleEvents(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
   ) {
-    return this.subscribe(
-      {
-        kinds: [48100, 48101, 48102, 48103],
-        "#h": [channelId],
-        limit: 100,
-      },
-      onEvent,
-    );
+    return this.subscribeToHuddleEventsForChannels([channelId], onEvent);
   }
-
+  /** Replay up to 100 huddle lifecycle rows, then stream live rows, per channel-scoped REQ. */
+  async subscribeToHuddleEventsForChannels(
+    channelIds: string[],
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    const ids = [...new Set(channelIds.filter(Boolean))];
+    if (ids.length === 0) return async () => {};
+    const disposes = await Promise.all(
+      ids.map((id) =>
+        this.subscribe(
+          { kinds: [48100, 48101, 48102, 48103], "#h": [id], limit: 100 },
+          onEvent,
+        ),
+      ),
+    );
+    return async () => {
+      await Promise.all(disposes.map((dispose) => dispose()));
+    };
+  }
   async subscribeToTypingIndicators(
     channelId: string,
     onEvent: (event: RelayEvent) => void,

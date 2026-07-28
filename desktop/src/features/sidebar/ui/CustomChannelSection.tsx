@@ -55,6 +55,7 @@ import {
   SECTION_ICON_BUTTON_CLASS,
 } from "@/features/sidebar/ui/sidebarSectionStyles";
 import type { ActiveChannelTurnSummary } from "@/features/agents/activeAgentTurnsStore";
+import type { ActiveHuddleSummary } from "@/features/huddle/lib/activeHuddleState";
 import type { ChannelSection } from "@/features/sidebar/lib/useChannelSections";
 import type { Channel } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -341,6 +342,7 @@ export function ChannelGroupSection({
   isCollapsed,
   isActiveChannel,
   activeWorkingByChannelId,
+  activeHuddlesByChannelId,
   items,
   listTestId,
   onBrowseClick,
@@ -381,6 +383,7 @@ export function ChannelGroupSection({
   isCollapsed: boolean;
   isActiveChannel: boolean;
   activeWorkingByChannelId?: ReadonlyMap<string, ActiveChannelTurnSummary>;
+  activeHuddlesByChannelId?: ReadonlyMap<string, ActiveHuddleSummary>;
   items: Channel[];
   listTestId: string;
   onBrowseClick?: () => void;
@@ -439,6 +442,7 @@ export function ChannelGroupSection({
                     <ChannelMenuButton
                       channel={channel}
                       activeWorking={activeWorkingByChannelId?.get(channel.id)}
+                      activeHuddle={activeHuddlesByChannelId?.get(channel.id)}
                       hasUnread={unreadChannelIds.has(channel.id)}
                       unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                       isMuted={mutedChannelIds?.has(channel.id)}
@@ -452,6 +456,7 @@ export function ChannelGroupSection({
                   <ChannelMenuButton
                     channel={channel}
                     activeWorking={activeWorkingByChannelId?.get(channel.id)}
+                    activeHuddle={activeHuddlesByChannelId?.get(channel.id)}
                     hasUnread={unreadChannelIds.has(channel.id)}
                     unreadCount={unreadChannelCounts.get(channel.id) ?? 0}
                     isMuted={mutedChannelIds?.has(channel.id)}
@@ -547,6 +552,7 @@ export function CustomChannelSection({
   isCollapsed,
   isActiveChannel,
   activeWorkingByChannelId,
+  activeHuddlesByChannelId,
   selectedChannelId,
   unreadChannelCounts,
   unreadChannelIds,
@@ -584,6 +590,7 @@ export function CustomChannelSection({
   isCollapsed: boolean;
   isActiveChannel: boolean;
   activeWorkingByChannelId?: ReadonlyMap<string, ActiveChannelTurnSummary>;
+  activeHuddlesByChannelId?: ReadonlyMap<string, ActiveHuddleSummary>;
   selectedChannelId: string | null;
   unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
@@ -740,6 +747,9 @@ export function CustomChannelSection({
                               <ChannelMenuButton
                                 channel={channel}
                                 activeWorking={activeWorkingByChannelId?.get(
+                                  channel.id,
+                                )}
+                                activeHuddle={activeHuddlesByChannelId?.get(
                                   channel.id,
                                 )}
                                 hasUnread={unreadChannelIds.has(channel.id)}
