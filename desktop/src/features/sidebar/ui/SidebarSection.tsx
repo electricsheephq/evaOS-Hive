@@ -18,7 +18,10 @@ import {
 
 import { ChannelContextMenuItems } from "@/features/sidebar/ui/ChannelContextMenu";
 import type { ActiveChannelTurnSummary } from "@/features/agents/activeAgentTurnsStore";
-import type { ActiveHuddleSummary } from "@/features/huddle/lib/activeHuddleState";
+import {
+  type ActiveHuddleSummary,
+  getHuddleParticipantCount,
+} from "@/features/huddle/lib/activeHuddleState";
 import { formatElapsed } from "@/features/agents/ui/agentSessionUtils";
 import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
 import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
@@ -162,7 +165,7 @@ function ChannelHuddleBadge({
   isActive: boolean;
   summary: ActiveHuddleSummary;
 }) {
-  const count = Math.max(1, summary.participantPubkeys.size);
+  const count = getHuddleParticipantCount(summary);
   const label = `${count}`;
   const title = `${count} ${count === 1 ? "person" : "people"} in huddle`;
 

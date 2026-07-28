@@ -15,7 +15,6 @@ import {
 
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 const AGENTS_CHANNEL_ID = "94a444a4-c0a3-5966-ab05-530c6ddc2301";
-const RANDOM_CHANNEL_ID = "9dae0116-799b-5071-a0a8-fdd30a91a35d";
 const MOCK_IDENTITY_PUBKEY = "deadbeef".repeat(8);
 // Relay-only agent owned by the mock viewer (see e2eBridge.ts
 // OWNED_RELAY_AGENT_PUBKEY). Classified as a bot via mockRelayAgents and
@@ -211,62 +210,6 @@ async function waitForMockLiveSubscription(
           );
         },
         { currentChannelName: channelName, kind },
-      );
-    })
-    .toBe(true);
-}
-
-async function waitForMockHuddleSubscription(
-  page: import("@playwright/test").Page,
-  channelId: string,
-) {
-  await expect
-    .poll(async () => {
-      return page.evaluate(
-        ({ channelId, huddleStartedKind }) => {
-          const entries =
-            (
-              window as Window & {
-                __BUZZ_E2E_COMMAND_LOG__?: Array<{
-                  command: string;
-                  payload: unknown;
-                }>;
-              }
-            ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
-
-          for (const entry of entries) {
-            if (entry.command !== "plugin:websocket|send") continue;
-            const data = (
-              entry.payload as { message?: { data?: string } } | undefined
-            )?.message?.data;
-            if (!data) continue;
-
-            try {
-              const frame = JSON.parse(data) as [
-                string,
-                string,
-                ...Array<{ "#h"?: string[]; kinds?: number[] }>,
-              ];
-              if (frame[0] !== "REQ") continue;
-              if (!String(frame[1] ?? "").startsWith("live-")) continue;
-
-              if (
-                frame
-                  .slice(2)
-                  .some(
-                    (filter) =>
-                      filter.kinds?.includes(huddleStartedKind) &&
-                      filter["#h"]?.includes(channelId),
-                  )
-              ) {
-                return true;
-              }
-            } catch {}
-          }
-
-          return false;
-        },
-        { channelId, huddleStartedKind: KIND_HUDDLE_STARTED },
       );
     })
     .toBe(true);
@@ -2945,7 +2888,7 @@ test("sidebar surfaces active huddles in authorized channels", async ({
 }) => {
   await page.goto("/");
   await expect(page.getByTestId("channel-general")).toBeVisible();
-  await waitForMockHuddleSubscription(page, RANDOM_CHANNEL_ID);
+  await waitForMockLiveSubscription(page, "random", KIND_HUDDLE_STARTED);
 
   const ephemeralChannelId = "10000000-0000-4000-8000-000000000002";
   const createdAt = Math.floor(Date.now() / 1000);

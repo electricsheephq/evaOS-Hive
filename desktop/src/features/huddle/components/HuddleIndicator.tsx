@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useHuddle } from "../HuddleContext";
 import {
   type ActiveHuddleSummary,
+  getHuddleParticipantCount,
   reconstructActiveHuddlesByParentChannel,
 } from "../lib/activeHuddleState";
 import { formatHuddleActionError } from "../lib/huddleError";
@@ -162,10 +163,7 @@ export function HuddleIndicator({
     );
   }
 
-  // At least 1 participant must exist for the huddle to be active.
-  // When START fell out of the event window, the creator isn't in the
-  // reconstructed set — floor at 1 to avoid showing "0 participants".
-  const participantCount = Math.max(1, activeHuddle.participantPubkeys.size);
+  const participantCount = getHuddleParticipantCount(activeHuddle);
 
   async function doJoin() {
     if (!activeHuddle || isJoining) return;

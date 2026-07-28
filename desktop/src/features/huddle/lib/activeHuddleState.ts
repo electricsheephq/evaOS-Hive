@@ -16,6 +16,13 @@ export type ActiveHuddleSummary = {
   lastEventAt: number;
 };
 
+/** Visible participant count for active huddle badges, floored to the creator. */
+export function getHuddleParticipantCount(
+  summary: ActiveHuddleSummary,
+): number {
+  return Math.max(1, summary.participantPubkeys.size);
+}
+
 type HuddleLifecycleState = {
   ended: boolean;
   ephemeralChannelId: string;

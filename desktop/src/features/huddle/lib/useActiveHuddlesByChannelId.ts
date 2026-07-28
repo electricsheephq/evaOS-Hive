@@ -9,6 +9,7 @@ import {
 } from "./activeHuddleState";
 import { HUDDLE_JOINABLE_WINDOW_SECONDS } from "./huddleCardState";
 
+/** Subscribes to visible channel huddle lifecycle rows and returns active summaries by parent channel id. */
 export function useActiveHuddlesByChannelId(
   channels: readonly Channel[],
 ): ReadonlyMap<string, ActiveHuddleSummary> {
