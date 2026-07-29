@@ -6,6 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 
 const MAX_LINES = 1000;
+const V0_5_1_ADOPTION_BASE = "a13085e9ac9a7c8dbd9426a6b88fc75abf62220e";
 
 const rules = [
   { root: "src-tauri/src", extensions: new Set([".rs"]), maxLines: MAX_LINES },
@@ -50,4 +51,10 @@ await runFileSizeCheck({
   projectRoot,
   rules,
   label: "Desktop",
+  baseTransitions: [
+    {
+      marker: "docs/hive-upstream-v0.5.1-dispositions.json",
+      baseRef: V0_5_1_ADOPTION_BASE,
+    },
+  ],
 });

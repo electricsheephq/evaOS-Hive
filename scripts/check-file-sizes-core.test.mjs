@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  applyBaseTransitions,
   allowedLineCount,
   countLines,
   evaluateFileSize,
@@ -35,6 +36,35 @@ test("local base resolution uses the branch merge-base and fails without origin/
     () => resolveBaseRef(repo, {}),
     /Fetch origin\/main or set CHECK_FILE_SIZES_BASE/,
   );
+});
+
+test("a one-time adoption marker selects its transition base until the marker reaches main", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "file-size-transition-"));
+  git(repo, "init", "-b", "main");
+  git(repo, "config", "user.name", "Test");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "commit", "--allow-empty", "-m", "old main");
+  const oldMain = git(repo, "rev-parse", "HEAD");
+  git(repo, "switch", "-c", "upstream");
+  git(repo, "commit", "--allow-empty", "-m", "adoption base");
+  const adoptionBase = git(repo, "rev-parse", "HEAD");
+  git(repo, "switch", "-c", "feature");
+  git(repo, "commit", "--allow-empty", "-m", "feature start");
+  mkdirSync(path.join(repo, "docs"));
+  writeFileSync(path.join(repo, "docs", "adopted.json"), "{}\n");
+  git(repo, "add", "docs/adopted.json");
+  git(repo, "commit", "-m", "record adoption");
+
+  const transitions = [
+    { marker: "docs/adopted.json", baseRef: adoptionBase },
+  ];
+  assert.equal(
+    applyBaseTransitions(repo, oldMain, transitions),
+    adoptionBase,
+  );
+
+  git(repo, "branch", "-f", "main", "HEAD");
+  assert.equal(applyBaseTransitions(repo, "main", transitions), "main");
 });
 
 test("counts empty, LF, and CRLF content with the existing semantics", () => {

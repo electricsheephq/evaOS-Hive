@@ -19,7 +19,6 @@
 //! short-circuit for the human key, child-process env injection for agents);
 //! adding an env tier here would duplicate that precedence and create a
 //! divergent-behavior trap.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -220,10 +219,8 @@ pub struct SecretStore {
     /// In-memory cache of the deserialized blob. `None` means "not yet loaded".
     cache: Mutex<Option<HashMap<String, String>>>,
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 mod managed;
-
 impl SecretStore {
     /// Keyring-backed store under `service`. The active platform backend
     /// (apple-native / windows-native / sync-secret-service) is chosen at

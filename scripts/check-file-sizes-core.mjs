@@ -35,13 +35,36 @@ function findRule(rules, relativePath) {
   return rules.find((rule) => relativePath.startsWith(`${rule.root}/`));
 }
 
-export function resolveBaseRef(repoRoot, env = process.env) {
+function pathExistsAtRef(repoRoot, ref, filePath) {
+  try {
+    git(["cat-file", "-e", `${ref}:${filePath}`], repoRoot, {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function applyBaseTransitions(repoRoot, baseRef, transitions = []) {
+  for (const transition of transitions) {
+    const markerAtHead = pathExistsAtRef(repoRoot, "HEAD", transition.marker);
+    const markerAtBase = pathExistsAtRef(repoRoot, baseRef, transition.marker);
+    if (markerAtHead && !markerAtBase) {
+      git(["cat-file", "-e", `${transition.baseRef}^{commit}`], repoRoot);
+      return transition.baseRef;
+    }
+  }
+  return baseRef;
+}
+
+export function resolveBaseRef(repoRoot, env = process.env, transitions = []) {
   if (env.CHECK_FILE_SIZES_BASE) {
     return env.CHECK_FILE_SIZES_BASE;
   }
 
   if (env.GITHUB_ACTIONS === "true") {
-    return "HEAD^1";
+    return applyBaseTransitions(repoRoot, "HEAD^1", transitions);
   }
 
   try {
@@ -50,7 +73,8 @@ export function resolveBaseRef(repoRoot, env = process.env) {
       repoRoot,
     ).trim();
     const head = git(["rev-parse", "HEAD"], repoRoot).trim();
-    return mergeBase === head ? "HEAD" : mergeBase;
+    const defaultBase = mergeBase === head ? "HEAD" : mergeBase;
+    return applyBaseTransitions(repoRoot, defaultBase, transitions);
   } catch (error) {
     throw new Error(
       "Could not resolve the file-size base from origin/main. Fetch origin/main or set CHECK_FILE_SIZES_BASE to an explicit commit.",
@@ -107,13 +131,18 @@ function readBaseFile(repoRoot, baseRef, filePath) {
   }).toString("utf8");
 }
 
-export async function runFileSizeCheck({ projectRoot, rules, label }) {
+export async function runFileSizeCheck({
+  projectRoot,
+  rules,
+  label,
+  baseTransitions = [],
+}) {
   // Every governed project is a direct child of the repository root. Derive
   // these paths without Git so hook-provided repository environment variables
   // cannot collapse the project pathspec to an empty string.
   const repoRoot = path.dirname(projectRoot);
   const projectRelative = toPosixPath(path.basename(projectRoot));
-  const baseRef = resolveBaseRef(repoRoot);
+  const baseRef = resolveBaseRef(repoRoot, process.env, baseTransitions);
 
   // Fail clearly instead of silently turning a missing/shallow base into a pass.
   git(["cat-file", "-e", `${baseRef}^{commit}`], repoRoot);
