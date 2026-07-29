@@ -104,3 +104,7 @@ export function evaosTeamsGateBypassed(
 ): boolean {
   return !productManaged || status?.managed === false;
 }
+
+export function evaosTeamsLogoutClosesGate(status: EvaosTeamsAuthStatus) {
+  return status.managed && status.phase !== "active";
+}

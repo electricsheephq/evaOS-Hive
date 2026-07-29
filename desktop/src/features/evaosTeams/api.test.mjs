@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   evaosTeamsGateBypassed,
+  evaosTeamsLogoutClosesGate,
   evaosTeamsRefreshDelay,
   evaosTeamsStatusCopy,
 } from "./api.ts";
@@ -25,6 +26,13 @@ const status = (phase, refreshAfterSeconds) => ({
         },
       }
     : {}),
+});
+
+test("every non-active managed logout result closes the native app gate", () => {
+  assert.equal(evaosTeamsLogoutClosesGate(status("signed_out")), true);
+  assert.equal(evaosTeamsLogoutClosesGate(status("logout_pending")), true);
+  assert.equal(evaosTeamsLogoutClosesGate(status("keychain_locked")), true);
+  assert.equal(evaosTeamsLogoutClosesGate(status("active")), false);
 });
 
 test("refresh delay is bounded by the validated entitlement interval", () => {

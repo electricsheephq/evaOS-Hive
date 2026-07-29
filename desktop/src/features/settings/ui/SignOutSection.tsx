@@ -16,7 +16,10 @@ import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import { Input } from "@/shared/ui/input";
 import { Spinner } from "@/shared/ui/spinner";
-import { logoutEvaosTeams } from "@/features/evaosTeams/api";
+import {
+  evaosTeamsLogoutClosesGate,
+  logoutEvaosTeams,
+} from "@/features/evaosTeams/api";
 import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 /**
@@ -283,10 +286,11 @@ function ManagedSignOutSection() {
     setIsPending(true);
     try {
       const status = await logoutEvaosTeams();
-      if (status.phase !== "signed_out") {
-        throw new Error(status.message ?? "Hive sign-out is still pending.");
+      if (evaosTeamsLogoutClosesGate(status)) {
+        window.location.reload();
+        return;
       }
-      window.location.reload();
+      throw new Error(status.message ?? "Hive sign-out did not complete.");
     } catch (error) {
       setIsPending(false);
       toast.error(error instanceof Error ? error.message : "Sign out failed.");
