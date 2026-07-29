@@ -81,6 +81,10 @@ export function cancelEvaosTeamsIdentityRecovery() {
   return invoke<EvaosTeamsAuthStatus>("cancel_evaos_teams_identity_recovery");
 }
 
+export function replaceLostEvaosTeamsIdentity() {
+  return invoke<EvaosTeamsAuthStatus>("replace_lost_evaos_teams_identity");
+}
+
 export function logoutEvaosTeams() {
   return invoke<EvaosTeamsAuthStatus>("logout_evaos_teams");
 }

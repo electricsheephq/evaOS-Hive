@@ -5,6 +5,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -14,6 +15,7 @@ import {
   cancelEvaosTeamsIdentityRecovery,
   confirmEvaosTeamsIdentityRecoverySas,
   getEvaosTeamsAuthStatus,
+  replaceLostEvaosTeamsIdentity,
   startEvaosTeamsLogin,
   startEvaosTeamsIdentityRecovery,
   submitEvaosTeamsLoginCode,
@@ -42,6 +44,8 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const [recoveryStarted, setRecoveryStarted] = useState(false);
   const [recoverySas, setRecoverySas] = useState<string | null>(null);
   const [recoveryWorking, setRecoveryWorking] = useState(false);
+  const [lostDeviceConfirmed, setLostDeviceConfirmed] = useState(false);
+  const replacingLostIdentity = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -184,6 +188,11 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   }
 
   async function runLogin() {
+    setLostDeviceConfirmed(false);
+    setRecoveryStarted(false);
+    setRecoveryWorking(false);
+    setRecoverySas(null);
+    setRecoveryCode("");
     setLoginPending(true);
     setBackupCode("");
     setBackupCodeSent(false);
@@ -217,7 +226,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
 
   async function startIdentityRecovery(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!recoveryCode.trim() || recoveryWorking) return;
+    if (!recoveryCode.trim() || recoveryWorking || working) return;
     setError(null);
     setRecoverySas(null);
     setRecoveryStarted(true);
@@ -267,6 +276,17 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
       );
     } finally {
       setRecoveryWorking(false);
+    }
+  }
+
+  async function replaceLostIdentity() {
+    if (working || replacingLostIdentity.current) return;
+    replacingLostIdentity.current = true;
+    try {
+      await run(replaceLostEvaosTeamsIdentity);
+      setLostDeviceConfirmed(false);
+    } finally {
+      replacingLostIdentity.current = false;
     }
   }
 
@@ -369,7 +389,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 aria-label="Hive identity pairing code"
                 autoCapitalize="none"
                 autoComplete="off"
-                disabled={recoveryStarted}
+                disabled={recoveryStarted || working}
                 inputMode="text"
                 onChange={(event) => setRecoveryCode(event.target.value)}
                 placeholder="Paste pairing code from an authorized Hive device"
@@ -378,7 +398,10 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
               />
               <Button
                 disabled={
-                  !recoveryCode.trim() || recoveryWorking || recoveryStarted
+                  !recoveryCode.trim() ||
+                  recoveryWorking ||
+                  recoveryStarted ||
+                  working
                 }
                 type="submit"
                 variant="outline"
@@ -433,6 +456,45 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 both devices. Hive will import only the exact identity selected
                 by Electric Sheep.
               </p>
+              {!lostDeviceConfirmed ? (
+                <Button
+                  disabled={recoveryWorking || recoveryStarted || working}
+                  onClick={() => setLostDeviceConfirmed(true)}
+                  type="button"
+                  variant="ghost"
+                >
+                  I no longer have an authorized device
+                </Button>
+              ) : (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+                  <p className="text-sm leading-6 text-foreground" role="alert">
+                    This replaces this member&apos;s Hive identity. The old key
+                    loses relay access, and offline messages addressed only to
+                    that old key may not be recoverable.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      autoFocus
+                      disabled={working || recoveryWorking || recoveryStarted}
+                      onClick={() => setLostDeviceConfirmed(false)}
+                      type="button"
+                      variant="outline"
+                    >
+                      Keep existing identity
+                    </Button>
+                    <Button
+                      disabled={working || recoveryWorking || recoveryStarted}
+                      onClick={() => void replaceLostIdentity()}
+                      type="button"
+                      variant="destructive"
+                    >
+                      {working
+                        ? "Replacing identity…"
+                        : "Replace identity on this Mac"}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </form>
           ) : null}
           {status?.phase === "keychain_locked" ||

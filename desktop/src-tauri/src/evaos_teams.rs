@@ -43,6 +43,7 @@ use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
 mod company_agent_policy;
 mod company_directory;
 mod device_code;
+mod identity_rotation;
 mod login;
 
 pub(crate) use company_agent_policy::{
@@ -54,6 +55,14 @@ use company_directory::{
 };
 #[cfg(test)]
 use company_directory::{RawHiveCompanyAgent, RawHiveCompanyMember};
+use identity_rotation::pending_identity_rotation_key;
+pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
+#[cfg(test)]
+use identity_rotation::{
+    signed_identity_rotation_challenge, staged_identity_rotation_entries,
+    validate_rotated_entitlement, IdentityRotationChallenge, IdentityRotationChallengeResponse,
+    IDENTITY_ROTATION_SCHEMA,
+};
 #[cfg(test)]
 use login::callback_device_code;
 use login::{login_callback, register_pending_login, submit_pending_login_code, LoginCallback};
@@ -630,6 +639,13 @@ fn select_login_keys(
                     return Ok(LoginKeySelection::Ready(keys));
                 }
             }
+            if let Some(value) = stored.get(&pending_identity_rotation_key(&binding.membership_id)?)
+            {
+                let staged = parse_stored_identity(value)?;
+                if staged.public_key().to_hex() == public_key {
+                    return Ok(LoginKeySelection::Ready(staged));
+                }
+            }
             if let Some(value) = stored.get(IDENTITY_KEY) {
                 let legacy = parse_stored_identity(value)?;
                 if legacy.public_key().to_hex() == public_key {
@@ -644,31 +660,6 @@ fn select_login_keys(
             scoped.unwrap_or_else(Keys::generate),
         )),
     }
-}
-
-fn managed_credential_entries(
-    mut stored: HashMap<String, String>,
-    membership_id: &str,
-    keys: &Keys,
-    session: &str,
-) -> Result<HashMap<String, String>, String> {
-    let public_key = keys.public_key();
-    let migrated_legacy = stored
-        .get(IDENTITY_KEY)
-        .map(|value| parse_stored_identity(value))
-        .transpose()?
-        .is_some_and(|legacy| legacy.public_key() == public_key);
-    if migrated_legacy {
-        stored.remove(IDENTITY_KEY);
-    }
-    stored.remove(LOGOUT_PENDING_KEY);
-    stored.insert(
-        membership_identity_key(membership_id)?,
-        encode_managed_identity(keys)?,
-    );
-    stored.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.to_string());
-    stored.insert(SESSION_KEY.to_string(), session.to_string());
-    Ok(stored)
 }
 
 fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
@@ -945,16 +936,45 @@ fn persist_managed_credentials(
     membership_id: String,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let replacement = managed_credential_entries(
-        managed_store().load_all_readonly()?.unwrap_or_default(),
-        &membership_id,
-        &keys,
-        &session,
-    )?;
-    managed_store()
-        .replace_all(&replacement)
+    let store = managed_store();
+    let stored = store.load_all_readonly()?.unwrap_or_default();
+    let encoded_identity = encode_managed_identity(&keys)?;
+    let legacy_to_remove = stored
+        .get(IDENTITY_KEY)
+        .map(|value| parse_stored_identity(value).map(|legacy| (value.clone(), legacy)))
+        .transpose()?
+        .filter(|(_, legacy)| legacy.public_key() == keys.public_key())
+        .map(|(value, _)| value);
+    let scoped_identity_key = membership_identity_key(&membership_id)?;
+    let pending_rotation_key = pending_identity_rotation_key(&membership_id)?;
+    let removals = vec![LOGOUT_PENDING_KEY.to_string()];
+    let upserts = HashMap::from([
+        (scoped_identity_key.clone(), encoded_identity.clone()),
+        (ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.clone()),
+        (SESSION_KEY.to_string(), session.clone()),
+    ]);
+    let mut conditional_removals = vec![(pending_rotation_key.as_str(), encoded_identity.as_str())];
+    if let Some(value) = legacy_to_remove.as_deref() {
+        conditional_removals.push((IDENTITY_KEY, value));
+    }
+    store
+        .update_entries(&removals, &upserts, &conditional_removals)
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
-    if managed_store().load_all_readonly()? != Some(replacement) {
+    let persisted = store.load_all_readonly()?.unwrap_or_default();
+    let required_entries_match = upserts
+        .iter()
+        .all(|(key, value)| persisted.get(key) == Some(value));
+    let legacy_removed = legacy_to_remove
+        .as_ref()
+        .is_none_or(|value| persisted.get(IDENTITY_KEY) != Some(value));
+    let pending_rotation_preserved_or_promoted = persisted
+        .get(&pending_rotation_key)
+        .is_none_or(|value| value != &encoded_identity);
+    if !required_entries_match
+        || !pending_rotation_preserved_or_promoted
+        || persisted.contains_key(LOGOUT_PENDING_KEY)
+        || !legacy_removed
+    {
         return Err("Managed Keychain read-back verification failed".to_string());
     }
     install_entitlement(app_state, &keys, &entitlement)?;
@@ -1149,6 +1169,7 @@ async fn complete_pending_identity_recovery(
 ) -> Result<(), String> {
     let state = app.state::<EvaosTeamsState>();
     let app_state = app.state::<AppState>();
+    let _operation = state.operation.lock().await;
     let pending = state
         .pending_identity_recovery
         .lock()
@@ -1492,6 +1513,7 @@ pub(crate) async fn start_evaos_teams_identity_recovery(
 
     #[cfg(feature = "evaos-teams-managed")]
     {
+        let _operation = state.operation.lock().await;
         {
             let pending = state
                 .pending_identity_recovery
@@ -1716,11 +1738,17 @@ pub(crate) async fn start_evaos_teams_login(
     #[cfg(feature = "evaos-teams-managed")]
     {
         let _operation = state.operation.lock().await;
+        let _ = abort_identity_recovery_pairing(
+            &state,
+            buzz_core_pkg::pairing::types::AbortReason::UserDenied,
+        )
+        .await;
         // Prove Keychain reachability before opening the browser. Managed mode
         // never falls back to a plaintext identity or Desktop token.
         verify_managed_store_writable()?;
 
         initialize_runtime(&state)?;
+        revoke_pending_identity_recovery_session(&state, &app_state).await?;
         if let Ok((session, keys, logout_pending)) = current_credentials(&state).await {
             if logout_pending {
                 let outcome = begin_managed_logout(&state, &app_state).await?;

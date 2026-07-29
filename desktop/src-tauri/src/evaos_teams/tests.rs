@@ -1,5 +1,31 @@
 use super::*;
 
+fn managed_credential_entries(
+    mut stored: HashMap<String, String>,
+    membership_id: &str,
+    keys: &Keys,
+    session: &str,
+) -> Result<HashMap<String, String>, String> {
+    let public_key = keys.public_key();
+    let migrated_legacy = stored
+        .get(IDENTITY_KEY)
+        .map(|value| parse_stored_identity(value))
+        .transpose()?
+        .is_some_and(|legacy| legacy.public_key() == public_key);
+    if migrated_legacy {
+        stored.remove(IDENTITY_KEY);
+    }
+    stored.remove(&pending_identity_rotation_key(membership_id)?);
+    stored.remove(LOGOUT_PENDING_KEY);
+    stored.insert(
+        membership_identity_key(membership_id)?,
+        encode_managed_identity(keys)?,
+    );
+    stored.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.to_string());
+    stored.insert(SESSION_KEY.to_string(), session.to_string());
+    Ok(stored)
+}
+
 fn challenge(keys: &Keys) -> ChallengeResponse {
     let challenge = KeyBindingChallenge {
         schema_version: KEY_BINDING_SCHEMA.to_string(),
@@ -19,6 +45,35 @@ fn challenge(keys: &Keys) -> ChallengeResponse {
             created_at: chrono::Utc::now().timestamp() as u64,
             tags: vec![
                 vec!["t".to_string(), "evaos-teams-key-binding".to_string()],
+                vec!["challenge".to_string(), challenge.nonce.clone()],
+            ],
+            content,
+        },
+        challenge,
+        relay_host: "https://relay.example.com".to_string(),
+    }
+}
+
+fn identity_rotation_challenge(keys: &Keys) -> IdentityRotationChallengeResponse {
+    let challenge = IdentityRotationChallenge {
+        schema_version: IDENTITY_ROTATION_SCHEMA.to_string(),
+        rotation_id: "10000000-0000-4000-8000-000000000005".to_string(),
+        previous_identity_id: "10000000-0000-4000-8000-000000000001".to_string(),
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        desktop_session_id: "10000000-0000-4000-8000-000000000004".to_string(),
+        replacement_public_key: keys.public_key().to_hex(),
+        nonce: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ".to_string(),
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(2)).to_rfc3339(),
+    };
+    let content = serde_json::to_string(&challenge).unwrap();
+    IdentityRotationChallengeResponse {
+        status: "identity_rotation_challenge_issued".to_string(),
+        event_template: EventTemplate {
+            kind: KEY_BINDING_KIND,
+            created_at: chrono::Utc::now().timestamp() as u64,
+            tags: vec![
+                vec!["t".to_string(), "evaos-teams-identity-rotation".to_string()],
                 vec!["challenge".to_string(), challenge.nonce.clone()],
             ],
             content,
@@ -93,6 +148,95 @@ fn altered_challenge_template_is_rejected() {
         response.challenge.community_id.clone(),
     ]);
     assert!(signed_challenge(&response, &keys).is_err());
+}
+
+#[test]
+fn identity_rotation_signature_uses_exact_dedicated_template() {
+    let keys = Keys::generate();
+    let response = identity_rotation_challenge(&keys);
+    let event =
+        signed_identity_rotation_challenge(&response, &keys, &response.challenge.membership_id)
+            .unwrap();
+    assert_eq!(event["kind"], KEY_BINDING_KIND);
+    assert_eq!(event["content"], response.event_template.content);
+    assert_eq!(
+        event["tags"],
+        serde_json::to_value(&response.event_template.tags).unwrap()
+    );
+    assert_eq!(event["pubkey"], keys.public_key().to_hex());
+}
+
+#[test]
+fn altered_identity_rotation_template_is_rejected() {
+    let keys = Keys::generate();
+    let mut response = identity_rotation_challenge(&keys);
+    response.event_template.tags.push(vec![
+        "community".to_string(),
+        response.challenge.community_id.clone(),
+    ]);
+    assert!(signed_identity_rotation_challenge(
+        &response,
+        &keys,
+        &response.challenge.membership_id,
+    )
+    .is_err());
+}
+
+#[test]
+fn identity_rotation_rejects_timestamp_overflow_without_panicking() {
+    let keys = Keys::generate();
+    let mut response = identity_rotation_challenge(&keys);
+    response.event_template.created_at = u64::try_from(i64::MAX).unwrap();
+    assert!(signed_identity_rotation_challenge(
+        &response,
+        &keys,
+        &response.challenge.membership_id,
+    )
+    .is_err());
+}
+
+#[test]
+fn rotated_entitlement_remains_pinned_to_the_signed_relay() {
+    let keys = Keys::generate();
+    let public_key = keys.public_key().to_hex();
+    let entitlement = EvaosTeamsEntitlement {
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(public_key.clone()),
+        role: "member".to_string(),
+        access_revision: 7,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        refresh_after_seconds: 300,
+    };
+    assert!(validate_rotated_entitlement(
+        entitlement,
+        "10000000-0000-4000-8000-000000000003",
+        "https://other-relay.example.com",
+        &public_key,
+    )
+    .is_err());
+}
+
+#[test]
+fn rotated_entitlement_remains_pinned_to_the_signed_community() {
+    let keys = Keys::generate();
+    let public_key = keys.public_key().to_hex();
+    let entitlement = EvaosTeamsEntitlement {
+        community_id: "10000000-0000-4000-8000-000000000099".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(public_key.clone()),
+        role: "member".to_string(),
+        access_revision: 7,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        refresh_after_seconds: 300,
+    };
+    assert!(validate_rotated_entitlement(
+        entitlement,
+        "10000000-0000-4000-8000-000000000003",
+        "https://relay.example.com",
+        &public_key,
+    )
+    .is_err());
 }
 
 #[test]
@@ -486,6 +630,75 @@ fn bound_membership_without_its_private_key_requires_recovery() {
         } => assert_eq!(selected, public_key),
         LoginKeySelection::Ready(_) => panic!("missing bound key must not be generated"),
     }
+}
+
+#[test]
+fn staged_rotation_key_is_selected_only_after_the_server_binding_matches() {
+    let membership_id = "10000000-0000-4000-8000-000000000001";
+    let old_public_key = "a".repeat(64);
+    let (stored, staged, _, _) =
+        staged_identity_rotation_entries(HashMap::new(), membership_id).unwrap();
+
+    match select_login_keys(
+        &stored,
+        &IdentityBinding {
+            membership_id: membership_id.to_string(),
+            public_key: Some(old_public_key.clone()),
+        },
+    )
+    .unwrap()
+    {
+        LoginKeySelection::RecoveryRequired { public_key } => {
+            assert_eq!(public_key, old_public_key)
+        }
+        LoginKeySelection::Ready(_) => {
+            panic!("staged key must not replace an unmatched server binding")
+        }
+    }
+
+    let selected = match select_login_keys(
+        &stored,
+        &IdentityBinding {
+            membership_id: membership_id.to_string(),
+            public_key: Some(staged.public_key().to_hex()),
+        },
+    )
+    .unwrap()
+    {
+        LoginKeySelection::Ready(keys) => keys,
+        LoginKeySelection::RecoveryRequired { .. } => {
+            panic!("matching staged replacement should recover after server rotation")
+        }
+    };
+    assert_eq!(selected.public_key(), staged.public_key());
+}
+
+#[test]
+fn staged_rotation_key_is_reused_and_removed_only_on_canonical_promotion() {
+    let membership_id = "10000000-0000-4000-8000-000000000001";
+    let (stored, first, staging_key, encoded) =
+        staged_identity_rotation_entries(HashMap::new(), membership_id).unwrap();
+    assert_eq!(stored.get(&staging_key), Some(&encoded));
+
+    let (stored, second, second_staging_key, second_encoded) =
+        staged_identity_rotation_entries(stored, membership_id).unwrap();
+    assert_eq!(first.public_key(), second.public_key());
+    assert_eq!(staging_key, second_staging_key);
+    assert_eq!(encoded, second_encoded);
+
+    let promoted =
+        managed_credential_entries(stored, membership_id, &second, "new-session").unwrap();
+    assert!(!promoted.contains_key(&staging_key));
+    assert_eq!(
+        parse_stored_identity(
+            promoted
+                .get(&membership_identity_key(membership_id).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+        .public_key(),
+        second.public_key(),
+    );
 }
 
 #[test]
