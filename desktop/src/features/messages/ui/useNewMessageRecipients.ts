@@ -5,6 +5,11 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import {
+  filterLocalWelcomeAgentsForPresentation,
+  hasCanonicalCompanyWelcomeAgents,
+  shouldPresentLocalWelcomeAgent,
+} from "@/features/onboarding/localWelcomeTeamPolicy";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
 import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
 import { retainManagedSelectedRecipients } from "@/features/evaosTeams/lib/companyMemberDirectory";
@@ -105,6 +110,32 @@ export function useNewMessageRecipients({
     enabled: active,
     relayUsers: userSearchResults,
   });
+  const retireLocalWelcomePresentation = hasCanonicalCompanyWelcomeAgents(
+    companyAgentsQuery.data ?? [],
+  );
+  const visibleManagedAgents = React.useMemo(
+    () =>
+      filterLocalWelcomeAgentsForPresentation(
+        retireLocalWelcomePresentation,
+        managedAgentsQuery.data ?? [],
+      ),
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
+  );
+  const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
+    () =>
+      new Set(
+        (managedAgentsQuery.data ?? [])
+          .filter(
+            (agent) =>
+              !shouldPresentLocalWelcomeAgent(
+                retireLocalWelcomePresentation,
+                agent,
+              ),
+          )
+          .map((agent) => normalizePubkey(agent.pubkey)),
+      ),
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
+  );
   React.useEffect(() => {
     if (!active) return;
     setSelectedUsers((current) => {
@@ -127,7 +158,7 @@ export function useNewMessageRecipients({
   const searchResults = React.useMemo(() => {
     const candidatesByPubkey = new Map<string, NewMessageRecipientCandidate>();
     const managedAgentsByPubkey = new Map(
-      (managedAgentsQuery.data ?? []).map((agent) => [
+      visibleManagedAgents.map((agent) => [
         normalizePubkey(agent.pubkey),
         agent,
       ]),
@@ -140,9 +171,7 @@ export function useNewMessageRecipients({
         (agent) => agent.publicKey,
       ),
       currentPubkey,
-      managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
-        (agent) => agent.pubkey,
-      ),
+      managedAgentPubkeys: visibleManagedAgents.map((agent) => agent.pubkey),
       relayAgents: relayAgentsQuery.data,
       sharedChannelIds: getSharedChannelIds(channelsQuery.data),
     });
@@ -155,6 +184,7 @@ export function useNewMessageRecipients({
 
       if (
         pubkey === currentPubkeyNormalized ||
+        hiddenLocalWelcomeAgentPubkeys.has(pubkey) ||
         (!options.includeSelected && selectedPubkeys.has(pubkey)) ||
         isArchivedDiscovery(pubkey) ||
         (candidate.isAgent && !eligibleAgentPubkeys.has(pubkey))
@@ -225,7 +255,7 @@ export function useNewMessageRecipients({
       );
     }
 
-    for (const agent of managedAgentsQuery.data ?? []) {
+    for (const agent of visibleManagedAgents) {
       addCandidate(
         {
           pubkey: agent.pubkey,
@@ -262,10 +292,11 @@ export function useNewMessageRecipients({
     companyDirectory.candidates,
     currentPubkey,
     deferredSearchQuery,
+    hiddenLocalWelcomeAgentPubkeys,
     isArchivedDiscovery,
-    managedAgentsQuery.data,
     relayAgentsQuery.data,
     selectedPubkeys,
+    visibleManagedAgents,
   ]);
 
   const isDirectoryLoading =

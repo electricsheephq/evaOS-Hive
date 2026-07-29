@@ -793,24 +793,28 @@ fn company_agent_catalog_drops_invalid_and_duplicate_rows() {
     let agents = sanitize_company_agents(vec![
         RawHiveCompanyAgent {
             agent_instance_id: "10000000-0000-4000-8000-000000000001".to_string(),
+            agent_id: Some("atris".to_string()),
             public_key: public_key.clone(),
             display_name: "  ATRIS  ".to_string(),
             runtime: " hermes ".to_string(),
         },
         RawHiveCompanyAgent {
             agent_instance_id: "10000000-0000-4000-8000-000000000002".to_string(),
+            agent_id: Some("duplicate".to_string()),
             public_key,
             display_name: "duplicate".to_string(),
             runtime: "hermes".to_string(),
         },
         RawHiveCompanyAgent {
             agent_instance_id: "not-a-uuid".to_string(),
+            agent_id: Some("invalid".to_string()),
             public_key: "b".repeat(64),
             display_name: "invalid".to_string(),
             runtime: "hermes".to_string(),
         },
         RawHiveCompanyAgent {
             agent_instance_id: "10000000-0000-4000-8000-000000000003".to_string(),
+            agent_id: Some("uppercase-key".to_string()),
             public_key: "C".repeat(64),
             display_name: "uppercase key".to_string(),
             runtime: "hermes".to_string(),
@@ -818,8 +822,32 @@ fn company_agent_catalog_drops_invalid_and_duplicate_rows() {
     ]);
 
     assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_deref(), Some("atris"));
     assert_eq!(agents[0].display_name, "ATRIS");
     assert_eq!(agents[0].runtime, "hermes");
+}
+
+#[test]
+fn company_agent_catalog_keeps_agents_without_a_valid_stable_id() {
+    let agents = sanitize_company_agents(vec![
+        RawHiveCompanyAgent {
+            agent_instance_id: "10000000-0000-4000-8000-000000000001".to_string(),
+            agent_id: None,
+            public_key: "a".repeat(64),
+            display_name: "Legacy projection".to_string(),
+            runtime: "hermes".to_string(),
+        },
+        RawHiveCompanyAgent {
+            agent_instance_id: "10000000-0000-4000-8000-000000000002".to_string(),
+            agent_id: Some("invalid id".to_string()),
+            public_key: "b".repeat(64),
+            display_name: "Invalid marker".to_string(),
+            runtime: "hermes".to_string(),
+        },
+    ]);
+
+    assert_eq!(agents.len(), 2);
+    assert!(agents.iter().all(|agent| agent.agent_id.is_none()));
 }
 
 #[test]
@@ -866,6 +894,7 @@ fn company_member_catalog_drops_unbound_invalid_and_duplicate_rows() {
 fn public_company_agent_projection_contains_no_session_or_membership_data() {
     let agent = HiveCompanyAgent {
         agent_instance_id: "10000000-0000-4000-8000-000000000001".to_string(),
+        agent_id: Some("atris".to_string()),
         public_key: "a".repeat(64),
         display_name: "ATRIS".to_string(),
         runtime: "hermes".to_string(),
@@ -875,6 +904,7 @@ fn public_company_agent_projection_contains_no_session_or_membership_data() {
     assert!(!json.contains("membership"));
     assert!(!json.contains("room"));
     assert!(!json.contains("email"));
+    assert!(json.contains("\"agentId\":\"atris\""));
 }
 
 #[test]

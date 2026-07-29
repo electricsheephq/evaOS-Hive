@@ -85,6 +85,8 @@ import type {
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { isLocalWelcomePersonaId } from "@/features/onboarding/localWelcomeTeamPolicy";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 export { findReusableAgent } from "@/features/agents/agentReuse";
 export {
   teamsQueryKey,
@@ -748,6 +750,14 @@ export function useCreateChannelManagedAgentsMutation(
     ): Promise<CreateChannelManagedAgentsResult> => {
       if (!channelId) {
         throw new Error("No channel selected.");
+      }
+      if (
+        desktopProductPolicy().managed &&
+        inputs.some((input) => isLocalWelcomePersonaId(input.personaId))
+      ) {
+        throw new Error(
+          "Hive uses the canonical company VM agents for the starter team.",
+        );
       }
 
       return createChannelManagedAgents(channelId, inputs);

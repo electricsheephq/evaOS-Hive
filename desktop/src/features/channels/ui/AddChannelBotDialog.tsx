@@ -9,6 +9,8 @@ import {
 } from "@/features/agents/hooks";
 import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
+import { useRetireLocalWelcomePresentation } from "@/features/evaosTeams/hooks";
+import { filterLocalWelcomePersonasForPresentation } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
@@ -64,14 +66,21 @@ export function AddChannelBotDialog({
 }: AddChannelBotDialogProps) {
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
+  const retireLocalWelcomePresentation = useRetireLocalWelcomePresentation({
+    enabled: open,
+  });
   const inChannelPersonaIds = useInChannelPersonaIds(
     channelId,
     open && channelId !== null,
   );
   const createBotsMutation = useCreateChannelManagedAgentsMutation(channelId);
   const personas = React.useMemo(
-    () => getActivePersonas(personasQuery.data ?? []),
-    [personasQuery.data],
+    () =>
+      filterLocalWelcomePersonasForPresentation(
+        retireLocalWelcomePresentation,
+        getActivePersonas(personasQuery.data ?? []),
+      ),
+    [personasQuery.data, retireLocalWelcomePresentation],
   );
   const teams = React.useMemo(
     () => getUsableTeams(teamsQuery.data ?? [], personas),

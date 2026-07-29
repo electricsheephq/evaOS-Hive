@@ -28,6 +28,7 @@ export type EvaosTeamsAuthStatus = {
 
 export type HiveCompanyAgent = {
   agentInstanceId: string;
+  agentId?: string;
   publicKey: string;
   displayName: string;
   runtime: string;

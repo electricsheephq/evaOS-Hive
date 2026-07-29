@@ -4,6 +4,11 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import {
+  filterLocalWelcomeAgentsForPresentation,
+  shouldPresentLocalWelcomeAgent,
+} from "@/features/onboarding/localWelcomeTeamPolicy";
+import { useRetireLocalWelcomePresentation } from "@/features/evaosTeams/hooks";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import {
   useUserSearchQuery,
@@ -115,14 +120,38 @@ export function useSearchResults({
   const relayAgentsQuery = useRelayAgentsQuery({
     enabled: searchBackedQueriesEnabled,
   });
+  const retireLocalWelcomePresentation = useRetireLocalWelcomePresentation({
+    enabled: searchBackedQueriesEnabled,
+  });
+  const visibleManagedAgents = React.useMemo(
+    () =>
+      filterLocalWelcomeAgentsForPresentation(
+        retireLocalWelcomePresentation,
+        managedAgentsQuery.data ?? [],
+      ),
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
+  );
+  const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
+    () =>
+      new Set(
+        (managedAgentsQuery.data ?? [])
+          .filter(
+            (agent) =>
+              !shouldPresentLocalWelcomeAgent(
+                retireLocalWelcomePresentation,
+                agent,
+              ),
+          )
+          .map((agent) => normalizePubkey(agent.pubkey)),
+      ),
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
+  );
   const managedAgentPubkeys = React.useMemo(
     () =>
       new Set(
-        (managedAgentsQuery.data ?? []).map((agent) =>
-          normalizePubkey(agent.pubkey),
-        ),
+        visibleManagedAgents.map((agent) => normalizePubkey(agent.pubkey)),
       ),
-    [managedAgentsQuery.data],
+    [visibleManagedAgents],
   );
   const relayAgentPubkeys = React.useMemo(
     () =>
@@ -163,7 +192,10 @@ export function useSearchResults({
     const addCandidate = (candidate: UserSearchResult) => {
       const pubkey = normalizePubkey(candidate.pubkey);
 
-      if (isArchivedDiscovery(pubkey)) {
+      if (
+        hiddenLocalWelcomeAgentPubkeys.has(pubkey) ||
+        isArchivedDiscovery(pubkey)
+      ) {
         return;
       }
 
@@ -222,7 +254,7 @@ export function useSearchResults({
       }
     }
 
-    for (const agent of managedAgentsQuery.data ?? []) {
+    for (const agent of visibleManagedAgents) {
       const candidate = {
         pubkey: agent.pubkey,
         displayName: agent.name,
@@ -246,13 +278,14 @@ export function useSearchResults({
   }, [
     debouncedQuery,
     eligibleAgentPubkeys,
+    hiddenLocalWelcomeAgentPubkeys,
     isArchivedDiscovery,
     limit,
     managedAgentPubkeys,
-    managedAgentsQuery.data,
     relayAgentPubkeys,
     relayAgentsQuery.data,
     userSearchQuery.data,
+    visibleManagedAgents,
   ]);
 
   const results = React.useMemo<SearchResult[]>(

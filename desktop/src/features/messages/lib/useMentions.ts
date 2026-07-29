@@ -11,6 +11,7 @@ import {
 } from "@/features/channels/hooks";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
 import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
+import { useLocalWelcomePresentation } from "@/features/onboarding/useLocalWelcomePresentation";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import {
@@ -110,6 +111,17 @@ export function useMentions(
   const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
+  const {
+    hiddenLocalWelcomeAgentPubkeys,
+    personaNameByPubkey,
+    visibleManagedAgents,
+    visiblePersonas,
+    visibleTeams,
+  } = useLocalWelcomePresentation({
+    managedAgents: managedAgentsQuery.data ?? [],
+    personas: personasQuery.data ?? [],
+    teams: teamsQuery.data ?? [],
+  });
   const managedAgentDirectoryReady =
     managedAgentsQuery.data !== undefined ||
     !managedAgentsQuery.isLoading ||
@@ -138,42 +150,40 @@ export function useMentions(
   const managedAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
-        (managedAgentsQuery.data ?? []).map((agent) => [
+        visibleManagedAgents.map((agent) => [
           normalizePubkey(agent.pubkey),
           agent.name,
         ]),
       ),
-    [managedAgentsQuery.data],
+    [visibleManagedAgents],
   );
   const managedAgentPersonaIdsByPubkey = React.useMemo(
     () =>
       new Map(
-        (managedAgentsQuery.data ?? [])
+        visibleManagedAgents
           .filter((agent) => Boolean(agent.personaId))
           .map((agent) => [
             normalizePubkey(agent.pubkey),
             agent.personaId as string,
           ]),
       ),
-    [managedAgentsQuery.data],
+    [visibleManagedAgents],
   );
   const managedAgentPersonaIds = React.useMemo(
     () =>
       new Set(
-        (managedAgentsQuery.data ?? [])
+        visibleManagedAgents
           .map((agent) => agent.personaId)
           .filter((personaId): personaId is string => Boolean(personaId)),
       ),
-    [managedAgentsQuery.data],
+    [visibleManagedAgents],
   );
   const managedAgentPubkeys = React.useMemo(
     () =>
       new Set(
-        (managedAgentsQuery.data ?? []).map((agent) =>
-          normalizePubkey(agent.pubkey),
-        ),
+        visibleManagedAgents.map((agent) => normalizePubkey(agent.pubkey)),
       ),
-    [managedAgentsQuery.data],
+    [visibleManagedAgents],
   );
   const relayAgentNamesByPubkey = React.useMemo(
     () =>
@@ -204,23 +214,10 @@ export function useMentions(
       sharedChannelIds,
     ],
   );
-  const personaNameByPubkey = React.useMemo(() => {
-    const agents = managedAgentsQuery.data ?? [];
-    const personas = personasQuery.data ?? [];
-    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
-    const lookup = new Map<string, string>();
-    for (const agent of agents) {
-      if (agent.personaId) {
-        const name = personaById.get(agent.personaId);
-        if (name) lookup.set(normalizePubkey(agent.pubkey), name);
-      }
-    }
-    return lookup;
-  }, [managedAgentsQuery.data, personasQuery.data]);
   const knownAgentPubkeys = mentionableAgentPubkeys;
   const activePersonas = React.useMemo(
-    () => (personasQuery.data ?? []).filter((persona) => persona.isActive),
-    [personasQuery.data],
+    () => visiblePersonas.filter((persona) => persona.isActive),
+    [visiblePersonas],
   );
   const activePersonaById = React.useMemo(
     () => new Map(activePersonas.map((persona) => [persona.id, persona])),
@@ -240,6 +237,7 @@ export function useMentions(
 
     const addCandidate = (candidate: MentionCandidate & { pubkey: string }) => {
       const pubkey = normalizePubkey(candidate.pubkey);
+      if (hiddenLocalWelcomeAgentPubkeys.has(pubkey)) return;
       if (!companyDirectory.allows(candidate)) return;
       if (isArchivedDiscovery(pubkey)) {
         return;
@@ -344,7 +342,7 @@ export function useMentions(
       });
     }
 
-    for (const agent of managedAgentsQuery.data ?? []) {
+    for (const agent of visibleManagedAgents) {
       addCandidate({
         kind: "identity",
         pubkey: agent.pubkey,
@@ -419,7 +417,7 @@ export function useMentions(
     managedAgentPersonaIds,
     managedAgentPersonaIdsByPubkey,
     managedAgentPubkeys,
-    managedAgentsQuery.data,
+    hiddenLocalWelcomeAgentPubkeys,
     memberPubkeys,
     members,
     mentionableAgentPubkeys,
@@ -427,18 +425,19 @@ export function useMentions(
     profiles,
     relayAgentNamesByPubkey,
     relayAgentsQuery.data,
+    visibleManagedAgents,
   ]);
 
   const mentionCandidatesWithTeams = React.useMemo(
     () => [
       ...mentionCandidates,
       ...buildTeamMentionCandidates(
-        teamsQuery.data ?? [],
-        personasQuery.data ?? [],
+        visibleTeams,
+        visiblePersonas,
         mentionCandidates,
       ),
     ],
-    [mentionCandidates, personasQuery.data, teamsQuery.data],
+    [mentionCandidates, visiblePersonas, visibleTeams],
   );
 
   const ownerPubkeys = React.useMemo(

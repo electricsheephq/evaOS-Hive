@@ -12,6 +12,10 @@ import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlA
 import { excludeLocalAgentDuplicates } from "@/features/agents/lib/companyAgentCatalog";
 import type { CompanyVmAgent } from "@/features/agents/lib/companyAgentCatalog";
 import { useUserProfileQuery } from "@/features/profile/hooks";
+import {
+  filterLocalWelcomeAgentsForPresentation,
+  filterLocalWelcomePersonasForPresentation,
+} from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import type { ProfilePanelOpenOptions } from "@/shared/context/ProfilePanelContext";
 import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
@@ -70,6 +74,7 @@ type UnifiedAgentsSectionProps = {
   companyAgents: CompanyVmAgent[];
   companyAgentsError: Error | null;
   isCompanyAgentsLoading: boolean;
+  retireLocalWelcomePresentation: boolean;
   onRefreshCompanyAgents: () => void;
   onEditCompanyAgentPolicy?: (agent: CompanyVmAgent) => void;
 };
@@ -110,18 +115,35 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     companyAgents,
     companyAgentsError,
     isCompanyAgentsLoading,
+    retireLocalWelcomePresentation,
     onRefreshCompanyAgents,
     onEditCompanyAgentPolicy,
   } = props;
   const isManagedHive = desktopProductPolicy().managed;
+  const visibleLocalAgents = React.useMemo(
+    () =>
+      filterLocalWelcomeAgentsForPresentation(
+        retireLocalWelcomePresentation,
+        agents,
+      ),
+    [agents, retireLocalWelcomePresentation],
+  );
+  const visiblePersonas = React.useMemo(
+    () =>
+      filterLocalWelcomePersonasForPresentation(
+        retireLocalWelcomePresentation,
+        personas,
+      ),
+    [personas, retireLocalWelcomePresentation],
+  );
 
   const { groups, ungrouped, unknown } = React.useMemo(
-    () => buildUnifiedGroups(personas, agents),
-    [agents, personas],
+    () => buildUnifiedGroups(visiblePersonas, visibleLocalAgents),
+    [visibleLocalAgents, visiblePersonas],
   );
   const visibleCompanyAgents = React.useMemo(
-    () => excludeLocalAgentDuplicates(companyAgents, agents),
-    [agents, companyAgents],
+    () => excludeLocalAgentDuplicates(companyAgents, visibleLocalAgents),
+    [companyAgents, visibleLocalAgents],
   );
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const {

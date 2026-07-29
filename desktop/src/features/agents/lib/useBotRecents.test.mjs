@@ -75,3 +75,21 @@ test("pickQuickBotPersonas skips duplicate and missing recents", () => {
     ["builtin:fizz", "custom:honey"],
   );
 });
+
+test("retired managed recents omit retained local welcome personas", () => {
+  const personas = [
+    createPersona("builtin:fizz", "TARS"),
+    createPersona("builtin:honey", "Samantha"),
+    createPersona("builtin:reviewer", "Reviewer"),
+  ];
+
+  assert.deepEqual(
+    pickQuickBotPersonas(
+      personas,
+      ["builtin:fizz", "builtin:honey", "builtin:reviewer"],
+      3,
+      true,
+    ).map((persona) => persona.id),
+    ["builtin:reviewer"],
+  );
+});

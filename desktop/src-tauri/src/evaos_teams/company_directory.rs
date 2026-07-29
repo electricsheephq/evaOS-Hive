@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HiveCompanyAgent {
     pub(super) agent_instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) agent_id: Option<String>,
     pub(super) public_key: String,
     pub(super) display_name: String,
     pub(super) runtime: String,
@@ -22,6 +24,8 @@ pub(crate) struct HiveCompanyMember {
 #[derive(Debug, Deserialize)]
 pub(super) struct RawHiveCompanyAgent {
     pub(super) agent_instance_id: String,
+    #[serde(default)]
+    pub(super) agent_id: Option<String>,
     pub(super) public_key: String,
     pub(super) display_name: String,
     pub(super) runtime: String,
@@ -49,6 +53,15 @@ pub(super) fn sanitize_company_agents(agents: Vec<RawHiveCompanyAgent>) -> Vec<H
         .filter_map(|agent| {
             let display_name = agent.display_name.trim();
             let runtime = agent.runtime.trim();
+            let agent_id = agent.agent_id.and_then(|value| {
+                let value = value.trim();
+                let valid = !value.is_empty()
+                    && value.len() <= 120
+                    && value.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || character == '-' || character == '_'
+                    });
+                valid.then(|| value.to_string())
+            });
             let valid_public_key = agent.public_key.len() == 64
                 && agent.public_key.chars().all(|character| {
                     character.is_ascii_hexdigit() && !character.is_ascii_uppercase()
@@ -68,6 +81,7 @@ pub(super) fn sanitize_company_agents(agents: Vec<RawHiveCompanyAgent>) -> Vec<H
             }
             Some(HiveCompanyAgent {
                 agent_instance_id: agent.agent_instance_id,
+                agent_id,
                 public_key: agent.public_key,
                 display_name: display_name.to_string(),
                 runtime: runtime.to_string(),
