@@ -157,6 +157,40 @@ fn altered_identity_rotation_template_is_rejected() {
 }
 
 #[test]
+fn identity_rotation_rejects_timestamp_overflow_without_panicking() {
+    let keys = Keys::generate();
+    let mut response = identity_rotation_challenge(&keys);
+    response.event_template.created_at = u64::try_from(i64::MAX).unwrap();
+    assert!(signed_identity_rotation_challenge(
+        &response,
+        &keys,
+        &response.challenge.membership_id,
+    )
+    .is_err());
+}
+
+#[test]
+fn rotated_entitlement_remains_pinned_to_the_signed_relay() {
+    let keys = Keys::generate();
+    let public_key = keys.public_key().to_hex();
+    let entitlement = EvaosTeamsEntitlement {
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(public_key.clone()),
+        role: "member".to_string(),
+        access_revision: 7,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        refresh_after_seconds: 300,
+    };
+    assert!(validate_rotated_entitlement(
+        entitlement,
+        "https://other-relay.example.com",
+        &public_key,
+    )
+    .is_err());
+}
+
+#[test]
 fn callback_requires_exact_state_and_a_valid_server_code() {
     let expected_state = "state-12345678";
     let valid = HashMap::from([

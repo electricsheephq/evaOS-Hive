@@ -5,6 +5,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -44,6 +45,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const [recoverySas, setRecoverySas] = useState<string | null>(null);
   const [recoveryWorking, setRecoveryWorking] = useState(false);
   const [lostDeviceConfirmed, setLostDeviceConfirmed] = useState(false);
+  const replacingLostIdentity = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -273,9 +275,14 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   }
 
   async function replaceLostIdentity() {
-    if (working) return;
-    await run(replaceLostEvaosTeamsIdentity);
-    setLostDeviceConfirmed(false);
+    if (working || replacingLostIdentity.current) return;
+    replacingLostIdentity.current = true;
+    try {
+      await run(replaceLostEvaosTeamsIdentity);
+      setLostDeviceConfirmed(false);
+    } finally {
+      replacingLostIdentity.current = false;
+    }
   }
 
   if (
@@ -452,14 +459,15 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 </Button>
               ) : (
                 <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3">
-                  <p className="text-sm leading-6 text-foreground">
+                  <p className="text-sm leading-6 text-foreground" role="alert">
                     This replaces this member&apos;s Hive identity. The old key
                     loses relay access, and offline messages addressed only to
                     that old key may not be recoverable.
                   </p>
                   <div className="mt-3 flex gap-2">
                     <Button
-                      disabled={working}
+                      autoFocus
+                      disabled={working || recoveryWorking || recoveryStarted}
                       onClick={() => setLostDeviceConfirmed(false)}
                       type="button"
                       variant="outline"
@@ -467,7 +475,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                       Keep existing identity
                     </Button>
                     <Button
-                      disabled={working}
+                      disabled={working || recoveryWorking || recoveryStarted}
                       onClick={() => void replaceLostIdentity()}
                       type="button"
                       variant="destructive"

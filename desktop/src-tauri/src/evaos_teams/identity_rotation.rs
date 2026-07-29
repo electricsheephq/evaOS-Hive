@@ -76,7 +76,11 @@ fn validate_identity_rotation_challenge(
     }
     let created_at = i64::try_from(response.event_template.created_at)
         .map_err(|_| "managed identity replacement timestamp is invalid".to_string())?;
-    if (created_at - now.timestamp()).abs() > 5 * 60 {
+    let timestamp_skew = created_at
+        .checked_sub(now.timestamp())
+        .and_then(|skew| skew.checked_abs())
+        .ok_or_else(|| "managed identity replacement timestamp is invalid".to_string())?;
+    if timestamp_skew > 5 * 60 {
         return Err("managed identity replacement timestamp is invalid".to_string());
     }
     relay_websocket_url(&response.relay_host)?;
@@ -154,8 +158,7 @@ fn stage_identity_rotation_key(membership_id: &str) -> Result<Keys, String> {
     Ok(keys)
 }
 
-#[cfg(feature = "evaos-teams-managed")]
-fn validate_rotated_entitlement(
+pub(super) fn validate_rotated_entitlement(
     entitlement: EvaosTeamsEntitlement,
     expected_relay: &str,
     expected_public_key: &str,
@@ -173,6 +176,7 @@ async fn recover_completed_identity_rotation(
     token: &str,
     expected_membership_id: &str,
     keys: &Keys,
+    expected_relay: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
     let binding = get_identity_binding(client, token).await?;
@@ -184,8 +188,7 @@ async fn recover_completed_identity_rotation(
     let entitlement = get_remote_entitlement(client, token)
         .await
         .map_err(|_| "managed identity replacement entitlement was not available".to_string())?;
-    validate_entitlement(&entitlement, &public_key)?;
-    Ok(entitlement)
+    validate_rotated_entitlement(entitlement, expected_relay, &public_key)
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -236,6 +239,7 @@ async fn rotate_lost_identity(
             token,
             expected_membership_id,
             keys,
+            &challenge.relay_host,
         )
         .await
         .map_err(|_| {

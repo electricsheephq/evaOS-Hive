@@ -60,7 +60,8 @@ pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
 #[cfg(test)]
 use identity_rotation::{
     signed_identity_rotation_challenge, staged_identity_rotation_entries,
-    IdentityRotationChallenge, IdentityRotationChallengeResponse, IDENTITY_ROTATION_SCHEMA,
+    validate_rotated_entitlement, IdentityRotationChallenge, IdentityRotationChallengeResponse,
+    IDENTITY_ROTATION_SCHEMA,
 };
 #[cfg(test)]
 use login::callback_device_code;

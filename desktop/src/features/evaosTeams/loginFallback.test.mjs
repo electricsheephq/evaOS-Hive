@@ -33,5 +33,10 @@ test("lost-device identity replacement is explicit, consequential, and command-b
   );
   assert.match(authGateSource, /Replace identity on this Mac/);
   assert.match(authGateSource, /replaceLostEvaosTeamsIdentity/);
+  assert.match(authGateSource, /working \|\| replacingLostIdentity\.current/);
+  assert.match(
+    authGateSource,
+    /disabled=\{working \|\| recoveryWorking \|\| recoveryStarted\}/,
+  );
   assert.match(apiSource, /replace_lost_evaos_teams_identity/);
 });
