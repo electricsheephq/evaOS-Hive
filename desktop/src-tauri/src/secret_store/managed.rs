@@ -22,11 +22,11 @@ fn update_entries(
     current: &mut HashMap<String, String>,
     removals: &[String],
     upserts: &HashMap<String, String>,
-    remove_if_equal: Option<(&str, &str)>,
+    remove_if_equal: &[(&str, &str)],
 ) {
-    if let Some((key, expected)) = remove_if_equal {
-        if current.get(key).is_some_and(|value| value == expected) {
-            current.remove(key);
+    for (key, expected) in remove_if_equal {
+        if current.get(*key).is_some_and(|value| value == *expected) {
+            current.remove(*key);
         }
     }
     for key in removals {
@@ -63,7 +63,7 @@ impl SecretStore {
         &self,
         removals: &[String],
         upserts: &HashMap<String, String>,
-        remove_if_equal: Option<(&str, &str)>,
+        remove_if_equal: &[(&str, &str)],
     ) -> Result<(), String> {
         self.mutate_blob(|map| update_entries(map, removals, upserts, remove_if_equal))
     }
@@ -114,7 +114,7 @@ mod tests {
             ("session".to_string(), "other-session".to_string()),
             ("unrelated".to_string(), "keep".to_string()),
         ]);
-        let removals = vec!["staged".to_string()];
+        let removals = Vec::new();
         let upserts = HashMap::from([
             (
                 "identity:membership".to_string(),
@@ -127,11 +127,14 @@ mod tests {
             &mut current,
             &removals,
             &upserts,
-            Some(("legacy", "same-identity")),
+            &[("legacy", "same-identity"), ("staged", "same-identity")],
         );
 
         assert!(!current.contains_key("legacy"));
-        assert!(!current.contains_key("staged"));
+        assert_eq!(
+            current.get("staged").map(String::as_str),
+            Some("pending-identity")
+        );
         assert_eq!(
             current.get("identity:membership").map(String::as_str),
             Some("same-identity")
@@ -140,6 +143,24 @@ mod tests {
             current.get("session").map(String::as_str),
             Some("new-session")
         );
+        assert_eq!(current.get("unrelated").map(String::as_str), Some("keep"));
+    }
+
+    #[test]
+    fn update_entries_removes_only_the_matching_staged_identity() {
+        let mut current = HashMap::from([
+            ("staged".to_string(), "same-identity".to_string()),
+            ("unrelated".to_string(), "keep".to_string()),
+        ]);
+
+        update_entries(
+            &mut current,
+            &[],
+            &HashMap::new(),
+            &[("staged", "same-identity")],
+        );
+
+        assert!(!current.contains_key("staged"));
         assert_eq!(current.get("unrelated").map(String::as_str), Some("keep"));
     }
 }

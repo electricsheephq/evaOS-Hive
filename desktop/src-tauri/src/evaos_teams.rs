@@ -947,20 +947,18 @@ fn persist_managed_credentials(
         .map(|(value, _)| value);
     let scoped_identity_key = membership_identity_key(&membership_id)?;
     let pending_rotation_key = pending_identity_rotation_key(&membership_id)?;
-    let removals = vec![pending_rotation_key.clone(), LOGOUT_PENDING_KEY.to_string()];
+    let removals = vec![LOGOUT_PENDING_KEY.to_string()];
     let upserts = HashMap::from([
         (scoped_identity_key.clone(), encoded_identity.clone()),
         (ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.clone()),
         (SESSION_KEY.to_string(), session.clone()),
     ]);
+    let mut conditional_removals = vec![(pending_rotation_key.as_str(), encoded_identity.as_str())];
+    if let Some(value) = legacy_to_remove.as_deref() {
+        conditional_removals.push((IDENTITY_KEY, value));
+    }
     store
-        .update_entries(
-            &removals,
-            &upserts,
-            legacy_to_remove
-                .as_deref()
-                .map(|value| (IDENTITY_KEY, value)),
-        )
+        .update_entries(&removals, &upserts, &conditional_removals)
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
     let persisted = store.load_all_readonly()?.unwrap_or_default();
     let required_entries_match = upserts
@@ -969,8 +967,11 @@ fn persist_managed_credentials(
     let legacy_removed = legacy_to_remove
         .as_ref()
         .is_none_or(|value| persisted.get(IDENTITY_KEY) != Some(value));
+    let pending_rotation_preserved_or_promoted = persisted
+        .get(&pending_rotation_key)
+        .is_none_or(|value| value != &encoded_identity);
     if !required_entries_match
-        || persisted.contains_key(&pending_rotation_key)
+        || !pending_rotation_preserved_or_promoted
         || persisted.contains_key(LOGOUT_PENDING_KEY)
         || !legacy_removed
     {
