@@ -267,6 +267,9 @@ fn missing_or_mismatched_canonical_key_requires_restore_without_mutation() {
     *state.keys.lock().unwrap() = keys.clone();
     let before_key = state.keys.lock().unwrap().public_key();
     let before_relay = state.relay_url_override.lock().unwrap().clone();
+    let before_authorized = state
+        .evaos_teams_authorized
+        .load(std::sync::atomic::Ordering::Acquire);
 
     for public_key in [None, Some(Keys::generate().public_key().to_hex())] {
         let binding = IdentityBinding {
@@ -281,9 +284,12 @@ fn missing_or_mismatched_canonical_key_requires_restore_without_mutation() {
 
     assert_eq!(state.keys.lock().unwrap().public_key(), before_key);
     assert_eq!(*state.relay_url_override.lock().unwrap(), before_relay);
-    assert!(!state
-        .evaos_teams_authorized
-        .load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(
+        state
+            .evaos_teams_authorized
+            .load(std::sync::atomic::Ordering::Acquire),
+        before_authorized
+    );
 }
 
 #[test]
