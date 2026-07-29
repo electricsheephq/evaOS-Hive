@@ -7,6 +7,10 @@ const authGateSource = await readFile(
   "utf8",
 );
 const apiSource = await readFile(new URL("./api.ts", import.meta.url), "utf8");
+const backendSource = await readFile(
+  new URL("../../../src-tauri/src/evaos_teams.rs", import.meta.url),
+  "utf8",
+);
 
 test("managed sign-in exposes the proof-bound backup-code path only while pending", () => {
   assert.match(authGateSource, /loginPending \? \(/);
@@ -48,4 +52,18 @@ test("lost-device identity replacement is explicit, consequential, and command-b
     /async function runLogin\(\) \{\s+setLostDeviceConfirmed\(false\);\s+setRecoveryStarted\(false\);\s+setRecoveryWorking\(false\);\s+setRecoverySas\(null\);\s+setRecoveryCode\(""\);/,
   );
   assert.match(apiSource, /replace_lost_evaos_teams_identity/);
+  const loginStart = backendSource.indexOf(
+    "pub(crate) async fn start_evaos_teams_login",
+  );
+  const pairingAbort = backendSource.indexOf(
+    "abort_identity_recovery_pairing(",
+    loginStart,
+  );
+  const keychainCheck = backendSource.indexOf(
+    "verify_managed_store_writable()?",
+    loginStart,
+  );
+  assert.ok(loginStart >= 0);
+  assert.ok(pairingAbort > loginStart);
+  assert.ok(keychainCheck > pairingAbort);
 });

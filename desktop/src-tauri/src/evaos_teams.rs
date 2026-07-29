@@ -1737,16 +1737,16 @@ pub(crate) async fn start_evaos_teams_login(
     #[cfg(feature = "evaos-teams-managed")]
     {
         let _operation = state.operation.lock().await;
-        // Prove Keychain reachability before opening the browser. Managed mode
-        // never falls back to a plaintext identity or Desktop token.
-        verify_managed_store_writable()?;
-
-        initialize_runtime(&state)?;
         let _ = abort_identity_recovery_pairing(
             &state,
             buzz_core_pkg::pairing::types::AbortReason::UserDenied,
         )
         .await;
+        // Prove Keychain reachability before opening the browser. Managed mode
+        // never falls back to a plaintext identity or Desktop token.
+        verify_managed_store_writable()?;
+
+        initialize_runtime(&state)?;
         revoke_pending_identity_recovery_session(&state, &app_state).await?;
         if let Ok((session, keys, logout_pending)) = current_credentials(&state).await {
             if logout_pending {
