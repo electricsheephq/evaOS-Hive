@@ -96,6 +96,26 @@ export function isAgentIdentityInManagedList(
 }
 
 /**
+ * Native channel membership may add either a locally managed agent or a
+ * same-company VM agent verified by the Electric catalog. Relay profile
+ * capabilities are intentionally not sufficient: they are self-declared and
+ * cannot establish tenant authority.
+ */
+export function getChannelAddableAgentPubkeys({
+  companyAgentPubkeys,
+  managedAgentPubkeys,
+}: {
+  companyAgentPubkeys: Iterable<string>;
+  managedAgentPubkeys: Iterable<string>;
+}) {
+  return new Set(
+    [...managedAgentPubkeys, ...companyAgentPubkeys].map((pubkey) =>
+      normalizePubkey(pubkey),
+    ),
+  );
+}
+
+/**
  * Allows verified agent identities already admitted to the current channel
  * into mention eligibility without granting this client ownership of their
  * runtime. NIP-29 membership events may omit the explicit "bot" role; in that

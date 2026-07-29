@@ -9,6 +9,7 @@ import {
 import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
 import {
   coalesceAgentAutocompleteCandidates,
+  getChannelAddableAgentPubkeys,
   isAgentIdentityInManagedList,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
@@ -268,14 +269,16 @@ export function MembersSidebar({
         agent,
       ]),
     );
+    const addableAgentPubkeys = getChannelAddableAgentPubkeys({
+      companyAgentPubkeys: relayAgentsQuery.companyAgentPubkeys,
+      managedAgentPubkeys: managedAgentsByPubkey.keys(),
+    });
     const memberAgentLabels = new Set(
       rawMembers
         .filter((member) => member.isAgent === true || member.role === "bot")
         .map((member) => member.displayName?.trim().toLowerCase())
         .filter((label): label is string => Boolean(label)),
     );
-    const managedAgentPubkeys = new Set(managedAgentsByPubkey.keys());
-
     const addCandidate = (candidate: AddMemberSearchCandidate) => {
       const pubkey = normalizePubkey(candidate.pubkey);
       if (
@@ -285,7 +288,7 @@ export function MembersSidebar({
           )) ||
         memberPubkeys.has(pubkey) ||
         isArchivedDiscovery(pubkey) ||
-        !isAgentIdentityInManagedList(candidate, managedAgentPubkeys)
+        !isAgentIdentityInManagedList(candidate, addableAgentPubkeys)
       ) {
         return;
       }
@@ -369,6 +372,7 @@ export function MembersSidebar({
     managedAgentsQuery.data,
     memberPubkeys,
     normalizedDeferredSearchQuery,
+    relayAgentsQuery.companyAgentPubkeys,
     relayAgentsQuery.data,
     userSearchResults,
     rawMembers,
