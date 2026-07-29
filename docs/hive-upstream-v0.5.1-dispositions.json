@@ -1,0 +1,971 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-30",
+  "issue": "https://github.com/electricsheephq/evaOS-Hive/issues/69",
+  "issueDispositionComment": "https://github.com/electricsheephq/evaOS-Hive/issues/69#issuecomment-5122968732",
+  "proofBoundary": "Planning and source-history proof only. This manifest proves exact commit accounting and recorded dispositions; it does not prove adapter adoption, tests, CI, merge, artifacts, signing, notarization, publication, deployment, runtime behavior, customer installation, release, or adoption.",
+  "refs": {
+    "upstreamRepository": "https://github.com/block/buzz.git",
+    "upstreamBase": "dd222a509b156ba52ed3219e895d7bf1cf322c92",
+    "v050Tag": "v0.5.0",
+    "v050Commit": "4a977c588a540be38bd8ddb268cd24437bac8165",
+    "v051Tag": "v0.5.1",
+    "v051Commit": "a13085e9ac9a7c8dbd9426a6b88fc75abf62220e",
+    "candidate": "a13085e9ac9a7c8dbd9426a6b88fc75abf62220e"
+  },
+  "expectedCounts": {
+    "total": 104,
+    "baseToV050": 67,
+    "v050ToV051": 37
+  },
+  "allowedDispositions": [
+    "keep/adopt",
+    "managed-surface omit while retaining upstream",
+    "redesign/narrow replay",
+    "prove-inapplicable"
+  ],
+  "dispositionTotals": {
+    "keep/adopt": 91,
+    "managed-surface omit while retaining upstream": 7,
+    "redesign/narrow replay": 3,
+    "prove-inapplicable": 3
+  },
+  "commits": [
+    {
+      "ordinal": 1,
+      "sha": "74b63e1846212af6e6751a62cfc631f74b1dfe07",
+      "subject": "Refactor managed-agent runtime into cohesive modules (#2974)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Splits managed-agent runtime into lifecycle, process, metadata, reaper, and sweep modules.",
+      "risk": "Structural refactor only; preserve it. Company VM agents must not enter these local process-ownership paths."
+    },
+    {
+      "ordinal": 2,
+      "sha": "c9a73726be6e6edd4e5d0c9c44abdf07d550ecd0",
+      "subject": "fix(mobile): validate invite relay destinations (#2986)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "managed-surface omit while retaining upstream",
+      "rationale": "Validates mobile invite relay origins and blocks redirects/private destinations.",
+      "risk": "Keep the security fix, but managed Hive must not expose relay-selecting invite redemption; invitations remain website-owned."
+    },
+    {
+      "ordinal": 3,
+      "sha": "166c6655e8bca87d83ad60c087fb70a32a026baf",
+      "subject": "fix(desktop): surface install failures hidden by curl-pipe exit codes (#2892)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds shell `pipefail` and native PATH fallback for local runtime installers.",
+      "risk": "Improves truthful local install failures. It must not become a Company VM/Hermes provisioning path."
+    },
+    {
+      "ordinal": 4,
+      "sha": "8e67cf399d0291bcdbc69cd0402983ca030f05bb",
+      "subject": "chore(desktop): delete dead persona catalog UI cluster (#2886)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Deletes unreachable persona catalog UI files.",
+      "risk": "Dead-code deletion preserves native reachable behavior."
+    },
+    {
+      "ordinal": 5,
+      "sha": "8c0e8cb1656b04ad269bce3c2deeda2a943ae78a",
+      "subject": "fix(desktop): make agent definition authoritative for model/provider/prompt (#1968)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Makes native agent definitions authoritative for local model, provider, prompt, and mesh config.",
+      "risk": "Correct for native local agents. Company VM catalog entries must remain public read-only identities, not linked local definitions carrying Hermes config."
+    },
+    {
+      "ordinal": 6,
+      "sha": "dc1646fcb952c8fb9ab62b838a5ccfb7bfdbbaae",
+      "subject": "docs: document required DCO sign-off and add commit-msg sign-off hook (#2993)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Documents DCO requirements and adds a commit-message sign-off hook.",
+      "risk": "Contributor tooling only; no product-authority conflict."
+    },
+    {
+      "ordinal": 7,
+      "sha": "a31fc4d2f35d51cdf45ff8c61fc3a07f49c665e8",
+      "subject": "fix(desktop): remove bundled libsystemd from AppImage (#2353)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Removes bundled `libsystemd` from Linux AppImages.",
+      "risk": "Packaging compatibility fix; does not affect the signed Hive macOS update channel."
+    },
+    {
+      "ordinal": 8,
+      "sha": "e6c90bb7c430d1b2af16508b634f9a5283b7fa3b",
+      "subject": "Polish community rail and mobile pairing (#2972)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "managed-surface omit while retaining upstream",
+      "rationale": "Polishes multi-community rail and desktop-to-mobile pairing.",
+      "risk": "Retain native code, but managed Hive must not expose arbitrary community/relay switching. Pairing is acceptable only if bound to the server-selected company relay."
+    },
+    {
+      "ordinal": 9,
+      "sha": "1a56b7cc9e441819328ae6814d15f83ed22388f8",
+      "subject": "feat(mobile): add worktree-aware debug identities (#2858)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds worktree-aware mobile debug identities and build overrides.",
+      "risk": "Development-only behavior; no production identity-authority change."
+    },
+    {
+      "ordinal": 10,
+      "sha": "5d8ede446f8fdc48146fe56d389cab6bf3500f92",
+      "subject": "feat(agents): lower default agent parallelism from 24 to 10 (#3038)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Lowers native local-agent parallelism from 24 to 10.",
+      "risk": "Applies to local managed runtimes, not Company VM responder concurrency."
+    },
+    {
+      "ordinal": 11,
+      "sha": "871a3b37723404a34c4cdf63037bbc4916b25245",
+      "subject": "Refine mobile community switching and discovery (#2967)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "managed-surface omit while retaining upstream",
+      "rationale": "Refines mobile community switching, discovery, and navigation.",
+      "risk": "Managed Hive has one server-selected company relay; do not expose discovery or client-selected switching."
+    },
+    {
+      "ordinal": 12,
+      "sha": "aee63144843854ee32ed9d36a2e7511c82ddc6b0",
+      "subject": "fix(desktop): strip legacy baked team instructions from stored prompts (#3035)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Removes legacy baked team instructions from stored local prompts.",
+      "risk": "Native migration is safe. It must never inspect or rewrite Hermes-owned VM-agent instructions."
+    },
+    {
+      "ordinal": 13,
+      "sha": "16d4ec335e210295a9d9f77f36c1e85a18b6814a",
+      "subject": "feat(desktop): use collective mesh routing for Auto (#2825)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "managed-surface omit while retaining upstream",
+      "rationale": "Routes Auto through collective MeshLLM when multiple physical models are available.",
+      "risk": "Hosted/collective Compute is explicitly omitted from managed Hive. Keep upstream implementation but hide/disable its managed presentation and do not claim Company VM support."
+    },
+    {
+      "ordinal": 14,
+      "sha": "95fdf978800982389b120c66ff5e766d785419c7",
+      "subject": "feat(acp): bring your own harness (BYOH) — generic ACP runtime seam + settings gallery (#2773)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds generic ACP harness presets and user-defined local runtimes.",
+      "risk": "Preserve native BYOH. Show presets/custom runtimes only with truthful local discovery; Hermes/OpenClaw presets must not provision or represent Company VM agents."
+    },
+    {
+      "ordinal": 15,
+      "sha": "63c62fcf3eb5321262e8b7c4e299d110de330884",
+      "subject": "chore(deps): update dependency @tanstack/react-virtual to v3.14.8 (#3057)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Updates `@tanstack/react-virtual`.",
+      "risk": "Dependency-only; retain exact upstream lock state."
+    },
+    {
+      "ordinal": 16,
+      "sha": "070fb6a16153b47d88953e1a2db5c2f241b838b5",
+      "subject": "chore(deps): update radix-ui-primitives monorepo (#3063)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Updates Radix UI primitives.",
+      "risk": "Dependency-only; retain exact upstream lock state."
+    },
+    {
+      "ordinal": 17,
+      "sha": "afb272bb7b8d7d45d7de676fa97dcd5a8eefacc7",
+      "subject": "fix(desktop): render rich project work item content (#3100)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Renders rich project issue, PR, commit, and forum content.",
+      "risk": "Native collaboration/project UI; no Electric-owned replacement."
+    },
+    {
+      "ordinal": 18,
+      "sha": "37420764349bcd8f3dcf34786c30a8f924152922",
+      "subject": "fix(mobile): mitigate message-post delay with optimistic rendering (#3037)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds optimistic rendering for mobile message sends.",
+      "risk": "Native user-signed messaging remains authoritative."
+    },
+    {
+      "ordinal": 19,
+      "sha": "7fc0cc82db4d9dced9c258bbe8b530164a832a77",
+      "subject": "Restore Goose and Buzz Agent to onboarding harness selection (#2731)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Restores Goose and Buzz Agent to onboarding runtime selection.",
+      "risk": "Preserve native local selection; Company VM agents must not be presented as locally installed runtimes."
+    },
+    {
+      "ordinal": 20,
+      "sha": "87b3fcd3c0131683569dd4268b099d18b25dcd5e",
+      "subject": "fix(desktop): clarify identity key button when key exists (#2357)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Clarifies the identity-key action when a key already exists.",
+      "risk": "Compatible with durable OS-keystore identity. Electric logout must not delete or rotate the key."
+    },
+    {
+      "ordinal": 21,
+      "sha": "c5c4f390b6713256e2efb8394c59823ebad73db6",
+      "subject": "feat(desktop): handle project work from Inbox (#3117)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds project-work handling to the desktop Inbox.",
+      "risk": "Native Inbox behavior; no Electric broker or projection needed."
+    },
+    {
+      "ordinal": 22,
+      "sha": "00ecf2cac7544d986b4eb111ad0a8b1d7560791f",
+      "subject": "fix(security): authorize kind:9000 role changes in both directions (#3017)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Authorizes kind-9000 role changes in both directions.",
+      "risk": "Relay authorization fix should remain. Company admission still fails closed before native role enforcement."
+    },
+    {
+      "ordinal": 23,
+      "sha": "654f384906b5c720a60a199d85031a6f1cb6efc9",
+      "subject": "fix(desktop): read the newest pair-scoped harness log (#3134)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Selects the newest pair-scoped local harness log.",
+      "risk": "Local runtime diagnostics only; do not surface VM/Hermes logs or secrets."
+    },
+    {
+      "ordinal": 24,
+      "sha": "4ef5f10ce4937b4e7d7059de22cabf78b616437b",
+      "subject": "docs(contributing): set PR expectations and require UI screenshots (#3140)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Updates PR expectations and screenshot requirements.",
+      "risk": "Contribution documentation only."
+    },
+    {
+      "ordinal": 25,
+      "sha": "31e2de1966672e73e026af3c54f3a1a9a2f5e103",
+      "subject": "fix(deps): bump nostr to 0.44.6 for RUSTSEC-2026-0216 (NIP-44 remote DoS) (#3135)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Bumps `nostr` for the NIP-44 remote-DoS advisory.",
+      "risk": "Required upstream security update."
+    },
+    {
+      "ordinal": 26,
+      "sha": "fe84274d215b098a97b0b46cf565d736dbce14b7",
+      "subject": "chore(deps): update react monorepo to v19.2.8 (#3064)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Updates React 19 dependencies.",
+      "risk": "Dependency-only; retain upstream lock state."
+    },
+    {
+      "ordinal": 27,
+      "sha": "e2e007910114ddf7c5a4e93bb03f6afe13552e92",
+      "subject": "fix(security): enforce durable community ban on NIP-43 relay-admin kinds 9030-9033 (#3128)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Enforces durable community bans on relay-admin kinds 9030–9033.",
+      "risk": "Required native relay invariant; reinforces company-relay enforcement."
+    },
+    {
+      "ordinal": 28,
+      "sha": "18eef633d88ac465c61d98f12655fbf51dc3ca44",
+      "subject": "feat(git): use agent display name as git author name (#3040)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Uses the agent display name as Git author name.",
+      "risk": "Safe for native/local agents. VM-agent display names remain catalog/profile data and must not grant identity authority."
+    },
+    {
+      "ordinal": 29,
+      "sha": "68f39f36972f319b91e0d93e945d7f17b3269a82",
+      "subject": "feat(mobile): bring message actions to desktop parity (#3070)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds mobile message actions, follows, reminders, and read-state parity.",
+      "risk": "Native collaboration functionality."
+    },
+    {
+      "ordinal": 30,
+      "sha": "f2fe3b63c21be55907175715c076cd3a9195b74d",
+      "subject": "feat(acp): title agent sessions from the agent and channel name (#3028)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Titles ACP sessions from agent and channel names.",
+      "risk": "Local ACP metadata only; do not treat the title as VM-agent identity or authorization."
+    },
+    {
+      "ordinal": 31,
+      "sha": "be275cfc6c7b80fe43e9d66c6d14b6d2bbe58a10",
+      "subject": "fix(desktop): keep identity key help dialog readable in dark mode (#2854)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Fixes identity-key help-dialog dark-mode readability.",
+      "risk": "Presentation-only."
+    },
+    {
+      "ordinal": 32,
+      "sha": "313f793c8753d413c22ff8edfe420d5ee78708bc",
+      "subject": "feat(desktop): add search to agent emoji picker (#2630)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds search to the native agent emoji picker.",
+      "risk": "Native persona presentation; compatible with bundled persona overlays."
+    },
+    {
+      "ordinal": 33,
+      "sha": "9d36778c37e42318135e92ccb0e4491afac34a17",
+      "subject": "feat(mobile): refactor Activity behavior and ui (#2889)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Refactors mobile Activity/Inbox state and UI.",
+      "risk": "Native collaboration behavior."
+    },
+    {
+      "ordinal": 34,
+      "sha": "545bb46b824a3fbf4401062f03b72531d832ebb9",
+      "subject": "fix(desktop): make lint and unit-test gates work on Windows (#2943)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Makes desktop lint and unit-test gates portable to Windows.",
+      "risk": "Tooling portability only."
+    },
+    {
+      "ordinal": 35,
+      "sha": "8bb43d51912894553f2670b2d285a96cf09cd472",
+      "subject": "fix(desktop): make the test loader work on Windows (#2758)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Makes the desktop test loader work on Windows.",
+      "risk": "Test tooling only."
+    },
+    {
+      "ordinal": 36,
+      "sha": "c3084b36d975259f2dfeee8edc9131b40a8bce83",
+      "subject": "fix(cli,relay): resolve agents by verified owner (#2615)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "prove-inapplicable",
+      "rationale": "Adds verified-owner agent lookup across CLI, DB, and relay bridge.",
+      "risk": "Fully reverted by `a041e2d…` within this same target range; it has no target-tree effect and must not be independently replayed."
+    },
+    {
+      "ordinal": 37,
+      "sha": "b92a1f4bf400e7da5ab7a010cdd81a69497d8191",
+      "subject": "chore(desktop): add AgentCreationPreview file-size override to unblock main CI (#3154)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds a temporary file-size allowance for `AgentCreationPreview`.",
+      "risk": "CI baseline only; preserve exact upstream state rather than selectively reconstructing it."
+    },
+    {
+      "ordinal": 38,
+      "sha": "e28707f6b24a67284276bc29d4dc36b4f53ad53c",
+      "subject": "fix(mobile): retry channel-sections startup sync when relay rate-limits cold start (#3004)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Retries mobile channel-section startup sync after rate limiting.",
+      "risk": "Native reliability fix."
+    },
+    {
+      "ordinal": 39,
+      "sha": "32ead931011bd95d3423d4db17b087fe110808a4",
+      "subject": "fix(mobile): tapping threaded message in Inbox navigates to top level of channel  (#2103)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Navigates mobile Inbox thread taps to the top-level channel.",
+      "risk": "Native navigation fix."
+    },
+    {
+      "ordinal": 40,
+      "sha": "8995316844f7ad50552fbae67fbd35119262796f",
+      "subject": "fix(desktop): use forward slashes for git credential.helper on Windows (#3023)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Uses forward slashes in Windows Git credential-helper paths.",
+      "risk": "Platform compatibility fix."
+    },
+    {
+      "ordinal": 41,
+      "sha": "3faea98891ce43b772dc94366a45f1c3b99d102c",
+      "subject": "fix(mobile): match markContextRead signature in activity test fake (#3158)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "prove-inapplicable",
+      "rationale": "Intended to update a mobile test fake for a changed method signature.",
+      "risk": "Commit tree is identical to its parent: no files or target-tree behavior changed."
+    },
+    {
+      "ordinal": 42,
+      "sha": "d98da7389e60cfbd79b219aa411449fe2e53a18a",
+      "subject": "feat(desktop): redesign agent runtime settings (#3093)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Consolidates native local runtime discovery, install, authentication, and custom harness settings.",
+      "risk": "Preserve native Settings. Electric settings stay additive; Company VM agents must not be installable/editable through this local-runtime panel."
+    },
+    {
+      "ordinal": 43,
+      "sha": "a041e2d21e292a271fdfc26f0cdcdd0456f815c5",
+      "subject": "Revert \"fix(cli,relay): resolve agents by verified owner\" (#3168)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "prove-inapplicable",
+      "rationale": "Reverts verified-owner agent lookup.",
+      "risk": "Together with `c3084b3…`, produces no target-tree feature to adapt. Retain history, but do not replay either side separately."
+    },
+    {
+      "ordinal": 44,
+      "sha": "9b0f744804697b802f7afb88947194702765c78d",
+      "subject": "resolve findings (#3150)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Applies security fixes for dependencies, media auth, workflow authority, and Git channel membership.",
+      "risk": "High-value fail-closed fixes. Hive deployment must preserve authenticated media defaults and current-membership checks."
+    },
+    {
+      "ordinal": 45,
+      "sha": "137185e056c469ff613efc16f88044bc036a9dc6",
+      "subject": "chore(deps): update plugin org.jetbrains.kotlin.android to v2.2.21 (#3058)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Updates the Android Kotlin plugin.",
+      "risk": "Mobile build dependency only."
+    },
+    {
+      "ordinal": 46,
+      "sha": "4d8b676bb283a1917cec5850c3b7327fe122b0c1",
+      "subject": "fix(desktop): keep collapsed table separators out of spoilers (#3169)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Prevents collapsed table separators from appearing inside spoilers.",
+      "risk": "Native rendering fix."
+    },
+    {
+      "ordinal": 47,
+      "sha": "01c23810fa7fcf5881101d45543dd2cfdc193608",
+      "subject": "Replace mobile reconnect banners with skeleton shimmer (#3143)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Replaces mobile reconnect banners with skeleton shimmer states.",
+      "risk": "Native mobile presentation."
+    },
+    {
+      "ordinal": 48,
+      "sha": "174c38e4bd1ed8498641546bc4fcb6d5a4c9cede",
+      "subject": "fix(desktop): recover full local storage on startup (#3182)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Recovers from full local storage during desktop startup.",
+      "risk": "Native resilience fix; does not alter identity custody."
+    },
+    {
+      "ordinal": 49,
+      "sha": "f069a8550373328babe4239ed614fcdf884721e2",
+      "subject": "feat(admin): show reported message content in report detail (#3149)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Shows reported message content in authorized admin report details.",
+      "risk": "Community-scoped authorization is preserved. Do not grant Electric support a permanent relay admin identity or cross-company access."
+    },
+    {
+      "ordinal": 50,
+      "sha": "75588eaff2354d620e554c055b80ec83735ddb0a",
+      "subject": "Refine pending message status (#3153)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Refines pending-message status.",
+      "risk": "Native user-signed message presentation."
+    },
+    {
+      "ordinal": 51,
+      "sha": "99da5b7ebb19e26453e075bfb949672122b31be3",
+      "subject": "Fix composer selection formatting and drop overlay (#3172)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Fixes composer selection formatting and file-drop overlay behavior.",
+      "risk": "Native composer behavior."
+    },
+    {
+      "ordinal": 52,
+      "sha": "2bd4c24b71335e7ce272ec6de6491f7f37f4b20d",
+      "subject": "Inbox refactor (#2045)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Refactors desktop Inbox layout, state, filtering, drafts, and thread handling.",
+      "risk": "Native collaboration surface; do not fork or broker it."
+    },
+    {
+      "ordinal": 53,
+      "sha": "de13960505fd798070e177cb33b1663100ac06bb",
+      "subject": "fix(desktop): keep project Inbox previews compact (#3193)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Keeps project Inbox previews compact.",
+      "risk": "Presentation-only."
+    },
+    {
+      "ordinal": 54,
+      "sha": "7ca0bbd946fd82a7008132f94d069a97bb53f94b",
+      "subject": "fix(desktop): republish agent identity records when a persona rename propagates (#2607)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Republishes native agent identity records after persona rename propagation.",
+      "risk": "Safe for locally owned personas. Company VM catalog agents must be read-only in Hive, with rename/profile publication owned by their runtime."
+    },
+    {
+      "ordinal": 55,
+      "sha": "0019f80765e96f056e81b57789b8b5fb80936f72",
+      "subject": "fix(desktop): fetch join policies through native networking (#2862)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "managed-surface omit while retaining upstream",
+      "rationale": "Fetches join policies through Tauri native networking with URL validation.",
+      "risk": "Keep hardened networking, but hide direct relay/community joins in managed Hive; OAuth selects the relay server-side and host mismatch fails closed."
+    },
+    {
+      "ordinal": 56,
+      "sha": "cb2a265b5399426e808461c1a16713754c593258",
+      "subject": "feat(search): parse from:/in:/after:/before: and pass them in the filter (#2871)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds `from:`, `in:`, `after:`, and `before:` search operators.",
+      "risk": "Native search; no Electric retrieval subsystem."
+    },
+    {
+      "ordinal": 57,
+      "sha": "9810d8545937329f229ff40d8a19edc9e3e325c1",
+      "subject": "fix(desktop): preserve thread anchor through layout reflow (#3212)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Preserves thread anchor across layout reflow.",
+      "risk": "Native timeline fix."
+    },
+    {
+      "ordinal": 58,
+      "sha": "98a7b1334823ee0be3e3fa5cab7a2e349e438dab",
+      "subject": "fix(node): bump Buzz-supplied Node runtimes past OpenClaw's >=24.15.0 floor (#3218)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Bumps Buzz-supplied Node runtimes for OpenClaw’s minimum version.",
+      "risk": "Supports truthful local runtimes only; it does not provision or validate Company VM OpenClaw/Hermes."
+    },
+    {
+      "ordinal": 59,
+      "sha": "d500c2d5cf5d9aabe0ca4ebebfcafdbe5f5b7fd3",
+      "subject": "feat(invites): add use-limited invite links (#3141)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "managed-surface omit while retaining upstream",
+      "rationale": "Adds database-backed, use-limited invite links across relay and clients.",
+      "risk": "Preserve upstream implementation, but managed Hive invite creation/redemption stays hidden because People/Access and invitations are website-owned."
+    },
+    {
+      "ordinal": 60,
+      "sha": "d8f9d87c17131b952ea5b6c3767978c4637545fc",
+      "subject": "Polish composer activity layout and transitions (#3151)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Polishes composer activity layout, transitions, typing, and viewport handling.",
+      "risk": "Native collaboration UI."
+    },
+    {
+      "ordinal": 61,
+      "sha": "94675e0d2518a0324d1efdfa5c0aeb8a367b3016",
+      "subject": "refactor(desktop): extract install command execution into install_exec (#3251)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Extracts local runtime install execution into its own module.",
+      "risk": "Structural refactor; retain local/VM boundary."
+    },
+    {
+      "ordinal": 62,
+      "sha": "be13b4bb9ce228b21fa3682ce75d75cba5950561",
+      "subject": "fix(desktop): probe legacy Goose install dir on Windows (#3248)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Detects legacy local Goose installs on Windows.",
+      "risk": "Local discovery only."
+    },
+    {
+      "ordinal": 63,
+      "sha": "925a9a7bf230e67a18abc8fc7996fa39d620846b",
+      "subject": "fix(buzz-acp): accept id-keyed config options when resolving model switch (#2795)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Accepts `id`-keyed ACP config options when switching models.",
+      "risk": "Native ACP interoperability fix; does not authorize Hive to control Hermes-owned VM model configuration."
+    },
+    {
+      "ordinal": 64,
+      "sha": "e94b9aeda0b2272d36e3744e78680be69295b8b5",
+      "subject": "feat(tracing): add datastore tracing plumbing (#2760)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds relay datastore/HTTP OTLP tracing plumbing.",
+      "risk": "Generic observability. Company deployments must keep telemetry and logs company-scoped."
+    },
+    {
+      "ordinal": 65,
+      "sha": "3a4bf513df0e0c258587bfcbed9463d63723b56b",
+      "subject": "Publish symbol-bearing debug relay images (#3250)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Adds optimized symbol-bearing debug relay image publication.",
+      "risk": "Source/workflow is safe to inherit, but it proves no Hive artifact publication or deployment. Electric release/deploy credentials remain separate."
+    },
+    {
+      "ordinal": 66,
+      "sha": "2ce2d71cc38a9657eaf344c10e07f155b8a18615",
+      "subject": "feat(relay): make Postgres pool size configurable, default 50 (#3191)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "keep/adopt",
+      "rationale": "Makes relay Postgres pool size configurable and raises the upstream default to 50.",
+      "risk": "Keep configurability; isolated customer-VM deployment must set a capacity-backed value rather than assuming upstream Aurora sizing."
+    },
+    {
+      "ordinal": 67,
+      "sha": "4a977c588a540be38bd8ddb268cd24437bac8165",
+      "subject": "chore(release): release Buzz Desktop version 0.5.0 (#3213)",
+      "segment": "base-to-v0.5.0",
+      "disposition": "redesign/narrow replay",
+      "rationale": "Bumps Buzz Desktop to 0.5.0 and updates changelog/Tauri package metadata.",
+      "risk": "Retain upstream history/changelog, then narrowly replay Hive bundle identity, visible branding, versioning, signer, and appcast configuration. Upstream release metadata/artifacts are not Hive release proof."
+    },
+    {
+      "ordinal": 68,
+      "sha": "7dfea2634f7e87f6a42f5fc1f22d9f77c648abfc",
+      "subject": "Add mobile message image galleries (#3312)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Mobile message image galleries (#3312)",
+      "risk": "Keep unchanged in the upstream base; managed Mobile remains disabled until its separate proof."
+    },
+    {
+      "ordinal": 69,
+      "sha": "6da45ac5cf90fa0768a98256e2200708d219ddfc",
+      "subject": "Polish mobile message and search layouts (#3121)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Mobile message/search layout polish (#3121)",
+      "risk": "Keep unchanged; no managed desktop override."
+    },
+    {
+      "ordinal": 70,
+      "sha": "a3b097745a3fc22872d05bbd558d231ead4e661d",
+      "subject": "Refine mobile attachment picking (#3313)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Mobile attachment picking (#3313)",
+      "risk": "Keep unchanged; not a pre-David desktop gate."
+    },
+    {
+      "ordinal": 71,
+      "sha": "af4d8615165b9bdbe1190d4ba71ff32b1df75a8a",
+      "subject": "feat(chart): add relay pod extension points (#3322)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Relay chart pod extension points (#3322)",
+      "risk": "Keep in source but prove unused by the current per-company relay deployment before claiming runtime impact."
+    },
+    {
+      "ordinal": 72,
+      "sha": "5457c947a74f5ba4b979f9c6411aa7626a858387",
+      "subject": "fix(composer): scope multiline block formatting (#3246)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Multiline composer block formatting (#3246)",
+      "risk": "Keep unchanged as native collaboration behavior."
+    },
+    {
+      "ordinal": 73,
+      "sha": "60158fce3e670f11bb35d42627857ccaea50ff06",
+      "subject": "feat(cli): add users set-status command for NIP-38 profile status (#3253)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "CLI NIP-38 status command (#3253)",
+      "risk": "Keep unchanged; no Electric adapter conflict."
+    },
+    {
+      "ordinal": 74,
+      "sha": "4e3998f36e36d68b9a93dcbd85f0864450bb8f5f",
+      "subject": "fix(desktop): gate codex-acp on a minimum supported version (#3254)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Minimum supported codex-acp version (#3254)",
+      "risk": "Keep; capability-gate local Codex honestly and do not apply the check to VM Hermes identities."
+    },
+    {
+      "ordinal": 75,
+      "sha": "00ede2e7aa7eb95571b7db3ebbd163adbf6cf74e",
+      "subject": "fix(desktop): restore the inbox icon in the sidebar (#3341)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Restore Inbox icon (#3341)",
+      "risk": "Keep unchanged."
+    },
+    {
+      "ordinal": 76,
+      "sha": "a77212875aea299350d01d94b0f6d9c22a8fce5f",
+      "subject": "Unify mobile loading spinners (#3314)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Mobile loading spinners (#3314)",
+      "risk": "Keep unchanged; no managed desktop override."
+    },
+    {
+      "ordinal": 77,
+      "sha": "35305bfc8fd456ca9a17caa1ddbfaabd87d46981",
+      "subject": "docs: restructure DCO guidance into scannable subsection (#3337)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "DCO contributor documentation (#3337)",
+      "risk": "Keep unchanged."
+    },
+    {
+      "ordinal": 78,
+      "sha": "3afa129ee785cc74d921d0ba969254a8255c4cc0",
+      "subject": "fix(desktop): keep drafts out of the Inbox All view (#3217)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Keep drafts out of Inbox All (#3217)",
+      "risk": "Keep unchanged as native product behavior."
+    },
+    {
+      "ordinal": 79,
+      "sha": "a35771fc441cdc3c6f517f419037206783b502d2",
+      "subject": "feat(desktop): refine agent catalog sharing (#2439)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "redesign/narrow replay",
+      "rationale": "Agent catalog sharing redesign (#2439)",
+      "risk": "Redesign/reconcile before replay: preserve the native catalog and avatar pipeline, then layer only the company-VM provider adapter; do not create a second catalog or expose unsupported VM edit/share controls."
+    },
+    {
+      "ordinal": 80,
+      "sha": "1e307e178a7b7fc157cde1ef0721ba1a69cbc274",
+      "subject": "chore(compose): remove stale typesense env vars (#3332)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Remove stale Typesense Compose env vars (#3332)",
+      "risk": "Keep unchanged."
+    },
+    {
+      "ordinal": 81,
+      "sha": "b0503d80c298b1ece3b0a43b41d316829a3379e7",
+      "subject": "feat(desktop): add custom harness inline from agent dialogs (#3252)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Add custom harness inline (#3252)",
+      "risk": "Keep for supported user-created local agents; capability-gate it away from registered VM-agent identities and never provision Hermes from Hive."
+    },
+    {
+      "ordinal": 82,
+      "sha": "1d4f97b959a0d91f7bac0e1f97189e5c10347712",
+      "subject": "fix(acp): disable goose cron scheduler in managed agent children (#3144)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Disable Goose cron scheduler in managed children (#3144)",
+      "risk": "Keep; verify no regression in long-lived local agent sessions."
+    },
+    {
+      "ordinal": 83,
+      "sha": "1d3b810ad70d6325718ed91e723f32c4a376d5e1",
+      "subject": "fix(desktop): paint community rail full height (#3382)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Community rail full-height paint (#3382)",
+      "risk": "Keep unchanged."
+    },
+    {
+      "ordinal": 84,
+      "sha": "4fcd55a9991a02dd41c0637b14e5cb0cd88b992e",
+      "subject": "docs(contributing): document the Linux system libraries just ci requires (#3396)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Linux CI dependency docs (#3396)",
+      "risk": "Keep unchanged."
+    },
+    {
+      "ordinal": 85,
+      "sha": "913d564ce0f35924291bf3eeab6508517a6d8d1f",
+      "subject": "fix(desktop): stabilize flaky DM expansion E2E ordering assertions (#2004)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Stabilize DM expansion E2E ordering (#2004)",
+      "risk": "Keep as test-only stabilization; do not count it as product DM proof."
+    },
+    {
+      "ordinal": 86,
+      "sha": "3ece4461df8a7b9663a8e68327483b8377d4086d",
+      "subject": "feat(desktop): apply WebKit rendering workarounds at startup on Linux (#3271)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Linux WebKit workarounds (#3271)",
+      "risk": "Keep unchanged; not a macOS release gate."
+    },
+    {
+      "ordinal": 87,
+      "sha": "f25e6dd6aa4a1c5eff0facc260b8e25d05a2b02a",
+      "subject": "feat(acp): steer claude-code and codex agents via _session/steering (#3007)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "ACP session steering for Claude/Codex (#3007)",
+      "risk": "Keep for supported local runtimes; verify Hermes session continuity separately and do not claim VM support from this commit."
+    },
+    {
+      "ordinal": 88,
+      "sha": "12d63c67be276d9d11a436374b61469a00bb3808",
+      "subject": "release(chart): publish 0.1.7 (#3393)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Relay chart 0.1.7 release (#3393)",
+      "risk": "Keep metadata with the chart change; no deployment claim."
+    },
+    {
+      "ordinal": 89,
+      "sha": "826bed4821f035841193b7660655736171e66211",
+      "subject": "chore(ci): bump desktop smoke E2E timeout to 30 minutes (#3409)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Desktop smoke E2E timeout (#3409)",
+      "risk": "Keep CI-only change; no product proof."
+    },
+    {
+      "ordinal": 90,
+      "sha": "9227bdf58ad6664ae3c1078888f2181ec19c4da4",
+      "subject": "fix(ci): ratchet file sizes against the base tree (#3352)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "File-size ratchet against base tree (#3352)",
+      "risk": "Keep CI behavior and reconcile Electric file-size exceptions narrowly."
+    },
+    {
+      "ordinal": 91,
+      "sha": "55a3ed7b9217cee5b23e0a5441947dc929b2a38c",
+      "subject": "fix(desktop): clear stale thread new-message pill (#3411)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Clear stale thread new-message pill (#3411)",
+      "risk": "Keep unchanged."
+    },
+    {
+      "ordinal": 92,
+      "sha": "90e058ebf68137e048a409aec6616519379ff726",
+      "subject": "feat: add explicit entry for claude-opus-5 in model config (#2831)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Claude Opus 5 model entry (#2831)",
+      "risk": "Keep native model metadata; Hermes remains model/provider authority for VM agents."
+    },
+    {
+      "ordinal": 93,
+      "sha": "22be8bb35177e27efc2dca2534df9a8dd871eae0",
+      "subject": "fix(relay): avoid subscription lock inversion (#3413)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Relay subscription lock inversion fix (#3413)",
+      "risk": "Backport-or-prove-present before customer relay qualification; this fixes a reachable relay deadlock."
+    },
+    {
+      "ordinal": 94,
+      "sha": "6300a6b1d03e32c473c7b6568df663c8927565cf",
+      "subject": "fix(acp): per-runtime env defaults at spawn — isolate Hermes from configured MCP startup (#3420)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Per-runtime env defaults; isolate Hermes MCP startup (#3420)",
+      "risk": "Required backport-or-prove-present for the Hive Hermes path; adopt the generic seam and preserve operator override precedence."
+    },
+    {
+      "ordinal": 95,
+      "sha": "485d03a358b6d695aaf97879f3fbaf2f308d0755",
+      "subject": "Fix mobile attachment and gallery polish (#3370)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Mobile attachment/gallery polish (#3370)",
+      "risk": "Keep unchanged; not a pre-David desktop gate."
+    },
+    {
+      "ordinal": 96,
+      "sha": "c405ad1d4b1da061c11b3d26761252d41dcc62d3",
+      "subject": "feat(agent): fix Anthropic prompt caching with Databricks (+ MCP proxy/TLS passthrough) (#3463)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Anthropic caching plus MCP proxy/TLS passthrough (#3463)",
+      "risk": "Keep upstream behavior; verify it does not override Hermes-owned provider configuration. Backport proxy/TLS passthrough only if the current VM path reproduces the egress failure."
+    },
+    {
+      "ordinal": 97,
+      "sha": "ce01e930edff97bdc12a205fb8f938fcacdba8c1",
+      "subject": "Polish mobile typing indicator (#3528)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Mobile typing indicator polish (#3528)",
+      "risk": "Keep unchanged; not a pre-David desktop gate."
+    },
+    {
+      "ordinal": 98,
+      "sha": "24d90d1280a9325c6cbcf8eea30ac54db5afd2cb",
+      "subject": "Refine community invite limits (#3529)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "managed-surface omit while retaining upstream",
+      "rationale": "Community invite limits (#3529)",
+      "risk": "Omit the managed surface because Electric website owns invites/seats; retain native upstream code for unmanaged Buzz."
+    },
+    {
+      "ordinal": 99,
+      "sha": "6438dedf83a9dbe1853e484326911bf6c7f1618c",
+      "subject": "feat(agent): route Claude/GPT model families to their native gateway wire (#3538)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Native gateway wire routing for Claude/GPT families (#3538)",
+      "risk": "Keep native agent behavior; VM Hermes remains provider/model authority."
+    },
+    {
+      "ordinal": 100,
+      "sha": "4555899ab2bfc7aa47b22dd872253f3704091782",
+      "subject": "Polish mobile navigation and menus (#3486)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Mobile navigation/menu polish (#3486)",
+      "risk": "Keep unchanged; not a pre-David desktop gate."
+    },
+    {
+      "ordinal": 101,
+      "sha": "f7a3988ba13b590d9a55a7e8413fc3fb5ffbef18",
+      "subject": "fix(desktop): preserve shared agent fidelity (#3553)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Preserve shared-agent fidelity (#3553)",
+      "risk": "Keep and reuse its effective-avatar/fallback pipeline where compatible; it does not by itself implement tenant-scoped Company VM avatar overrides."
+    },
+    {
+      "ordinal": 102,
+      "sha": "294c8c821de51442a8c384c0bdb66b1a10224ca0",
+      "subject": "perf(desktop): move observer-feed archive and decrypt commands off main thread (#3415)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Move observer archive/decrypt off the main thread (#3415)",
+      "risk": "Keep; include in the cumulative memory/responsiveness canary because it removes a known main-thread blocking path."
+    },
+    {
+      "ordinal": 103,
+      "sha": "51bb97d2be658854bb8a39983af568e90591d375",
+      "subject": "Run Tauri clippy in pre-push (#3555)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "keep/adopt",
+      "rationale": "Run Tauri clippy pre-push (#3555)",
+      "risk": "Keep CI/developer gate."
+    },
+    {
+      "ordinal": 104,
+      "sha": "a13085e9ac9a7c8dbd9426a6b88fc75abf62220e",
+      "subject": "chore(release): release Buzz Desktop version 0.5.1 (#3566)",
+      "segment": "v0.5.0-to-v0.5.1",
+      "disposition": "redesign/narrow replay",
+      "rationale": "v0.5.1 release metadata (#3566)",
+      "risk": "Redesign for Hive version/branding/updater metadata; do not publish the upstream version string as a Hive release claim."
+    }
+  ]
+}
