@@ -41,6 +41,7 @@ import {
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { getEvaosTeamsAuthStatus } from "@/features/evaosTeams/api";
 import { useHiveCompanyMembersQuery } from "@/features/evaosTeams/hooks";
+import { hasCanonicalCompanyWelcomeAgents } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
@@ -81,6 +82,9 @@ export function AgentsView() {
         companyAgentsQuery.data ?? [],
       ),
     [agents.relayAgentsQuery.data, companyAgentsQuery.data],
+  );
+  const retireLocalWelcomePresentation = hasCanonicalCompanyWelcomeAgents(
+    companyAgentsQuery.data ?? [],
   );
   const policyRooms = React.useMemo(
     () =>
@@ -254,6 +258,7 @@ export function AgentsView() {
                   : null
               }
               isCompanyAgentsLoading={companyAgentsQuery.isLoading}
+              retireLocalWelcomePresentation={retireLocalWelcomePresentation}
               onRefreshCompanyAgents={() => {
                 void agents.refetchRelayAgents();
                 void companyAgentsQuery.refetch();
@@ -285,6 +290,7 @@ export function AgentsView() {
                 teamImportInputRef.current?.click();
               }}
               personas={personas.libraryPersonas}
+              retireLocalWelcomePresentation={retireLocalWelcomePresentation}
               teams={teamActions.teams}
             />
           </div>

@@ -8,6 +8,7 @@ import {
   filterLocalWelcomeAgentsForPresentation,
   shouldPresentLocalWelcomeAgent,
 } from "@/features/onboarding/localWelcomeTeamPolicy";
+import { useRetireLocalWelcomePresentation } from "@/features/evaosTeams/hooks";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import {
   useUserSearchQuery,
@@ -18,7 +19,6 @@ import { useSearchMessagesQuery } from "@/features/search/hooks";
 import type { SearchResult } from "@/features/search/ui/SearchResultItem";
 import type { Channel, SearchHit, UserSearchResult } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 export const MIN_SEARCH_QUERY_LENGTH = 2;
 
@@ -120,25 +120,31 @@ export function useSearchResults({
   const relayAgentsQuery = useRelayAgentsQuery({
     enabled: searchBackedQueriesEnabled,
   });
-  const managedProduct = desktopProductPolicy().managed;
+  const retireLocalWelcomePresentation = useRetireLocalWelcomePresentation({
+    enabled: searchBackedQueriesEnabled,
+  });
   const visibleManagedAgents = React.useMemo(
     () =>
       filterLocalWelcomeAgentsForPresentation(
-        managedProduct,
+        retireLocalWelcomePresentation,
         managedAgentsQuery.data ?? [],
       ),
-    [managedAgentsQuery.data, managedProduct],
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
   );
   const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
     () =>
       new Set(
         (managedAgentsQuery.data ?? [])
           .filter(
-            (agent) => !shouldPresentLocalWelcomeAgent(managedProduct, agent),
+            (agent) =>
+              !shouldPresentLocalWelcomeAgent(
+                retireLocalWelcomePresentation,
+                agent,
+              ),
           )
           .map((agent) => normalizePubkey(agent.pubkey)),
       ),
-    [managedAgentsQuery.data, managedProduct],
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
   );
   const managedAgentPubkeys = React.useMemo(
     () =>

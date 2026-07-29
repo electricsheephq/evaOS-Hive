@@ -11,7 +11,6 @@ import {
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import { shouldPresentLocalAgentTeam } from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +39,7 @@ type TeamsSectionProps = {
   onAddToChannel: (team: AgentTeam) => void;
   onShare: (team: AgentTeam) => void;
   onImport: () => void;
+  retireLocalWelcomePresentation: boolean;
 };
 
 export function TeamsSection({
@@ -55,9 +55,10 @@ export function TeamsSection({
   onAddToChannel,
   onShare,
   onImport,
+  retireLocalWelcomePresentation,
 }: TeamsSectionProps) {
   const visibleTeams = teams.filter((team) =>
-    shouldPresentLocalAgentTeam(desktopProductPolicy().managed, team.id),
+    shouldPresentLocalAgentTeam(retireLocalWelcomePresentation, team.id),
   );
 
   return (

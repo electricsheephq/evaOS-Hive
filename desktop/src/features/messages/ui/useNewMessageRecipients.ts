@@ -7,6 +7,7 @@ import {
 } from "@/features/agents/hooks";
 import {
   filterLocalWelcomeAgentsForPresentation,
+  hasCanonicalCompanyWelcomeAgents,
   shouldPresentLocalWelcomeAgent,
 } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
@@ -29,7 +30,6 @@ import { rankUserCandidatesBySearch } from "@/features/profile/lib/userCandidate
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { ManagedAgent, UserSearchResult } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 /** Maximum recipients (excluding the current user) a DM can address. */
 export const NEW_MESSAGE_RECIPIENT_LIMIT = 8;
@@ -110,25 +110,31 @@ export function useNewMessageRecipients({
     enabled: active,
     relayUsers: userSearchResults,
   });
-  const managedProduct = desktopProductPolicy().managed;
+  const retireLocalWelcomePresentation = hasCanonicalCompanyWelcomeAgents(
+    companyAgentsQuery.data ?? [],
+  );
   const visibleManagedAgents = React.useMemo(
     () =>
       filterLocalWelcomeAgentsForPresentation(
-        managedProduct,
+        retireLocalWelcomePresentation,
         managedAgentsQuery.data ?? [],
       ),
-    [managedAgentsQuery.data, managedProduct],
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
   );
   const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
     () =>
       new Set(
         (managedAgentsQuery.data ?? [])
           .filter(
-            (agent) => !shouldPresentLocalWelcomeAgent(managedProduct, agent),
+            (agent) =>
+              !shouldPresentLocalWelcomeAgent(
+                retireLocalWelcomePresentation,
+                agent,
+              ),
           )
           .map((agent) => normalizePubkey(agent.pubkey)),
       ),
-    [managedAgentsQuery.data, managedProduct],
+    [managedAgentsQuery.data, retireLocalWelcomePresentation],
   );
   React.useEffect(() => {
     if (!active) return;

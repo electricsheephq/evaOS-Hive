@@ -11,12 +11,7 @@ import {
 } from "@/features/channels/hooks";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
 import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
-import {
-  filterLocalWelcomeAgentsForPresentation,
-  filterLocalWelcomePersonasForPresentation,
-  shouldPresentLocalWelcomeAgent,
-  shouldPresentLocalAgentTeam,
-} from "@/features/onboarding/localWelcomeTeamPolicy";
+import { useLocalWelcomePresentation } from "@/features/onboarding/useLocalWelcomePresentation";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import {
@@ -42,7 +37,6 @@ import type {
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { flushMentionDebounce } from "./flushMentionDebounce";
 import { hasMention } from "./hasMention";
@@ -117,26 +111,17 @@ export function useMentions(
   const channelsQuery = useChannelsQuery();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
-  const managedProduct = desktopProductPolicy().managed;
-  const visibleManagedAgents = React.useMemo(
-    () =>
-      filterLocalWelcomeAgentsForPresentation(
-        managedProduct,
-        managedAgentsQuery.data ?? [],
-      ),
-    [managedAgentsQuery.data, managedProduct],
-  );
-  const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
-    () =>
-      new Set(
-        (managedAgentsQuery.data ?? [])
-          .filter(
-            (agent) => !shouldPresentLocalWelcomeAgent(managedProduct, agent),
-          )
-          .map((agent) => normalizePubkey(agent.pubkey)),
-      ),
-    [managedAgentsQuery.data, managedProduct],
-  );
+  const {
+    hiddenLocalWelcomeAgentPubkeys,
+    personaNameByPubkey,
+    visibleManagedAgents,
+    visiblePersonas,
+    visibleTeams,
+  } = useLocalWelcomePresentation({
+    managedAgents: managedAgentsQuery.data ?? [],
+    personas: personasQuery.data ?? [],
+    teams: teamsQuery.data ?? [],
+  });
   const managedAgentDirectoryReady =
     managedAgentsQuery.data !== undefined ||
     !managedAgentsQuery.isLoading ||
@@ -229,30 +214,10 @@ export function useMentions(
       sharedChannelIds,
     ],
   );
-  const personaNameByPubkey = React.useMemo(() => {
-    const agents = visibleManagedAgents;
-    const personas = filterLocalWelcomePersonasForPresentation(
-      managedProduct,
-      personasQuery.data ?? [],
-    );
-    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
-    const lookup = new Map<string, string>();
-    for (const agent of agents) {
-      if (agent.personaId) {
-        const name = personaById.get(agent.personaId);
-        if (name) lookup.set(normalizePubkey(agent.pubkey), name);
-      }
-    }
-    return lookup;
-  }, [managedProduct, personasQuery.data, visibleManagedAgents]);
   const knownAgentPubkeys = mentionableAgentPubkeys;
   const activePersonas = React.useMemo(
-    () =>
-      filterLocalWelcomePersonasForPresentation(
-        managedProduct,
-        personasQuery.data ?? [],
-      ).filter((persona) => persona.isActive),
-    [managedProduct, personasQuery.data],
+    () => visiblePersonas.filter((persona) => persona.isActive),
+    [visiblePersonas],
   );
   const activePersonaById = React.useMemo(
     () => new Map(activePersonas.map((persona) => [persona.id, persona])),
@@ -467,17 +432,12 @@ export function useMentions(
     () => [
       ...mentionCandidates,
       ...buildTeamMentionCandidates(
-        (teamsQuery.data ?? []).filter((team) =>
-          shouldPresentLocalAgentTeam(managedProduct, team.id),
-        ),
-        filterLocalWelcomePersonasForPresentation(
-          managedProduct,
-          personasQuery.data ?? [],
-        ),
+        visibleTeams,
+        visiblePersonas,
         mentionCandidates,
       ),
     ],
-    [managedProduct, mentionCandidates, personasQuery.data, teamsQuery.data],
+    [mentionCandidates, visiblePersonas, visibleTeams],
   );
 
   const ownerPubkeys = React.useMemo(

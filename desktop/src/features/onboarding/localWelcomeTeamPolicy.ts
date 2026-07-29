@@ -25,8 +25,35 @@ export const LOCAL_WELCOME_PERSONA_IDS = [
   "builtin:honey",
   "builtin:bumble",
 ] as const;
+export const CANONICAL_COMPANY_WELCOME_AGENT_IDS = [
+  "tars",
+  "samantha",
+  "hal-9000",
+] as const;
 
 const localWelcomePersonaIds = new Set<string>(LOCAL_WELCOME_PERSONA_IDS);
+const canonicalCompanyWelcomeAgentIds = new Set<string>(
+  CANONICAL_COMPANY_WELCOME_AGENT_IDS,
+);
+
+export function hasCanonicalCompanyWelcomeAgents(
+  agents: ReadonlyArray<{
+    agentId?: string | null;
+    runtime: string;
+  }>,
+): boolean {
+  const availableIds = new Set(
+    agents
+      .filter((agent) => agent.runtime.trim().toLowerCase() === "hermes")
+      .map((agent) => agent.agentId?.trim().toLowerCase())
+      .filter((agentId): agentId is string => agentId !== undefined)
+      .filter((agentId) => canonicalCompanyWelcomeAgentIds.has(agentId)),
+  );
+
+  return CANONICAL_COMPANY_WELCOME_AGENT_IDS.every((agentId) =>
+    availableIds.has(agentId),
+  );
+}
 
 export function isLocalWelcomePersonaId(
   personaId: string | null | undefined,
@@ -59,27 +86,29 @@ export function shouldRunLocalWelcomeAgent(
 }
 
 export function shouldPresentLocalWelcomePersona(
-  managedProduct: boolean,
+  retireLocalWelcomePresentation: boolean,
   persona: { id: string },
 ): boolean {
-  return !managedProduct || !isLocalWelcomePersonaId(persona.id);
+  return (
+    !retireLocalWelcomePresentation || !isLocalWelcomePersonaId(persona.id)
+  );
 }
 
 export function shouldPresentLocalWelcomeAgent(
-  managedProduct: boolean,
+  retireLocalWelcomePresentation: boolean,
   agent: {
     personaId?: string | null;
     teamId?: string | null;
   },
 ): boolean {
-  return !managedProduct || !isLocalWelcomeAgentRecord(agent);
+  return !retireLocalWelcomePresentation || !isLocalWelcomeAgentRecord(agent);
 }
 
 export function filterLocalWelcomePersonasForPresentation<
   T extends { id: string },
->(managedProduct: boolean, personas: readonly T[]): T[] {
+>(retireLocalWelcomePresentation: boolean, personas: readonly T[]): T[] {
   return personas.filter((persona) =>
-    shouldPresentLocalWelcomePersona(managedProduct, persona),
+    shouldPresentLocalWelcomePersona(retireLocalWelcomePresentation, persona),
   );
 }
 
@@ -88,15 +117,15 @@ export function filterLocalWelcomeAgentsForPresentation<
     personaId?: string | null;
     teamId?: string | null;
   },
->(managedProduct: boolean, agents: readonly T[]): T[] {
+>(retireLocalWelcomePresentation: boolean, agents: readonly T[]): T[] {
   return agents.filter((agent) =>
-    shouldPresentLocalWelcomeAgent(managedProduct, agent),
+    shouldPresentLocalWelcomeAgent(retireLocalWelcomePresentation, agent),
   );
 }
 
 export function shouldPresentLocalAgentTeam(
-  managedProduct: boolean,
+  retireLocalWelcomePresentation: boolean,
   teamId: string,
 ): boolean {
-  return !managedProduct || teamId !== LOCAL_WELCOME_TEAM_ID;
+  return !retireLocalWelcomePresentation || teamId !== LOCAL_WELCOME_TEAM_ID;
 }

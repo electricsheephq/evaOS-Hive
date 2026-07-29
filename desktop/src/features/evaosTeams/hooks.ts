@@ -7,6 +7,7 @@ import {
   setHiveCompanyAgentPolicy,
   type SetHiveCompanyAgentPolicyInput,
 } from "@/features/evaosTeams/api";
+import { hasCanonicalCompanyWelcomeAgents } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 export const hiveCompanyAgentsQueryKey = ["hive-company-agents"] as const;
@@ -23,6 +24,16 @@ export function useHiveCompanyAgentsQuery(options?: { enabled?: boolean }) {
     staleTime: 30_000,
     enabled: managed && (options?.enabled ?? true),
   });
+}
+
+export function useRetireLocalWelcomePresentation(options?: {
+  enabled?: boolean;
+}) {
+  const managed = desktopProductPolicy().managed;
+  const companyAgentsQuery = useHiveCompanyAgentsQuery(options);
+  return (
+    managed && hasCanonicalCompanyWelcomeAgents(companyAgentsQuery.data ?? [])
+  );
 }
 
 export function useHiveCompanyMembersQuery(options: {

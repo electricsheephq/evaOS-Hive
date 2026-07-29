@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   filterLocalWelcomeAgentsForPresentation,
   filterLocalWelcomePersonasForPresentation,
+  hasCanonicalCompanyWelcomeAgents,
   isLocalWelcomeExperienceChannel,
   isLocalWelcomeAgentRecord,
   isLocalWelcomePersonaId,
@@ -53,6 +54,44 @@ test("unmanaged Buzz keeps the native welcome guide surface", (context) => {
 test("managed filtering follows stable welcome persona ids after a rename", () => {
   assert.equal(isLocalWelcomePersonaId("builtin:fizz"), true);
   assert.equal(isLocalWelcomePersonaId("custom:tars"), false);
+});
+
+test("canonical company welcome agents require all stable Hermes catalog ids", () => {
+  assert.equal(
+    hasCanonicalCompanyWelcomeAgents([
+      { agentId: "tars", runtime: "hermes" },
+      { agentId: "samantha", runtime: "hermes" },
+      { agentId: "hal-9000", runtime: "hermes" },
+    ]),
+    true,
+  );
+  assert.equal(
+    hasCanonicalCompanyWelcomeAgents([
+      { agentId: "tars", runtime: "hermes" },
+      { agentId: "samantha", runtime: "hermes" },
+    ]),
+    false,
+  );
+  assert.equal(hasCanonicalCompanyWelcomeAgents([]), false);
+});
+
+test("canonical company welcome matching ignores display names and rejects wrong runtimes", () => {
+  assert.equal(
+    hasCanonicalCompanyWelcomeAgents([
+      { agentId: " TARS ", runtime: " HERMES " },
+      { agentId: "samantha", runtime: "hermes" },
+      { agentId: "hal-9000", runtime: "codex" },
+    ]),
+    false,
+  );
+  assert.equal(
+    hasCanonicalCompanyWelcomeAgents([
+      { agentId: "tars", runtime: "hermes", displayName: "Renamed" },
+      { agentId: "samantha", runtime: "hermes", displayName: "Anything" },
+      { agentId: "hal-9000", runtime: "hermes", displayName: "Custom" },
+    ]),
+    true,
+  );
 });
 
 test("managed filtering recognizes both welcome personas and team records", () => {
@@ -110,7 +149,7 @@ test("managed Hive never runs retained local welcome agents", () => {
   );
 });
 
-test("managed Hive hides only the native built-in local welcome team", () => {
+test("retired managed presentation hides only the native built-in local welcome team", () => {
   assert.equal(
     shouldPresentLocalAgentTeam(true, "builtin-team:welcome"),
     false,
@@ -122,7 +161,7 @@ test("managed Hive hides only the native built-in local welcome team", () => {
   );
 });
 
-test("managed presentation hides retained welcome personas and agent records by stable id", () => {
+test("retired managed presentation hides retained welcome personas and agent records by stable id", () => {
   const personas = [
     { id: "builtin:fizz", displayName: "TARS" },
     { id: "custom:researcher", displayName: "Researcher" },
@@ -172,4 +211,21 @@ test("unmanaged Buzz keeps native welcome records and managed Hive keeps custom 
     agents,
   );
   assert.equal(shouldPresentLocalWelcomeAgent(true, agents[1]), true);
+});
+
+test("managed presentation preserves local records until canonical VM replacements are proven", () => {
+  const personas = [{ id: "builtin:fizz" }, { id: "custom:researcher" }];
+  const agents = [
+    { personaId: "builtin:honey", teamId: "builtin-team:welcome" },
+    { personaId: "custom:researcher", teamId: "custom-team:research" },
+  ];
+
+  assert.deepEqual(
+    filterLocalWelcomePersonasForPresentation(false, personas),
+    personas,
+  );
+  assert.deepEqual(
+    filterLocalWelcomeAgentsForPresentation(false, agents),
+    agents,
+  );
 });

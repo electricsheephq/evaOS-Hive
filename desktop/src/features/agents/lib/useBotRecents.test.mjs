@@ -2,11 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { pickQuickBotPersonas } from "./useBotRecents.ts";
-import {
-  installDesktopProductPolicy,
-  NATIVE_PRODUCT_POLICY,
-  resetDesktopProductPolicyForTests,
-} from "../../../shared/product/productIdentity.ts";
 
 function createPersona(id, displayName) {
   return {
@@ -81,13 +76,7 @@ test("pickQuickBotPersonas skips duplicate and missing recents", () => {
   );
 });
 
-test("managed Hive recents omit retained local welcome personas", (context) => {
-  context.after(resetDesktopProductPolicyForTests);
-  installDesktopProductPolicy({
-    ...NATIVE_PRODUCT_POLICY,
-    managed: true,
-    productName: "Hive",
-  });
+test("retired managed recents omit retained local welcome personas", () => {
   const personas = [
     createPersona("builtin:fizz", "TARS"),
     createPersona("builtin:honey", "Samantha"),
@@ -95,11 +84,12 @@ test("managed Hive recents omit retained local welcome personas", (context) => {
   ];
 
   assert.deepEqual(
-    pickQuickBotPersonas(personas, [
-      "builtin:fizz",
-      "builtin:honey",
-      "builtin:reviewer",
-    ]).map((persona) => persona.id),
+    pickQuickBotPersonas(
+      personas,
+      ["builtin:fizz", "builtin:honey", "builtin:reviewer"],
+      3,
+      true,
+    ).map((persona) => persona.id),
     ["builtin:reviewer"],
   );
 });

@@ -3,6 +3,7 @@ import * as React from "react";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { usePersonasQuery } from "@/features/agents/hooks";
 import { useOpenDmMutation } from "@/features/channels/hooks";
+import { useRetireLocalWelcomePresentation } from "@/features/evaosTeams/hooks";
 import { shouldPresentLocalWelcomePersona } from "@/features/onboarding/localWelcomeTeamPolicy";
 import {
   type ProfilePanelTab,
@@ -15,7 +16,6 @@ import {
 } from "@/features/profile/ui/UserProfilePanelUtils";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { AgentPersona } from "@/shared/api/types";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   type ProfilePanelOpenOptions,
   ProfilePanelProvider,
@@ -43,6 +43,7 @@ const AGENTS_PROFILE_SEARCH_KEYS = [
 export function AgentsScreen() {
   const identityQuery = useIdentityQuery();
   const personasQuery = usePersonasQuery();
+  const retireLocalWelcomePresentation = useRetireLocalWelcomePresentation();
   const { applyPatch, values } = useHistorySearchState(
     AGENTS_PROFILE_SEARCH_KEYS,
   );
@@ -60,7 +61,7 @@ export function AgentsScreen() {
       if (
         persona &&
         shouldPresentLocalWelcomePersona(
-          desktopProductPolicy().managed,
+          retireLocalWelcomePresentation,
           persona,
         )
       ) {
@@ -69,7 +70,12 @@ export function AgentsScreen() {
     }
 
     return null;
-  }, [personasQuery.data, values.profile, values.profilePersona]);
+  }, [
+    personasQuery.data,
+    retireLocalWelcomePresentation,
+    values.profile,
+    values.profilePersona,
+  ]);
   const threadPanelWidth = useThreadPanelWidth();
   const openDmMutation = useOpenDmMutation();
   const { goChannel } = useAppNavigation();

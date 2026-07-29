@@ -2,7 +2,6 @@ import * as React from "react";
 
 import { filterLocalWelcomePersonasForPresentation } from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona } from "@/shared/api/types";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 const STORAGE_KEY = "buzz:bot-recents";
 const MAX_RECENTS = 8;
@@ -15,9 +14,10 @@ export function pickQuickBotPersonas(
   personas: readonly AgentPersona[],
   recentIds: readonly string[],
   maxCount = 3,
+  retireLocalWelcomePresentation = false,
 ) {
   const visiblePersonas = filterLocalWelcomePersonasForPresentation(
-    desktopProductPolicy().managed,
+    retireLocalWelcomePresentation,
     personas,
   );
   if (visiblePersonas.length === 0) {

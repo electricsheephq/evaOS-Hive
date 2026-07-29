@@ -74,6 +74,7 @@ type UnifiedAgentsSectionProps = {
   companyAgents: CompanyVmAgent[];
   companyAgentsError: Error | null;
   isCompanyAgentsLoading: boolean;
+  retireLocalWelcomePresentation: boolean;
   onRefreshCompanyAgents: () => void;
   onEditCompanyAgentPolicy?: (agent: CompanyVmAgent) => void;
 };
@@ -114,17 +115,26 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     companyAgents,
     companyAgentsError,
     isCompanyAgentsLoading,
+    retireLocalWelcomePresentation,
     onRefreshCompanyAgents,
     onEditCompanyAgentPolicy,
   } = props;
   const isManagedHive = desktopProductPolicy().managed;
   const visibleLocalAgents = React.useMemo(
-    () => filterLocalWelcomeAgentsForPresentation(isManagedHive, agents),
-    [agents, isManagedHive],
+    () =>
+      filterLocalWelcomeAgentsForPresentation(
+        retireLocalWelcomePresentation,
+        agents,
+      ),
+    [agents, retireLocalWelcomePresentation],
   );
   const visiblePersonas = React.useMemo(
-    () => filterLocalWelcomePersonasForPresentation(isManagedHive, personas),
-    [isManagedHive, personas],
+    () =>
+      filterLocalWelcomePersonasForPresentation(
+        retireLocalWelcomePresentation,
+        personas,
+      ),
+    [personas, retireLocalWelcomePresentation],
   );
 
   const { groups, ungrouped, unknown } = React.useMemo(
