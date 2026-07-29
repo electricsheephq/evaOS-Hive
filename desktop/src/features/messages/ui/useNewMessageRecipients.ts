@@ -6,7 +6,7 @@ import {
 } from "@/features/agents/hooks";
 import {
   coalesceAgentAutocompleteCandidates,
-  getMentionableAgentPubkeys,
+  getDirectMessageAgentPubkeys,
   getSharedChannelIds,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import { useChannelsQuery } from "@/features/channels/hooks";
@@ -109,7 +109,8 @@ export function useNewMessageRecipients({
     const currentPubkeyNormalized = currentPubkey
       ? normalizePubkey(currentPubkey)
       : null;
-    const eligibleAgentPubkeys = getMentionableAgentPubkeys({
+    const eligibleAgentPubkeys = getDirectMessageAgentPubkeys({
+      companyAgentPubkeys: relayAgentsQuery.companyAgentPubkeys,
       currentPubkey,
       managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
         (agent) => agent.pubkey,
@@ -184,6 +185,20 @@ export function useNewMessageRecipients({
       );
     }
 
+    for (const agent of relayAgentsQuery.companyVmAgents) {
+      addCandidate(
+        {
+          pubkey: agent.pubkey,
+          displayName: agent.name,
+          avatarUrl: null,
+          nip05Handle: null,
+          ownerPubkey: null,
+          isAgent: true,
+        },
+        { includeSelected: deferredSearchQuery.length > 0 },
+      );
+    }
+
     for (const agent of managedAgentsQuery.data ?? []) {
       addCandidate(
         {
@@ -221,6 +236,8 @@ export function useNewMessageRecipients({
     deferredSearchQuery,
     isArchivedDiscovery,
     managedAgentsQuery.data,
+    relayAgentsQuery.companyAgentPubkeys,
+    relayAgentsQuery.companyVmAgents,
     relayAgentsQuery.data,
     selectedPubkeys,
     userSearchResults,
@@ -228,6 +245,7 @@ export function useNewMessageRecipients({
 
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
+    relayAgentsQuery.companyAgentsQuery.isLoading ||
     managedAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;

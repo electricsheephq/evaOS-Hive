@@ -3,9 +3,12 @@ import test from "node:test";
 
 import {
   coalesceAgentAutocompleteCandidates,
+  getDirectMessageAgentPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
+  isAgentIdentityAddable,
   isAgentIdentityInManagedList,
+  isAgentIdentityMentionable,
   relayAgentIsSharedWithUser,
   shouldHideAgentFromMentions,
 } from "./agentAutocompleteEligibility.ts";
@@ -45,6 +48,57 @@ test("getSharedChannelIds: includes only active joined channels", () => {
     ]),
     new Set(["joined"]),
   );
+});
+
+test("direct messages include verified company identities without granting mention policy", () => {
+  assert.deepEqual(
+    getDirectMessageAgentPubkeys({
+      companyAgentPubkeys: [PUB_B.toUpperCase()],
+      currentPubkey: CURRENT_PUBKEY,
+      managedAgentPubkeys: [PUB_A],
+      relayAgents: [],
+      sharedChannelIds: new Set(),
+    }),
+    new Set([PUB_A, PUB_B]),
+  );
+});
+
+test("channel add accepts verified provider identities without claiming local ownership", () => {
+  const candidate = { isAgent: true, pubkey: PUB_B.toUpperCase() };
+  assert.equal(
+    isAgentIdentityAddable(candidate, new Set(), new Set([PUB_B])),
+    true,
+  );
+  assert.equal(isAgentIdentityInManagedList(candidate, new Set()), false);
+});
+
+test("native bot membership admits a remote identity to current-channel mentions", () => {
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: true, isMember: true, pubkey: PUB_B, role: "bot" },
+      new Set(),
+    ),
+    true,
+  );
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: true, isMember: false, pubkey: PUB_B, role: "bot" },
+      new Set(),
+    ),
+    false,
+  );
+});
+
+test("verified provider membership tolerates stale invocation metadata only in-channel", () => {
+  const base = {
+    isAgent: true,
+    pubkey: PUB_B,
+    mentionableAgentPubkeys: new Set(),
+    directoryAgentPubkeys: new Set([PUB_B]),
+    companyAgentPubkeys: new Set([PUB_B]),
+  };
+  assert.equal(shouldHideAgentFromMentions({ ...base, isMember: true }), false);
+  assert.equal(shouldHideAgentFromMentions({ ...base, isMember: false }), true);
 });
 
 test("relayAgentIsSharedWithUser: accepts shared anyone agents and rejects unshared ones", () => {

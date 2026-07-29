@@ -31,7 +31,10 @@ use crate::{app_state::AppState, secret_store::SecretStore};
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
 
+mod company_directory;
 mod device_code;
+
+pub(crate) use company_directory::list_hive_company_agents;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
