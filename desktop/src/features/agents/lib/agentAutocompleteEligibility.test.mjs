@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   coalesceAgentAutocompleteCandidates,
+  getChannelAddableAgentPubkeys,
   getDirectMessageAgentPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
@@ -184,6 +185,28 @@ test("isAgentIdentityInManagedList: keeps people and only current managed agent 
     isAgentIdentityInManagedList(
       { isAgent: true, pubkey: PUB_B },
       managedAgentPubkeys,
+    ),
+    false,
+  );
+});
+
+test("channel add eligibility admits verified company agents without trusting unrelated relay agents", () => {
+  const addableAgentPubkeys = getChannelAddableAgentPubkeys({
+    companyAgentPubkeys: [PUB_B.toUpperCase()],
+    managedAgentPubkeys: [PUB_A],
+  });
+
+  assert.equal(
+    isAgentIdentityInManagedList(
+      { isAgent: true, pubkey: PUB_B },
+      addableAgentPubkeys,
+    ),
+    true,
+  );
+  assert.equal(
+    isAgentIdentityInManagedList(
+      { isAgent: true, pubkey: PUB_C },
+      addableAgentPubkeys,
     ),
     false,
   );

@@ -122,6 +122,7 @@ export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
 
   return {
     ...relayAgentsQuery,
+    companyAgentPubkeys,
     data: resolvedAgents,
   };
 }
