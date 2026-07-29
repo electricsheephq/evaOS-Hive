@@ -724,7 +724,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&state, &app_state);
-        return Ok(EvaosTeamsAuthStatus::unmanaged());
+        Ok(EvaosTeamsAuthStatus::unmanaged())
     }
 
     #[cfg(feature = "evaos-teams-managed")]
@@ -878,7 +878,7 @@ pub(crate) async fn start_evaos_teams_login(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&app, &state, &app_state);
-        return Err("Hive managed login is not enabled in this build".to_string());
+        Err("Hive managed login is not enabled in this build".to_string())
     }
 
     #[cfg(feature = "evaos-teams-managed")]
@@ -974,7 +974,7 @@ pub(crate) async fn logout_evaos_teams(
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
         let _ = (&state, &app_state);
-        return Err("Hive managed login is not enabled in this build".to_string());
+        Err("Hive managed login is not enabled in this build".to_string())
     }
 
     #[cfg(feature = "evaos-teams-managed")]

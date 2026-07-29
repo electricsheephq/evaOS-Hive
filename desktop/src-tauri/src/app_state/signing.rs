@@ -8,6 +8,7 @@ impl AppState {
     /// This bypasses only the managed authorization flag so Hive can prove
     /// possession during OAuth. Native recovery states still fail closed, and
     /// this method never creates, imports, replaces, or persists a key.
+    #[cfg(feature = "evaos-teams-managed")]
     pub(crate) fn native_identity_for_managed_verification(&self) -> Result<Keys, String> {
         if self
             .identity_lost
