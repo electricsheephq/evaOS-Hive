@@ -56,7 +56,6 @@ import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 const RECONNECT_BASE_DELAY_MS = 1_000,
   RECONNECT_MAX_DELAY_MS = 30_000,
   EVENT_BATCH_MS = 16;
-
 /**
  * Op-level timeout constants. Raised from 8 s to 25 s to survive degraded
  * networks where TLS handshakes and DNS resolution can take 3–10 s.
@@ -64,7 +63,6 @@ const RECONNECT_BASE_DELAY_MS = 1_000,
 export const AUTH_TIMEOUT_MS = 25_000;
 export const HISTORY_TIMEOUT_MS = 25_000;
 export const PUBLISH_TIMEOUT_MS = 25_000;
-
 /**
  * The connection must remain stable for this long after a successful AUTH
  * before the reconnect backoff delay resets to its base value. Stability-
@@ -72,14 +70,12 @@ export const PUBLISH_TIMEOUT_MS = 25_000;
  * backoff that throttles them.
  */
 export const BACKOFF_RESET_STABLE_MS = 60_000;
-
 /**
  * Passive liveness check. The relay sends heartbeat pings every 30s; if no
  * inbound frame arrives for two heartbeat windows, treat the socket as stalled.
  */
 const STALL_CHECK_INTERVAL_MS = 10_000;
 const STALL_IDLE_TIMEOUT_MS = 60_000;
-
 export class RelayClient {
   private wsId: number | null = null;
   private relayUrl: string | null = null;
@@ -348,14 +344,12 @@ export class RelayClient {
     // Fire-and-forget: no need to wait for relay acknowledgement.
     void this.sendRaw(["EVENT", event]).catch(() => {});
   }
-
   async subscribeToChannel(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
   ) {
     return this.subscribe(buildChannelFilter(channelId, 50), onEvent);
   }
-
   /** Subscribe to channel rows and aux starting now, with no history replay. */
   async subscribeToChannelLive(
     channelId: string,
@@ -374,27 +368,36 @@ export class RelayClient {
       onEvent,
     );
   }
-
-  /**
-   * Subscribe to huddle lifecycle events (kinds 48100–48103) for a channel.
-   * Used by HuddleIndicator to detect active huddles without being drowned
-   * out by regular channel messages in the generic subscription window.
-   * Includes both historical (last 10) and live events.
-   */
   async subscribeToHuddleEvents(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
   ) {
-    return this.subscribe(
-      {
-        kinds: [48100, 48101, 48102, 48103],
-        "#h": [channelId],
-        limit: 100,
-      },
-      onEvent,
-    );
+    return this.subscribeToHuddleEventsForChannels([channelId], onEvent);
   }
-
+  /** Replay bounded huddle lifecycle rows, then stream live rows, per channel-scoped REQ. */
+  async subscribeToHuddleEventsForChannels(
+    channelIds: string[],
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    const ids = [...new Set(channelIds.filter(Boolean))];
+    if (ids.length === 0) return async () => {};
+    const disposes: Array<() => Promise<void>> = [];
+    try {
+      for (const id of ids)
+        disposes.push(
+          await this.subscribe(
+            { kinds: [48100, 48101, 48102, 48103], "#h": [id], limit: 500 },
+            onEvent,
+          ),
+        );
+    } catch (error) {
+      await Promise.allSettled(disposes.map((dispose) => dispose()));
+      throw error;
+    }
+    return async () => {
+      await Promise.allSettled(disposes.map((dispose) => dispose()));
+    };
+  }
   async subscribeToTypingIndicators(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
@@ -409,11 +412,9 @@ export class RelayClient {
       onEvent,
     );
   }
-
   async subscribeToPresenceUpdates(onEvent: (event: RelayEvent) => void) {
     return this.subscribe({ kinds: [20001], limit: 0 }, onEvent);
   }
-
   async publishUserStatus(text: string, emoji: string): Promise<void> {
     await this.ensureConnected();
     const tags: string[][] = [["d", "general"]];
@@ -998,7 +999,6 @@ export class RelayClient {
   private emitReconnectIfNeeded() {
     const shouldNotifyReconnectListeners =
       this.hasConnectedOnce && this.notifyReconnectListeners;
-
     this.hasConnectedOnce = true;
     this.notifyReconnectListeners = false;
 
