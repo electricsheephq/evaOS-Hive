@@ -188,6 +188,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   }
 
   async function runLogin() {
+    setLostDeviceConfirmed(false);
     setLoginPending(true);
     setBackupCode("");
     setBackupCodeSent(false);
@@ -221,7 +222,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
 
   async function startIdentityRecovery(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!recoveryCode.trim() || recoveryWorking) return;
+    if (!recoveryCode.trim() || recoveryWorking || working) return;
     setError(null);
     setRecoverySas(null);
     setRecoveryStarted(true);
@@ -384,7 +385,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 aria-label="Hive identity pairing code"
                 autoCapitalize="none"
                 autoComplete="off"
-                disabled={recoveryStarted}
+                disabled={recoveryStarted || working}
                 inputMode="text"
                 onChange={(event) => setRecoveryCode(event.target.value)}
                 placeholder="Paste pairing code from an authorized Hive device"
@@ -393,7 +394,10 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
               />
               <Button
                 disabled={
-                  !recoveryCode.trim() || recoveryWorking || recoveryStarted
+                  !recoveryCode.trim() ||
+                  recoveryWorking ||
+                  recoveryStarted ||
+                  working
                 }
                 type="submit"
                 variant="outline"

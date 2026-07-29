@@ -1166,6 +1166,7 @@ async fn complete_pending_identity_recovery(
 ) -> Result<(), String> {
     let state = app.state::<EvaosTeamsState>();
     let app_state = app.state::<AppState>();
+    let _operation = state.operation.lock().await;
     let pending = state
         .pending_identity_recovery
         .lock()
@@ -1509,6 +1510,7 @@ pub(crate) async fn start_evaos_teams_identity_recovery(
 
     #[cfg(feature = "evaos-teams-managed")]
     {
+        let _operation = state.operation.lock().await;
         {
             let pending = state
                 .pending_identity_recovery
@@ -1738,6 +1740,12 @@ pub(crate) async fn start_evaos_teams_login(
         verify_managed_store_writable()?;
 
         initialize_runtime(&state)?;
+        let _ = abort_identity_recovery_pairing(
+            &state,
+            buzz_core_pkg::pairing::types::AbortReason::UserDenied,
+        )
+        .await;
+        revoke_pending_identity_recovery_session(&state, &app_state).await?;
         if let Ok((session, keys, logout_pending)) = current_credentials(&state).await {
             if logout_pending {
                 let outcome = begin_managed_logout(&state, &app_state).await?;

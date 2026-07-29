@@ -125,6 +125,7 @@ pub(super) fn pending_identity_rotation_key(membership_id: &str) -> Result<Strin
     Ok(format!("{IDENTITY_ROTATION_KEY_PREFIX}{membership_id}"))
 }
 
+#[cfg(test)]
 pub(super) fn staged_identity_rotation_entries(
     mut stored: HashMap<String, String>,
     membership_id: &str,
@@ -142,13 +143,13 @@ pub(super) fn staged_identity_rotation_entries(
 
 #[cfg(feature = "evaos-teams-managed")]
 fn stage_identity_rotation_key(membership_id: &str) -> Result<Keys, String> {
-    let (replacement, keys, staging_key, encoded) = staged_identity_rotation_entries(
-        managed_store().load_all_readonly()?.unwrap_or_default(),
-        membership_id,
-    )?;
-    managed_store()
-        .replace_all(&replacement)
+    let staging_key = pending_identity_rotation_key(membership_id)?;
+    let generated = Keys::generate();
+    let candidate = encode_managed_identity(&generated)?;
+    let encoded = managed_store()
+        .store_if_absent(&staging_key, &candidate)
         .map_err(|_| "Could not stage a replacement identity in macOS Keychain".to_string())?;
+    let keys = parse_stored_identity(&encoded)?;
     if !managed_store()
         .verify_stored_raw(&staging_key, &encoded)
         .map_err(|_| "Hive could not verify the staged replacement identity".to_string())?
@@ -160,9 +161,15 @@ fn stage_identity_rotation_key(membership_id: &str) -> Result<Keys, String> {
 
 pub(super) fn validate_rotated_entitlement(
     entitlement: EvaosTeamsEntitlement,
+    expected_community_id: &str,
     expected_relay: &str,
     expected_public_key: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
+    if entitlement.community_id != expected_community_id {
+        return Err(
+            "Managed identity replacement changed the server-selected community".to_string(),
+        );
+    }
     if entitlement.relay_host != expected_relay {
         return Err("Managed identity replacement changed the server-selected relay".to_string());
     }
@@ -176,6 +183,7 @@ async fn recover_completed_identity_rotation(
     token: &str,
     expected_membership_id: &str,
     keys: &Keys,
+    expected_community_id: &str,
     expected_relay: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
@@ -188,7 +196,12 @@ async fn recover_completed_identity_rotation(
     let entitlement = get_remote_entitlement(client, token)
         .await
         .map_err(|_| "managed identity replacement entitlement was not available".to_string())?;
-    validate_rotated_entitlement(entitlement, expected_relay, &public_key)
+    validate_rotated_entitlement(
+        entitlement,
+        expected_community_id,
+        expected_relay,
+        &public_key,
+    )
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -231,6 +244,7 @@ async fn rotate_lost_identity(
     match verified {
         Ok(response) if response.status == "active" => validate_rotated_entitlement(
             response.entitlement,
+            &challenge.challenge.community_id,
             &challenge.relay_host,
             &public_key,
         ),
@@ -239,6 +253,7 @@ async fn rotate_lost_identity(
             token,
             expected_membership_id,
             keys,
+            &challenge.challenge.community_id,
             &challenge.relay_host,
         )
         .await

@@ -38,5 +38,14 @@ test("lost-device identity replacement is explicit, consequential, and command-b
     authGateSource,
     /disabled=\{working \|\| recoveryWorking \|\| recoveryStarted\}/,
   );
+  assert.match(
+    authGateSource,
+    /!recoveryCode\.trim\(\) \|\| recoveryWorking \|\| working/,
+  );
+  assert.match(authGateSource, /recoveryStarted \|\|\s+working/);
+  assert.match(
+    authGateSource,
+    /async function runLogin\(\) \{\s+setLostDeviceConfirmed\(false\);/,
+  );
   assert.match(apiSource, /replace_lost_evaos_teams_identity/);
 });

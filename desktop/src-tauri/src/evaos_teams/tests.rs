@@ -184,7 +184,30 @@ fn rotated_entitlement_remains_pinned_to_the_signed_relay() {
     };
     assert!(validate_rotated_entitlement(
         entitlement,
+        "10000000-0000-4000-8000-000000000003",
         "https://other-relay.example.com",
+        &public_key,
+    )
+    .is_err());
+}
+
+#[test]
+fn rotated_entitlement_remains_pinned_to_the_signed_community() {
+    let keys = Keys::generate();
+    let public_key = keys.public_key().to_hex();
+    let entitlement = EvaosTeamsEntitlement {
+        community_id: "10000000-0000-4000-8000-000000000099".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(public_key.clone()),
+        role: "member".to_string(),
+        access_revision: 7,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
+        refresh_after_seconds: 300,
+    };
+    assert!(validate_rotated_entitlement(
+        entitlement,
+        "10000000-0000-4000-8000-000000000003",
+        "https://relay.example.com",
         &public_key,
     )
     .is_err());
