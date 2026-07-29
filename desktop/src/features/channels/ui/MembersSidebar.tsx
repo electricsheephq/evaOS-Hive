@@ -492,13 +492,25 @@ export function MembersSidebar({
       ),
     [managedAgentsQuery.data],
   );
+  const visibleManagedAgentByPubkey = React.useMemo(
+    () =>
+      new Map(
+        visibleManagedAgents.map((agent) => [
+          normalizePubkey(agent.pubkey),
+          agent,
+        ]),
+      ),
+    [visibleManagedAgents],
+  );
   const controllableManagedBots = React.useMemo(
     () =>
       bots.flatMap((member) => {
-        const agent = managedAgentByPubkey.get(normalizePubkey(member.pubkey));
+        const agent = visibleManagedAgentByPubkey.get(
+          normalizePubkey(member.pubkey),
+        );
         return agent ? [agent] : [];
       }),
-    [bots, managedAgentByPubkey],
+    [bots, visibleManagedAgentByPubkey],
   );
   const canRemoveMember = React.useCallback(
     (member: ChannelMember) => {
@@ -636,7 +648,7 @@ export function MembersSidebar({
         memberProfile.ownerPubkey.toLowerCase() === currentPubkey.toLowerCase(),
     );
     const managedAgent = memberIsBot
-      ? managedAgentByPubkey.get(normalizePubkey(member.pubkey))
+      ? visibleManagedAgentByPubkey.get(normalizePubkey(member.pubkey))
       : undefined;
     const managedAgentRuntime =
       memberIsBot && relayUrl
