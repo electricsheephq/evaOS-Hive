@@ -16,6 +16,7 @@ import {
   useManagedAgentRuntimeAction,
 } from "@/features/agents/managedAgentRuntimeHooks";
 import { managedAgentPairAction } from "@/features/agents/managedAgentRuntimeStatus";
+import { shouldRunLocalWelcomeAgent } from "@/features/onboarding/localWelcomeTeamPolicy";
 import {
   channelsQueryKey,
   useRemoveChannelMemberMutation,
@@ -26,6 +27,7 @@ import type {
   ManagedAgent,
   ManagedAgentRuntimeStatus,
 } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 type UseMembersSidebarActionsOptions = {
   channelId: string | null;
@@ -73,6 +75,13 @@ export function useMembersSidebarActions({
   const stoppableManagedBots = React.useMemo(
     () =>
       controllableManagedBots.filter((agent) => isManagedAgentActive(agent)),
+    [controllableManagedBots],
+  );
+  const respawnableManagedBots = React.useMemo(
+    () =>
+      controllableManagedBots.filter((agent) =>
+        shouldRunLocalWelcomeAgent(desktopProductPolicy().managed, agent),
+      ),
     [controllableManagedBots],
   );
 
@@ -155,6 +164,14 @@ export function useMembersSidebarActions({
       // agent-wide deploy/!shutdown flow below.
       if (agent.backend.type === "local" && relayUrl) {
         const action = managedAgentPairAction(runtime);
+        if (
+          action !== "stop" &&
+          !shouldRunLocalWelcomeAgent(desktopProductPolicy().managed, agent)
+        ) {
+          throw new Error(
+            "Hive uses the canonical company VM agent for this starter persona.",
+          );
+        }
         await runtimeActionMutation.mutateAsync({
           action,
           pubkey: agent.pubkey,
@@ -188,6 +205,11 @@ export function useMembersSidebarActions({
         return;
       }
 
+      if (!shouldRunLocalWelcomeAgent(desktopProductPolicy().managed, agent)) {
+        throw new Error(
+          "Hive uses the canonical company VM agent for this starter persona.",
+        );
+      }
       await startManagedAgentWithRules({
         agent,
         startManagedAgent: startManagedAgentMutation.mutateAsync,
@@ -214,7 +236,7 @@ export function useMembersSidebarActions({
         return undefined;
       },
       actionKey: "bulk-respawn",
-      agents: controllableManagedBots,
+      agents: respawnableManagedBots,
       failureMessage: "Failed to respawn agent.",
       successMessage: (count) =>
         `Spawned or respawned ${formatCountLabel(count, "agent", "agents")}.`,
@@ -313,7 +335,7 @@ export function useMembersSidebarActions({
     handleRespawnAll,
     handleStopAll,
     isActionPending,
-    hasControllableManagedBots: controllableManagedBots.length > 0,
+    hasControllableManagedBots: respawnableManagedBots.length > 0,
     hasRemovableManagedBots: removableManagedBots.length > 0,
     hasStoppableManagedBots: stoppableManagedBots.length > 0,
   };
