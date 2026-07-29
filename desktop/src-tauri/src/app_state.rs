@@ -99,6 +99,10 @@ pub struct AppState {
     /// Ordering: written once in `setup()` with `Ordering::Release`; read in
     /// `get_identity` with `Ordering::Acquire`.
     pub reset_failed: AtomicBool,
+    /// Managed Hive builds may sign and publish only after Electric OAuth plus
+    /// canonical-key verification installs a current entitlement. Native Buzz
+    /// starts authorized and preserves its existing behavior.
+    pub evaos_teams_authorized: AtomicBool,
     /// Cached ACP session config from running agents, keyed by canonical
     /// `(agent pubkey, relay URL)` runtime identity.
     /// Populated when the harness emits `session_config_captured` observer events.
@@ -222,6 +226,7 @@ pub fn build_app_state() -> AppState {
         keyring_locked: AtomicBool::new(false),
         identity_lost: AtomicBool::new(false),
         reset_failed: AtomicBool::new(false),
+        evaos_teams_authorized: AtomicBool::new(!cfg!(feature = "evaos-teams-managed")),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]
@@ -233,6 +238,29 @@ pub fn build_app_state() -> AppState {
 }
 
 impl AppState {
+    /// Return the already-resolved native Buzz identity for managed admission.
+    ///
+    /// This bypasses only the managed authorization flag so Hive can prove
+    /// possession during OAuth. Native recovery states still fail closed, and
+    /// this method never creates, imports, replaces, or persists a key.
+    pub(crate) fn native_identity_for_managed_verification(&self) -> Result<Keys, String> {
+        if self
+            .identity_lost
+            .load(std::sync::atomic::Ordering::Acquire)
+            || self
+                .keyring_locked
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(
+                "the native Buzz identity must be restored before Hive can verify it".to_string(),
+            );
+        }
+        self.keys
+            .lock()
+            .map_err(|error| error.to_string())
+            .map(|keys| keys.clone())
+    }
+
     /// Lock the huddle state mutex, converting a poisoned-lock error to a String.
     ///
     /// Convenience wrapper — replaces 15+ instances of
@@ -300,6 +328,14 @@ impl AppState {
     /// this instead of locking `state.keys` directly, so that recovery mode
     /// blocks publishing under an invalid or inaccessible identity.
     pub fn signing_keys(&self) -> Result<Keys, String> {
+        if !self
+            .evaos_teams_authorized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(
+                "Hive access is not authorized; complete Electric Sheep sign-in first".to_string(),
+            );
+        }
         if self
             .identity_lost
             .load(std::sync::atomic::Ordering::Acquire)

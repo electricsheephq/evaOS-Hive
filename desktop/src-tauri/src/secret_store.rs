@@ -221,6 +221,9 @@ pub struct SecretStore {
     cache: Mutex<Option<HashMap<String, String>>>,
 }
 
+#[cfg(feature = "evaos-teams-managed")]
+mod managed;
+
 impl SecretStore {
     /// Keyring-backed store under `service`. The active platform backend
     /// (apple-native / windows-native / sync-secret-service) is chosen at

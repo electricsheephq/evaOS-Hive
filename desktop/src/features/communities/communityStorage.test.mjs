@@ -5,6 +5,7 @@ import {
   clearCommunityStorage,
   initFirstCommunity,
   migrateLegacyCommunityStorage,
+  saveCommunitySelection,
   shouldAutoConnectDefaultRelay,
 } from "./communityStorage.ts";
 
@@ -101,4 +102,57 @@ test("clearCommunityStorage removes new and legacy state", () => {
   migrateLegacyCommunityStorage(storage);
 
   assert.equal(storage.length, 0);
+});
+
+test("managed community selection rolls back the list when active-id write fails", () => {
+  const storage = createMemoryStorage({
+    "buzz-communities": '[{"id":"old"}]',
+    "buzz-active-community-id": "old",
+  });
+  const setItem = storage.setItem;
+  storage.setItem = (key, value) => {
+    if (key === "buzz-active-community-id") {
+      throw new Error("QuotaExceededError");
+    }
+    setItem(key, value);
+  };
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(
+    saveCommunitySelection(
+      [
+        {
+          id: "new",
+          name: "Hive",
+          relayUrl: "wss://relay.example.com",
+          addedAt: "2026-07-30T00:00:00.000Z",
+        },
+      ],
+      "new",
+    ),
+    false,
+  );
+  assert.equal(storage.getItem("buzz-communities"), '[{"id":"old"}]');
+  assert.equal(storage.getItem("buzz-active-community-id"), "old");
+});
+
+test("managed community selection leaves active-id untouched when list write fails", () => {
+  const storage = createMemoryStorage({
+    "buzz-communities": '[{"id":"old"}]',
+    "buzz-active-community-id": "old",
+  });
+  const setItem = storage.setItem;
+  storage.setItem = (key, value) => {
+    if (key === "buzz-communities") {
+      throw new Error("QuotaExceededError");
+    }
+    setItem(key, value);
+  };
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(saveCommunitySelection([], "new"), false);
+  assert.equal(storage.getItem("buzz-communities"), '[{"id":"old"}]');
+  assert.equal(storage.getItem("buzz-active-community-id"), "old");
 });

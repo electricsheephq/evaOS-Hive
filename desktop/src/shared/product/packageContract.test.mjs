@@ -23,6 +23,7 @@ test("Hive package identity and selected assets are coherent", () => {
   assert.deepEqual(config.plugins["deep-link"].desktop.schemes, ["buzz"]);
   assert.ok(buildScript.includes("evaos-teams-managed"));
   assert.ok(buildScript.includes("tauri.hive.conf.json"));
+  assert.match(buildScript, /HIVE_SUPABASE_PUBLISHABLE_KEY/);
   for (const path of [
     `${root}src-tauri/hive/icon.icns`,
     `${root}src-tauri/hive/icon.png`,
