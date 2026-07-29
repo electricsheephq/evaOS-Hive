@@ -3,6 +3,7 @@ import * as React from "react";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { usePersonasQuery } from "@/features/agents/hooks";
 import { useOpenDmMutation } from "@/features/channels/hooks";
+import { shouldPresentLocalWelcomePersona } from "@/features/onboarding/localWelcomeTeamPolicy";
 import {
   type ProfilePanelTab,
   type ProfilePanelView,
@@ -14,6 +15,7 @@ import {
 } from "@/features/profile/ui/UserProfilePanelUtils";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { AgentPersona } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   type ProfilePanelOpenOptions,
   ProfilePanelProvider,
@@ -55,7 +57,13 @@ export function AgentsScreen() {
       const persona = personasQuery.data?.find(
         (candidate) => candidate.id === values.profilePersona,
       );
-      if (persona) {
+      if (
+        persona &&
+        shouldPresentLocalWelcomePersona(
+          desktopProductPolicy().managed,
+          persona,
+        )
+      ) {
         return { kind: "persona", persona };
       }
     }

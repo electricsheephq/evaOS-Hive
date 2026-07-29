@@ -128,10 +128,12 @@ security review.
 
 Hive consumes already-registered public agent identities.
 
-Hive may separately replace the names, avatars, and default instructions of the
-three upstream bundled starter personas with TARS, Samantha, and HAL 9000. This
-is build-time presentation data only. Their native creation, editing, runtime,
-sandbox, permission, and storage behavior must remain unchanged.
+Managed Hive presents the already-registered company VM identities for TARS,
+Samantha, and HAL 9000 and suppresses only the duplicate built-in local welcome
+personas from managed presentation and start controls. The retained local
+records are not deleted. Unmanaged Buzz keeps the native starter lifecycle, and
+explicit custom local agents retain native creation, editing, runtime, sandbox,
+permission, and storage behavior when supported.
 
 Allowed:
 

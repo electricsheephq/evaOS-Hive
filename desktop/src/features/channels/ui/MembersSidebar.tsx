@@ -12,6 +12,10 @@ import {
   getChannelAddableAgentPubkeys,
   isAgentIdentityInManagedList,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
+import {
+  filterLocalWelcomeAgentsForPresentation,
+  shouldPresentLocalWelcomeAgent,
+} from "@/features/onboarding/localWelcomeTeamPolicy";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
@@ -48,6 +52,7 @@ import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import {
   MODAL_SEARCH_INPUT_CLASS,
@@ -188,6 +193,26 @@ export function MembersSidebar({
     managedAgentsQuery,
     relayAgentsQuery,
   } = useClassifiedMembers(rawMembers, currentPubkey);
+  const managedProduct = desktopProductPolicy().managed;
+  const visibleManagedAgents = React.useMemo(
+    () =>
+      filterLocalWelcomeAgentsForPresentation(
+        managedProduct,
+        managedAgentsQuery.data ?? [],
+      ),
+    [managedAgentsQuery.data, managedProduct],
+  );
+  const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
+    () =>
+      new Set(
+        (managedAgentsQuery.data ?? [])
+          .filter(
+            (agent) => !shouldPresentLocalWelcomeAgent(managedProduct, agent),
+          )
+          .map((agent) => normalizePubkey(agent.pubkey)),
+      ),
+    [managedAgentsQuery.data, managedProduct],
+  );
   const activeMembers = React.useMemo(
     () =>
       [...people, ...bots].sort((left, right) =>
@@ -264,7 +289,7 @@ export function MembersSidebar({
 
     const candidatesByPubkey = new Map<string, AddMemberSearchCandidate>();
     const managedAgentsByPubkey = new Map(
-      (managedAgentsQuery.data ?? []).map((agent) => [
+      visibleManagedAgents.map((agent) => [
         normalizePubkey(agent.pubkey),
         agent,
       ]),
@@ -287,6 +312,7 @@ export function MembersSidebar({
             formatAddCandidateName(candidate).toLowerCase(),
           )) ||
         memberPubkeys.has(pubkey) ||
+        hiddenLocalWelcomeAgentPubkeys.has(pubkey) ||
         isArchivedDiscovery(pubkey) ||
         !isAgentIdentityInManagedList(candidate, addableAgentPubkeys)
       ) {
@@ -337,7 +363,7 @@ export function MembersSidebar({
       });
     }
 
-    for (const agent of managedAgentsQuery.data ?? []) {
+    for (const agent of visibleManagedAgents) {
       addCandidate({
         pubkey: agent.pubkey,
         displayName: agent.name,
@@ -367,15 +393,16 @@ export function MembersSidebar({
     });
   }, [
     canAddMembers,
+    hiddenLocalWelcomeAgentPubkeys,
     isArchivedDiscovery,
     currentPubkey,
-    managedAgentsQuery.data,
     memberPubkeys,
     normalizedDeferredSearchQuery,
     relayAgentsQuery.companyAgentPubkeys,
     relayAgentsQuery.data,
     userSearchResults,
     rawMembers,
+    visibleManagedAgents,
   ]);
   const isAddSearchLoading =
     userSearchQuery.isLoading ||

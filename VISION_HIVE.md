@@ -30,10 +30,12 @@ Hive owns only these seams:
 - **Product identity:** visible Hive name, icon, support destination, bundle
   identity, and signed Hive update channel while retaining required upstream
   license and attribution.
-- **Bundled persona presentation:** Hive may replace the names, avatars, and
-  default instructions of upstream's bundled starter personas with TARS,
-  Samantha, and HAL 9000. Their native lifecycle, editing, runtime, and
-  permission behavior remain upstream.
+- **Bundled persona presentation:** unmanaged Buzz keeps the native bundled
+  starter personas. Managed Hive presents the canonical company VM identities
+  for TARS, Samantha, and HAL 9000 and retires only the duplicate built-in local
+  starter presentation and start path. Retained local records are not deleted,
+  and explicit user-created local agents keep native behavior when their
+  runtime is supported.
 - **Company admission:** Electric OAuth, membership and seat entitlement,
   server-selected company, and server-selected relay.
 - **Local identity custody:** the person's private key remains in the operating
@@ -122,11 +124,13 @@ Hive does not create or configure company VM agents. A catalog refresh
 discovers only identities already registered by an authorized server-side
 process. ATRIS and other VM-agent names are catalog/profile data.
 
-TARS, Samantha, and HAL 9000 are a separate case: Hive may ship them as
-build-time replacements for the names, avatars, and default instructions of
-the three native bundled starter personas. This is a data-only product overlay.
-It does not turn them into company VM agents or change native agent creation,
-editing, runtime, sandbox, permission, or storage behavior.
+TARS, Samantha, and HAL 9000 are canonical company VM profiles in managed Hive.
+When those registered identities are available, Hive presents them through the
+same catalog adapter as other VM agents and suppresses the duplicate built-in
+local welcome personas from managed pickers, search, and manual-start controls.
+The retained local records remain untouched. Unmanaged Buzz keeps its native
+starter team, and explicit custom local agents keep native creation, editing,
+runtime, sandbox, permission, and storage behavior when supported.
 
 ## Settings model
 

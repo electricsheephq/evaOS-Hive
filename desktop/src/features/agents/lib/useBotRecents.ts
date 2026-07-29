@@ -1,6 +1,8 @@
 import * as React from "react";
 
+import { filterLocalWelcomePersonasForPresentation } from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 const STORAGE_KEY = "buzz:bot-recents";
 const MAX_RECENTS = 8;
@@ -14,7 +16,11 @@ export function pickQuickBotPersonas(
   recentIds: readonly string[],
   maxCount = 3,
 ) {
-  if (personas.length === 0) {
+  const visiblePersonas = filterLocalWelcomePersonasForPresentation(
+    desktopProductPolicy().managed,
+    personas,
+  );
+  if (visiblePersonas.length === 0) {
     return [];
   }
 
@@ -33,7 +39,7 @@ export function pickQuickBotPersonas(
       break;
     }
 
-    addPersona(personas.find((persona) => persona.id === id));
+    addPersona(visiblePersonas.find((persona) => persona.id === id));
   }
 
   for (const name of DEFAULT_PERSONA_NAMES) {
@@ -42,13 +48,13 @@ export function pickQuickBotPersonas(
     }
 
     addPersona(
-      personas.find(
+      visiblePersonas.find(
         (persona) => persona.displayName.toLowerCase() === name.toLowerCase(),
       ),
     );
   }
 
-  for (const persona of personas) {
+  for (const persona of visiblePersonas) {
     if (resolved.length >= maxCount) {
       break;
     }

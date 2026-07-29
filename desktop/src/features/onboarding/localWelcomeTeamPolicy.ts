@@ -58,6 +58,42 @@ export function shouldRunLocalWelcomeAgent(
   return !managedProduct || !isLocalWelcomeAgentRecord(agent);
 }
 
+export function shouldPresentLocalWelcomePersona(
+  managedProduct: boolean,
+  persona: { id: string },
+): boolean {
+  return !managedProduct || !isLocalWelcomePersonaId(persona.id);
+}
+
+export function shouldPresentLocalWelcomeAgent(
+  managedProduct: boolean,
+  agent: {
+    personaId?: string | null;
+    teamId?: string | null;
+  },
+): boolean {
+  return !managedProduct || !isLocalWelcomeAgentRecord(agent);
+}
+
+export function filterLocalWelcomePersonasForPresentation<
+  T extends { id: string },
+>(managedProduct: boolean, personas: readonly T[]): T[] {
+  return personas.filter((persona) =>
+    shouldPresentLocalWelcomePersona(managedProduct, persona),
+  );
+}
+
+export function filterLocalWelcomeAgentsForPresentation<
+  T extends {
+    personaId?: string | null;
+    teamId?: string | null;
+  },
+>(managedProduct: boolean, agents: readonly T[]): T[] {
+  return agents.filter((agent) =>
+    shouldPresentLocalWelcomeAgent(managedProduct, agent),
+  );
+}
+
 export function shouldPresentLocalAgentTeam(
   managedProduct: boolean,
   teamId: string,

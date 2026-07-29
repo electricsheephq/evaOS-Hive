@@ -9,11 +9,13 @@ import {
 } from "@/features/agents/hooks";
 import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { resolvePersonaRuntime } from "@/features/agents/lib/resolvePersonaRuntime";
+import { filterLocalWelcomePersonasForPresentation } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
 import { AddChannelBotPersonasSection } from "@/features/channels/ui/AddChannelBotPersonasSection";
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
 import { useInChannelPersonaIds } from "@/features/channels/ui/useInChannelPersonaIds";
 import type { AcpRuntime } from "@/shared/api/types";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import { ChooserDialogContent } from "@/shared/ui/chooser-dialog-content";
 import { Dialog } from "@/shared/ui/dialog";
@@ -70,7 +72,11 @@ export function AddChannelBotDialog({
   );
   const createBotsMutation = useCreateChannelManagedAgentsMutation(channelId);
   const personas = React.useMemo(
-    () => getActivePersonas(personasQuery.data ?? []),
+    () =>
+      filterLocalWelcomePersonasForPresentation(
+        desktopProductPolicy().managed,
+        getActivePersonas(personasQuery.data ?? []),
+      ),
     [personasQuery.data],
   );
   const teams = React.useMemo(

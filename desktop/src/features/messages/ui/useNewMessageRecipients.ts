@@ -5,6 +5,10 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import {
+  filterLocalWelcomeAgentsForPresentation,
+  shouldPresentLocalWelcomeAgent,
+} from "@/features/onboarding/localWelcomeTeamPolicy";
 import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
 import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
 import { retainManagedSelectedRecipients } from "@/features/evaosTeams/lib/companyMemberDirectory";
@@ -25,6 +29,7 @@ import { rankUserCandidatesBySearch } from "@/features/profile/lib/userCandidate
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { ManagedAgent, UserSearchResult } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 /** Maximum recipients (excluding the current user) a DM can address. */
 export const NEW_MESSAGE_RECIPIENT_LIMIT = 8;
@@ -105,6 +110,26 @@ export function useNewMessageRecipients({
     enabled: active,
     relayUsers: userSearchResults,
   });
+  const managedProduct = desktopProductPolicy().managed;
+  const visibleManagedAgents = React.useMemo(
+    () =>
+      filterLocalWelcomeAgentsForPresentation(
+        managedProduct,
+        managedAgentsQuery.data ?? [],
+      ),
+    [managedAgentsQuery.data, managedProduct],
+  );
+  const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
+    () =>
+      new Set(
+        (managedAgentsQuery.data ?? [])
+          .filter(
+            (agent) => !shouldPresentLocalWelcomeAgent(managedProduct, agent),
+          )
+          .map((agent) => normalizePubkey(agent.pubkey)),
+      ),
+    [managedAgentsQuery.data, managedProduct],
+  );
   React.useEffect(() => {
     if (!active) return;
     setSelectedUsers((current) => {
@@ -127,7 +152,7 @@ export function useNewMessageRecipients({
   const searchResults = React.useMemo(() => {
     const candidatesByPubkey = new Map<string, NewMessageRecipientCandidate>();
     const managedAgentsByPubkey = new Map(
-      (managedAgentsQuery.data ?? []).map((agent) => [
+      visibleManagedAgents.map((agent) => [
         normalizePubkey(agent.pubkey),
         agent,
       ]),
@@ -140,9 +165,7 @@ export function useNewMessageRecipients({
         (agent) => agent.publicKey,
       ),
       currentPubkey,
-      managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
-        (agent) => agent.pubkey,
-      ),
+      managedAgentPubkeys: visibleManagedAgents.map((agent) => agent.pubkey),
       relayAgents: relayAgentsQuery.data,
       sharedChannelIds: getSharedChannelIds(channelsQuery.data),
     });
@@ -155,6 +178,7 @@ export function useNewMessageRecipients({
 
       if (
         pubkey === currentPubkeyNormalized ||
+        hiddenLocalWelcomeAgentPubkeys.has(pubkey) ||
         (!options.includeSelected && selectedPubkeys.has(pubkey)) ||
         isArchivedDiscovery(pubkey) ||
         (candidate.isAgent && !eligibleAgentPubkeys.has(pubkey))
@@ -225,7 +249,7 @@ export function useNewMessageRecipients({
       );
     }
 
-    for (const agent of managedAgentsQuery.data ?? []) {
+    for (const agent of visibleManagedAgents) {
       addCandidate(
         {
           pubkey: agent.pubkey,
@@ -262,10 +286,11 @@ export function useNewMessageRecipients({
     companyDirectory.candidates,
     currentPubkey,
     deferredSearchQuery,
+    hiddenLocalWelcomeAgentPubkeys,
     isArchivedDiscovery,
-    managedAgentsQuery.data,
     relayAgentsQuery.data,
     selectedPubkeys,
+    visibleManagedAgents,
   ]);
 
   const isDirectoryLoading =

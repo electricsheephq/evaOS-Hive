@@ -4,6 +4,10 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import {
+  filterLocalWelcomeAgentsForPresentation,
+  shouldPresentLocalWelcomeAgent,
+} from "@/features/onboarding/localWelcomeTeamPolicy";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import {
   useUserSearchQuery,
@@ -14,6 +18,7 @@ import { useSearchMessagesQuery } from "@/features/search/hooks";
 import type { SearchResult } from "@/features/search/ui/SearchResultItem";
 import type { Channel, SearchHit, UserSearchResult } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 export const MIN_SEARCH_QUERY_LENGTH = 2;
 
@@ -115,14 +120,32 @@ export function useSearchResults({
   const relayAgentsQuery = useRelayAgentsQuery({
     enabled: searchBackedQueriesEnabled,
   });
+  const managedProduct = desktopProductPolicy().managed;
+  const visibleManagedAgents = React.useMemo(
+    () =>
+      filterLocalWelcomeAgentsForPresentation(
+        managedProduct,
+        managedAgentsQuery.data ?? [],
+      ),
+    [managedAgentsQuery.data, managedProduct],
+  );
+  const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
+    () =>
+      new Set(
+        (managedAgentsQuery.data ?? [])
+          .filter(
+            (agent) => !shouldPresentLocalWelcomeAgent(managedProduct, agent),
+          )
+          .map((agent) => normalizePubkey(agent.pubkey)),
+      ),
+    [managedAgentsQuery.data, managedProduct],
+  );
   const managedAgentPubkeys = React.useMemo(
     () =>
       new Set(
-        (managedAgentsQuery.data ?? []).map((agent) =>
-          normalizePubkey(agent.pubkey),
-        ),
+        visibleManagedAgents.map((agent) => normalizePubkey(agent.pubkey)),
       ),
-    [managedAgentsQuery.data],
+    [visibleManagedAgents],
   );
   const relayAgentPubkeys = React.useMemo(
     () =>
@@ -163,7 +186,10 @@ export function useSearchResults({
     const addCandidate = (candidate: UserSearchResult) => {
       const pubkey = normalizePubkey(candidate.pubkey);
 
-      if (isArchivedDiscovery(pubkey)) {
+      if (
+        hiddenLocalWelcomeAgentPubkeys.has(pubkey) ||
+        isArchivedDiscovery(pubkey)
+      ) {
         return;
       }
 
@@ -222,7 +248,7 @@ export function useSearchResults({
       }
     }
 
-    for (const agent of managedAgentsQuery.data ?? []) {
+    for (const agent of visibleManagedAgents) {
       const candidate = {
         pubkey: agent.pubkey,
         displayName: agent.name,
@@ -246,13 +272,14 @@ export function useSearchResults({
   }, [
     debouncedQuery,
     eligibleAgentPubkeys,
+    hiddenLocalWelcomeAgentPubkeys,
     isArchivedDiscovery,
     limit,
     managedAgentPubkeys,
-    managedAgentsQuery.data,
     relayAgentPubkeys,
     relayAgentsQuery.data,
     userSearchQuery.data,
+    visibleManagedAgents,
   ]);
 
   const results = React.useMemo<SearchResult[]>(
