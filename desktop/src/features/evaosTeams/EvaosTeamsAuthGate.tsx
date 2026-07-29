@@ -189,6 +189,10 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
 
   async function runLogin() {
     setLostDeviceConfirmed(false);
+    setRecoveryStarted(false);
+    setRecoveryWorking(false);
+    setRecoverySas(null);
+    setRecoveryCode("");
     setLoginPending(true);
     setBackupCode("");
     setBackupCodeSent(false);

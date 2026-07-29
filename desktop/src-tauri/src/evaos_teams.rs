@@ -662,32 +662,6 @@ fn select_login_keys(
     }
 }
 
-fn managed_credential_entries(
-    mut stored: HashMap<String, String>,
-    membership_id: &str,
-    keys: &Keys,
-    session: &str,
-) -> Result<HashMap<String, String>, String> {
-    let public_key = keys.public_key();
-    let migrated_legacy = stored
-        .get(IDENTITY_KEY)
-        .map(|value| parse_stored_identity(value))
-        .transpose()?
-        .is_some_and(|legacy| legacy.public_key() == public_key);
-    if migrated_legacy {
-        stored.remove(IDENTITY_KEY);
-    }
-    stored.remove(&pending_identity_rotation_key(membership_id)?);
-    stored.remove(LOGOUT_PENDING_KEY);
-    stored.insert(
-        membership_identity_key(membership_id)?,
-        encode_managed_identity(keys)?,
-    );
-    stored.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.to_string());
-    stored.insert(SESSION_KEY.to_string(), session.to_string());
-    Ok(stored)
-}
-
 fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
     let Some(stored) = stored else {
         return Ok(ManagedRuntime {
@@ -962,16 +936,44 @@ fn persist_managed_credentials(
     membership_id: String,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let replacement = managed_credential_entries(
-        managed_store().load_all_readonly()?.unwrap_or_default(),
-        &membership_id,
-        &keys,
-        &session,
-    )?;
-    managed_store()
-        .replace_all(&replacement)
+    let store = managed_store();
+    let stored = store.load_all_readonly()?.unwrap_or_default();
+    let encoded_identity = encode_managed_identity(&keys)?;
+    let legacy_to_remove = stored
+        .get(IDENTITY_KEY)
+        .map(|value| parse_stored_identity(value).map(|legacy| (value.clone(), legacy)))
+        .transpose()?
+        .filter(|(_, legacy)| legacy.public_key() == keys.public_key())
+        .map(|(value, _)| value);
+    let scoped_identity_key = membership_identity_key(&membership_id)?;
+    let pending_rotation_key = pending_identity_rotation_key(&membership_id)?;
+    let removals = vec![pending_rotation_key.clone(), LOGOUT_PENDING_KEY.to_string()];
+    let upserts = HashMap::from([
+        (scoped_identity_key.clone(), encoded_identity.clone()),
+        (ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.clone()),
+        (SESSION_KEY.to_string(), session.clone()),
+    ]);
+    store
+        .update_entries(
+            &removals,
+            &upserts,
+            legacy_to_remove
+                .as_deref()
+                .map(|value| (IDENTITY_KEY, value)),
+        )
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
-    if managed_store().load_all_readonly()? != Some(replacement) {
+    let persisted = store.load_all_readonly()?.unwrap_or_default();
+    let required_entries_match = upserts
+        .iter()
+        .all(|(key, value)| persisted.get(key) == Some(value));
+    let legacy_removed = legacy_to_remove
+        .as_ref()
+        .is_none_or(|value| persisted.get(IDENTITY_KEY) != Some(value));
+    if !required_entries_match
+        || persisted.contains_key(&pending_rotation_key)
+        || persisted.contains_key(LOGOUT_PENDING_KEY)
+        || !legacy_removed
+    {
         return Err("Managed Keychain read-back verification failed".to_string());
     }
     install_entitlement(app_state, &keys, &entitlement)?;

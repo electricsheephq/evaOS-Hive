@@ -18,6 +18,23 @@ fn store_entry_if_absent(
         .clone()
 }
 
+fn update_entries(
+    current: &mut HashMap<String, String>,
+    removals: &[String],
+    upserts: &HashMap<String, String>,
+    remove_if_equal: Option<(&str, &str)>,
+) {
+    if let Some((key, expected)) = remove_if_equal {
+        if current.get(key).is_some_and(|value| value == expected) {
+            current.remove(key);
+        }
+    }
+    for key in removals {
+        current.remove(key);
+    }
+    current.extend(upserts.clone());
+}
+
 impl SecretStore {
     /// Atomically replace the managed keychain blob with exactly `entries`.
     pub fn replace_all(&self, entries: &HashMap<String, String>) -> Result<(), String> {
@@ -35,6 +52,20 @@ impl SecretStore {
             stored = Some(store_entry_if_absent(map, key, candidate));
         })?;
         stored.ok_or_else(|| "keychain mutation did not return a stored value".to_string())
+    }
+
+    /// Atomically remove and replace selected managed entries.
+    ///
+    /// The mutation starts from a fresh durable read while holding the
+    /// cross-process lock, so promoting a staged identity cannot discard
+    /// unrelated keys or sessions written by another Hive process.
+    pub fn update_entries(
+        &self,
+        removals: &[String],
+        upserts: &HashMap<String, String>,
+        remove_if_equal: Option<(&str, &str)>,
+    ) -> Result<(), String> {
+        self.mutate_blob(|map| update_entries(map, removals, upserts, remove_if_equal))
     }
 }
 
@@ -72,6 +103,43 @@ mod tests {
         let stored = store_entry_if_absent(&mut current, "staged", "second");
         assert_eq!(stored, "first");
         assert_eq!(current.get("staged").map(String::as_str), Some("first"));
+        assert_eq!(current.get("unrelated").map(String::as_str), Some("keep"));
+    }
+
+    #[test]
+    fn update_entries_preserves_unrelated_fresh_entries() {
+        let mut current = HashMap::from([
+            ("legacy".to_string(), "same-identity".to_string()),
+            ("staged".to_string(), "pending-identity".to_string()),
+            ("session".to_string(), "other-session".to_string()),
+            ("unrelated".to_string(), "keep".to_string()),
+        ]);
+        let removals = vec!["staged".to_string()];
+        let upserts = HashMap::from([
+            (
+                "identity:membership".to_string(),
+                "same-identity".to_string(),
+            ),
+            ("session".to_string(), "new-session".to_string()),
+        ]);
+
+        update_entries(
+            &mut current,
+            &removals,
+            &upserts,
+            Some(("legacy", "same-identity")),
+        );
+
+        assert!(!current.contains_key("legacy"));
+        assert!(!current.contains_key("staged"));
+        assert_eq!(
+            current.get("identity:membership").map(String::as_str),
+            Some("same-identity")
+        );
+        assert_eq!(
+            current.get("session").map(String::as_str),
+            Some("new-session")
+        );
         assert_eq!(current.get("unrelated").map(String::as_str), Some("keep"));
     }
 }

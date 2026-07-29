@@ -1,5 +1,31 @@
 use super::*;
 
+fn managed_credential_entries(
+    mut stored: HashMap<String, String>,
+    membership_id: &str,
+    keys: &Keys,
+    session: &str,
+) -> Result<HashMap<String, String>, String> {
+    let public_key = keys.public_key();
+    let migrated_legacy = stored
+        .get(IDENTITY_KEY)
+        .map(|value| parse_stored_identity(value))
+        .transpose()?
+        .is_some_and(|legacy| legacy.public_key() == public_key);
+    if migrated_legacy {
+        stored.remove(IDENTITY_KEY);
+    }
+    stored.remove(&pending_identity_rotation_key(membership_id)?);
+    stored.remove(LOGOUT_PENDING_KEY);
+    stored.insert(
+        membership_identity_key(membership_id)?,
+        encode_managed_identity(keys)?,
+    );
+    stored.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.to_string());
+    stored.insert(SESSION_KEY.to_string(), session.to_string());
+    Ok(stored)
+}
+
 fn challenge(keys: &Keys) -> ChallengeResponse {
     let challenge = KeyBindingChallenge {
         schema_version: KEY_BINDING_SCHEMA.to_string(),
