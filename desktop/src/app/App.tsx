@@ -64,6 +64,8 @@ import {
   listenForDeepLinks,
 } from "@/shared/deep-link";
 import { cn } from "@/shared/lib/cn";
+import { ProductMark } from "@/shared/product/ProductMark";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
 import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
 import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
@@ -144,6 +146,14 @@ function BeeLoader({
   className?: string;
   tintClassName?: string;
 }) {
+  if (desktopProductPolicy().managed) {
+    return (
+      <ProductMark
+        className={cn("relative block h-auto", className)}
+        imageClassName={cn("relative block h-auto rounded-[22%]", className)}
+      />
+    );
+  }
   return (
     <div className={cn("relative", tintClassName, className)}>
       <BuzzMark className="block h-auto w-full" />
@@ -172,7 +182,14 @@ function AppLoadingGate() {
       <StartupWindowDragRegion />
       <ThemeGrainientBackground />
       <span className="sr-only">{LOADING_TEXT}</span>
-      <FlappingBee className="relative z-10 h-auto w-28" />
+      {desktopProductPolicy().managed ? (
+        <ProductMark
+          className="relative z-10 h-auto w-28"
+          imageClassName="relative z-10 h-28 w-28 rounded-[22%]"
+        />
+      ) : (
+        <FlappingBee className="relative z-10 h-auto w-28" />
+      )}
     </div>
   );
 }
