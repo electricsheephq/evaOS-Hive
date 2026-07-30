@@ -342,16 +342,35 @@ fn validate_challenge(
     Ok(())
 }
 
+fn validate_challenge_for_binding(
+    response: &ChallengeResponse,
+    binding: &IdentityBinding,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    validate_challenge(response, expected_public_key, &binding.membership_id)?;
+    if binding.public_key.is_some() {
+        identity_binding::validate_identity_binding(
+            binding,
+            &response.challenge.membership_id,
+            &response.challenge.community_id,
+            &response.relay_host,
+            expected_public_key,
+        )
+    } else if binding.community_id != response.challenge.community_id
+        || binding.relay_host != response.relay_host
+    {
+        Err("managed key challenge changed the server-selected scope".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn signed_challenge(
     response: &ChallengeResponse,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<serde_json::Value, String> {
-    validate_challenge(
-        response,
-        &keys.public_key().to_hex(),
-        expected_membership_id,
-    )?;
+    validate_challenge_for_binding(response, binding, &keys.public_key().to_hex())?;
     let tags = response
         .event_template
         .tags
@@ -598,11 +617,11 @@ async fn bind_identity(
     client: &reqwest::Client,
     token: &str,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
-    let challenge = issue_key_challenge(client, token, &public_key, expected_membership_id).await?;
-    verify_key_challenge(client, token, &challenge, keys, expected_membership_id).await
+    let challenge = issue_key_challenge(client, token, &public_key, binding).await?;
+    verify_key_challenge(client, token, &challenge, keys, binding).await
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -610,7 +629,7 @@ async fn issue_key_challenge(
     client: &reqwest::Client,
     token: &str,
     public_key: &str,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<ChallengeResponse, String> {
     let challenge: ChallengeResponse = post_json(
         client,
@@ -628,7 +647,7 @@ async fn issue_key_challenge(
     )
     .await
     .map_err(|error| format!("Managed key challenge was not available: {error}"))?;
-    validate_challenge(&challenge, public_key, expected_membership_id)?;
+    validate_challenge_for_binding(&challenge, binding, public_key)?;
     Ok(challenge)
 }
 
@@ -638,10 +657,10 @@ async fn verify_key_challenge(
     token: &str,
     challenge: &ChallengeResponse,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
-    let signed_event = signed_challenge(challenge, keys, expected_membership_id)?;
+    let signed_event = signed_challenge(challenge, keys, binding)?;
     let verified: EntitlementResponse = post_json(
         client,
         "evaos-teams-access",
@@ -755,14 +774,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
         let entitlement = match get_remote_entitlement(&app_state.http_client, &session).await {
             Ok(entitlement) => Ok(entitlement),
             Err(error) if error.status == reqwest::StatusCode::NOT_FOUND => {
-                match bind_identity(
-                    &app_state.http_client,
-                    &session,
-                    &keys,
-                    &binding.membership_id,
-                )
-                .await
-                {
+                match bind_identity(&app_state.http_client, &session, &keys, &binding).await {
                     Ok(entitlement) => {
                         match get_identity_binding(&app_state.http_client, &session).await {
                             Ok(verified_binding) => {

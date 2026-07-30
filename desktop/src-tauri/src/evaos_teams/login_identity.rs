@@ -99,13 +99,8 @@ pub(super) async fn complete_login(
     let (keys, entitlement) = if local_identity_matches.is_some() {
         let keys = local_keys
             .map_err(|error| format!("The local Hive identity could not be verified: {error}"))?;
-        let entitlement = bind_identity(
-            &app_state.http_client,
-            &desktop_session,
-            &keys,
-            &binding.membership_id,
-        )
-        .await?;
+        let entitlement =
+            bind_identity(&app_state.http_client, &desktop_session, &keys, &binding).await?;
         let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
         identity_custody::ensure_enrollment(
             &app_state.http_client,
@@ -133,13 +128,8 @@ pub(super) async fn complete_login(
                 .map_err(|error| error.to_string())?
                 .public_key()
                 .to_hex();
-            let entitlement = bind_identity(
-                &app_state.http_client,
-                &desktop_session,
-                &keys,
-                &binding.membership_id,
-            )
-            .await?;
+            let entitlement =
+                bind_identity(&app_state.http_client, &desktop_session, &keys, &binding).await?;
             let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
             identity_custody::ensure_enrollment(
                 &app_state.http_client,

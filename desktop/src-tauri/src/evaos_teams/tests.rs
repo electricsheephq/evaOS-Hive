@@ -50,6 +50,15 @@ fn entitlement(public_key: Option<String>) -> EvaosTeamsEntitlement {
     }
 }
 
+fn authoritative_binding(public_key: Option<String>) -> IdentityBinding {
+    IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key,
+    }
+}
+
 #[test]
 fn login_url_is_callback_and_one_way_verifier_bound() {
     let verifier = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -242,7 +251,8 @@ fn identity_binding_validator_requires_every_authoritative_field() {
 fn challenge_signature_uses_exact_server_template_and_rejects_tampering() {
     let keys = Keys::generate();
     let response = challenge(&keys);
-    let event = signed_challenge(&response, &keys, "10000000-0000-4000-8000-000000000002").unwrap();
+    let binding = authoritative_binding(None);
+    let event = signed_challenge(&response, &keys, &binding).unwrap();
     assert_eq!(event["kind"], KEY_BINDING_KIND);
     assert_eq!(event["content"], response.event_template.content);
     assert_eq!(
@@ -256,15 +266,25 @@ fn challenge_signature_uses_exact_server_template_and_rejects_tampering() {
         "community".to_string(),
         altered.challenge.community_id.clone(),
     ]);
-    assert!(signed_challenge(&altered, &keys, "10000000-0000-4000-8000-000000000002").is_err());
+    assert!(signed_challenge(&altered, &keys, &binding).is_err());
 
-    let wrong_membership = challenge(&keys);
-    assert!(signed_challenge(
-        &wrong_membership,
-        &keys,
-        "20000000-0000-4000-8000-000000000002"
-    )
-    .is_err());
+    let mut wrong_membership = authoritative_binding(None);
+    wrong_membership.membership_id = "20000000-0000-4000-8000-000000000002".to_string();
+    assert!(signed_challenge(&response, &keys, &wrong_membership).is_err());
+}
+
+#[test]
+fn ordinary_challenge_signing_rejects_authoritative_community_or_relay_mismatch() {
+    let keys = Keys::generate();
+    let response = challenge(&keys);
+
+    let mut wrong_community = authoritative_binding(None);
+    wrong_community.community_id = "20000000-0000-4000-8000-000000000003".to_string();
+    assert!(signed_challenge(&response, &keys, &wrong_community).is_err());
+
+    let mut wrong_relay = authoritative_binding(None);
+    wrong_relay.relay_host = "https://other.example.com".to_string();
+    assert!(signed_challenge(&response, &keys, &wrong_relay).is_err());
 }
 
 #[test]

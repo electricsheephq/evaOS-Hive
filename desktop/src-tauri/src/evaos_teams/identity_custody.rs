@@ -639,8 +639,7 @@ pub(super) async fn recover_identity(
         ));
     }
     let payload = completed.recovery;
-    let key_challenge =
-        issue_key_challenge(client, token, canonical_public_key, &binding.membership_id).await?;
+    let key_challenge = issue_key_challenge(client, token, canonical_public_key, &binding).await?;
     let context = validate_recovery_payload(&payload, &recovery, binding, &key_challenge)?;
     let data_key_info = format!("{RECOVERY_DEK_INFO}:{}", recovery.recovery_id);
     let data_key = device.open(&payload.sealed_data_key, &data_key_info)?;
@@ -651,8 +650,7 @@ pub(super) async fn recover_identity(
         ));
     }
 
-    let entitlement =
-        verify_key_challenge(client, token, &key_challenge, &keys, &binding.membership_id).await?;
+    let entitlement = verify_key_challenge(client, token, &key_challenge, &keys, &binding).await?;
     validate_recovered_entitlement(&entitlement, &recovery)?;
 
     super::authorization::prepare_managed_identity_recovery(app, app_state)?;
