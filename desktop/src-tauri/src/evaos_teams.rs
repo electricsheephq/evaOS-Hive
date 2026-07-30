@@ -54,6 +54,7 @@ use identity_binding::get_identity_binding;
 use identity_binding::IdentityBindingResponse;
 use identity_binding::{validate_challenge_for_binding, IdentityBinding};
 pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
+use identity_rotation::PendingIdentityReset;
 use keychain_migration::{
     pending_session_entries, preserve_legacy_identity_entries, validated_runtime_entries,
 };
@@ -158,13 +159,6 @@ struct ManagedRuntime {
     session: Option<Zeroizing<String>>,
     logout_pending: bool,
     custody_checked: bool,
-}
-
-#[derive(Clone)]
-struct PendingIdentityReset {
-    session: Zeroizing<String>,
-    membership_id: String,
-    public_key: String,
 }
 
 /// Backend-only managed session state.

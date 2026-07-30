@@ -2,6 +2,8 @@ use super::keychain_migration::{
     active_session_entries, pending_identity_rotation_key, select_legacy_identity_candidate,
     staged_identity_rotation_entries,
 };
+#[cfg(feature = "evaos-teams-managed")]
+use super::login_identity::require_genuine_native_identity_loss;
 use super::*;
 use nostr::ToBech32;
 
@@ -596,6 +598,15 @@ fn identity_reset_status_exposes_no_credential_or_identity_material() {
     for forbidden in ["session", "membership", "publicKey", "nsec", "private"] {
         assert!(!serialized.contains(forbidden));
     }
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn identity_reset_requires_genuine_native_identity_loss() {
+    assert!(require_genuine_native_identity_loss(true, false).is_ok());
+    assert!(require_genuine_native_identity_loss(false, true).is_err());
+    assert!(require_genuine_native_identity_loss(false, false).is_err());
+    assert!(require_genuine_native_identity_loss(true, true).is_err());
 }
 
 #[test]

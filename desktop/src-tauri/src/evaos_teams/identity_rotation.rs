@@ -6,6 +6,15 @@ use super::*;
 
 pub(super) const IDENTITY_ROTATION_SCHEMA: &str = "evaos.buzz_identity_rotation.v1";
 
+#[derive(Clone)]
+pub(super) struct PendingIdentityReset {
+    pub(super) session: Zeroizing<String>,
+    pub(super) membership_id: String,
+    pub(super) community_id: String,
+    pub(super) relay_host: String,
+    pub(super) public_key: String,
+}
+
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub(super) struct IdentityRotationChallenge {
     pub(super) schema_version: String,
@@ -200,6 +209,19 @@ fn identity_rotation_progress(
     }
 }
 
+fn validate_pending_identity_reset_scope(
+    pending: &PendingIdentityReset,
+    binding: &IdentityBinding,
+) -> Result<(), String> {
+    if binding.membership_id != pending.membership_id
+        || binding.community_id != pending.community_id
+        || binding.relay_host != pending.relay_host
+    {
+        return Err("Managed identity replacement changed the selected scope".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(feature = "evaos-teams-managed")]
 async fn recover_completed_identity_rotation(
     client: &reqwest::Client,
@@ -300,14 +322,13 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
             .map_err(|error| error.to_string())?
             .public_key()
             .to_hex();
-        let keys = stage_identity_rotation_key(&pending.membership_id)?;
-        let replacement_public_key = keys.public_key().to_hex();
 
         let current_binding =
             get_identity_binding(&app_state.http_client, pending.session.as_str()).await?;
-        if current_binding.membership_id != pending.membership_id {
-            return Err("Managed identity replacement changed the selected membership".to_string());
-        }
+        validate_pending_identity_reset_scope(&pending, &current_binding)?;
+
+        let keys = stage_identity_rotation_key(&pending.membership_id)?;
+        let replacement_public_key = keys.public_key().to_hex();
         let entitlement = match identity_rotation_progress(
             current_binding.public_key.as_deref(),
             &pending.public_key,
@@ -592,5 +613,38 @@ mod tests {
             &replacement_public_key,
         )
         .is_err());
+    }
+
+    #[test]
+    fn pending_reset_scope_rejects_community_or_relay_drift_before_rotation() {
+        let pending = PendingIdentityReset {
+            session: Zeroizing::new("opaque-session".to_string()),
+            membership_id: "10000000-0000-4000-8000-000000000003".to_string(),
+            community_id: "10000000-0000-4000-8000-000000000004".to_string(),
+            relay_host: "https://relay.example.com".to_string(),
+            public_key: Keys::generate().public_key().to_hex(),
+        };
+        let binding = IdentityBinding {
+            membership_id: pending.membership_id.clone(),
+            community_id: pending.community_id.clone(),
+            relay_host: pending.relay_host.clone(),
+            public_key: Some(pending.public_key.clone()),
+        };
+        assert!(validate_pending_identity_reset_scope(&pending, &binding).is_ok());
+
+        for drifted in [
+            IdentityBinding {
+                community_id: "20000000-0000-4000-8000-000000000004".to_string(),
+                ..binding
+            },
+            IdentityBinding {
+                membership_id: pending.membership_id.clone(),
+                community_id: pending.community_id.clone(),
+                relay_host: "https://other.example.com".to_string(),
+                public_key: Some(pending.public_key.clone()),
+            },
+        ] {
+            assert!(validate_pending_identity_reset_scope(&pending, &drifted).is_err());
+        }
     }
 }

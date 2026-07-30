@@ -84,6 +84,25 @@ pub(super) fn binding_for_entitlement(
     })
 }
 
+pub(super) fn require_genuine_native_identity_loss(
+    identity_lost: bool,
+    keyring_locked: bool,
+) -> Result<(), String> {
+    if identity_lost && !keyring_locked {
+        return Ok(());
+    }
+    if keyring_locked {
+        return Err(
+            "Unlock macOS Keychain before signing in; Hive will not replace an identity while Keychain is locked."
+                .to_string(),
+        );
+    }
+    Err(
+        "Hive could not verify the native Buzz identity; restore native identity access before signing in."
+            .to_string(),
+    )
+}
+
 pub(super) async fn complete_login(
     app: &tauri::AppHandle,
     state: &EvaosTeamsState,
@@ -91,14 +110,26 @@ pub(super) async fn complete_login(
     desktop_session: String,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let binding = get_identity_binding(&app_state.http_client, &desktop_session).await?;
-    let local_keys = native_identity_for_managed_verification(app_state);
+    let local_keys = match native_identity_for_managed_verification(app_state) {
+        Ok(keys) => Some(keys),
+        Err(_) => {
+            require_genuine_native_identity_loss(
+                app_state
+                    .identity_lost
+                    .load(std::sync::atomic::Ordering::Acquire),
+                app_state
+                    .keyring_locked
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+            None
+        }
+    };
     let local_identity_matches = local_keys
         .as_ref()
-        .ok()
         .and_then(|keys| verify_existing_native_identity(&binding, keys).ok());
     let (keys, entitlement) = if local_identity_matches.is_some() {
         let keys = local_keys
-            .map_err(|error| format!("The local Hive identity could not be verified: {error}"))?;
+            .ok_or_else(|| "The local Hive identity could not be verified".to_string())?;
         let entitlement =
             bind_identity(&app_state.http_client, &desktop_session, &keys, &binding).await?;
         let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
@@ -175,7 +206,9 @@ pub(super) async fn complete_login(
                         .lock()
                         .map_err(|error| error.to_string())? = Some(PendingIdentityReset {
                         session: Zeroizing::new(desktop_session),
-                        membership_id: binding.membership_id,
+                        membership_id: binding.membership_id.clone(),
+                        community_id: binding.community_id.clone(),
+                        relay_host: binding.relay_host.clone(),
                         public_key: canonical_public_key.to_string(),
                     });
                     return Ok(EvaosTeamsAuthStatus::managed(
