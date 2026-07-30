@@ -239,10 +239,7 @@ fn existing_native_key_activates_without_replacing_identity() {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
         public_key: Some(keys.public_key().to_hex()),
     };
-    assert_eq!(
-        verify_existing_native_identity(&binding, &keys).unwrap(),
-        true
-    );
+    assert!(verify_existing_native_identity(&binding, &keys).unwrap());
 
     let state = crate::app_state::build_app_state();
     *state.keys.lock().unwrap() = keys.clone();
