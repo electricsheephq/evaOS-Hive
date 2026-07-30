@@ -64,6 +64,9 @@ test("managed canonical-key mismatch hands control to native recovery", () => {
     evaosTeamsNeedsNativeIdentityRecovery(status("identity_restore_required")),
     true,
   );
-  assert.equal(evaosTeamsNeedsNativeIdentityRecovery(status("signed_out")), false);
+  assert.equal(
+    evaosTeamsNeedsNativeIdentityRecovery(status("signed_out")),
+    false,
+  );
   assert.equal(evaosTeamsNeedsNativeIdentityRecovery(null), false);
 });
