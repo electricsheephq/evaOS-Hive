@@ -40,6 +40,7 @@ mod callback;
 mod company_agents;
 mod device_code;
 mod http_api;
+mod identity_binding;
 #[cfg(feature = "evaos-teams-managed")]
 mod identity_custody;
 mod identity_rotation;
@@ -47,6 +48,11 @@ mod keychain_migration;
 #[cfg(feature = "evaos-teams-managed")]
 mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
+#[cfg(feature = "evaos-teams-managed")]
+use identity_binding::get_identity_binding;
+use identity_binding::IdentityBinding;
+#[cfg(test)]
+use identity_binding::IdentityBindingResponse;
 pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
 use keychain_migration::{
     pending_session_entries, preserve_legacy_identity_entries, validated_runtime_entries,
@@ -201,20 +207,6 @@ struct ChallengeResponse {
 struct EntitlementResponse {
     status: String,
     entitlement: EvaosTeamsEntitlement,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct IdentityBinding {
-    membership_id: String,
-    community_id: String,
-    relay_host: String,
-    public_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct IdentityBindingResponse {
-    status: String,
-    binding: IdentityBinding,
 }
 
 #[derive(Debug, Deserialize)]
@@ -590,31 +582,6 @@ async fn get_remote_entitlement(
             code: "inactive_entitlement".to_string(),
         })
     }
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn get_identity_binding(
-    client: &reqwest::Client,
-    token: &str,
-) -> Result<IdentityBinding, String> {
-    let response: IdentityBindingResponse = post_json(
-        client,
-        "evaos-teams-access",
-        Some(token),
-        serde_json::json!({ "action": "get_identity_binding" }),
-    )
-    .await
-    .map_err(|error| format!("Managed identity selection was not available: {error}"))?;
-    if response.status != "active" {
-        return Err("Managed identity selection is not active".to_string());
-    }
-    uuid::Uuid::parse_str(&response.binding.membership_id)
-        .map_err(|_| "Managed identity selection returned an invalid membership".to_string())?;
-    uuid::Uuid::parse_str(&response.binding.community_id)
-        .map_err(|_| "Managed identity selection returned an invalid community".to_string())?;
-    relay_websocket_url(&response.binding.relay_host)
-        .map_err(|_| "Managed identity selection returned an invalid relay".to_string())?;
-    Ok(response.binding)
 }
 
 #[cfg(feature = "evaos-teams-managed")]
