@@ -37,6 +37,40 @@ test("local base resolution uses the branch merge-base and fails without origin/
   );
 });
 
+test("adoption base applies only while the default base lacks the adopted tree", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "file-size-adoption-"));
+  git(repo, "init", "-b", "main");
+  git(repo, "config", "user.name", "Test");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "commit", "--allow-empty", "-m", "common");
+  const common = git(repo, "rev-parse", "HEAD");
+  git(repo, "commit", "--allow-empty", "-m", "legacy fork");
+  git(repo, "switch", "-c", "reset", common);
+  git(repo, "commit", "--allow-empty", "-m", "adopt upstream");
+  const adoption = git(repo, "rev-parse", "HEAD");
+  git(repo, "switch", "main");
+  git(repo, "merge", "--no-ff", "reset", "-m", "merge reset");
+
+  assert.equal(
+    resolveBaseRef(repo, {
+      GITHUB_ACTIONS: "true",
+      CHECK_FILE_SIZES_ADOPTION_BASE: adoption,
+    }),
+    adoption,
+  );
+
+  const adoptedMain = git(repo, "rev-parse", "HEAD");
+  git(repo, "commit", "--allow-empty", "-m", "later change");
+  assert.equal(
+    resolveBaseRef(repo, {
+      GITHUB_ACTIONS: "true",
+      CHECK_FILE_SIZES_ADOPTION_BASE: adoption,
+    }),
+    "HEAD^1",
+  );
+  assert.equal(git(repo, "rev-parse", "HEAD^1"), adoptedMain);
+});
+
 test("counts empty, LF, and CRLF content with the existing semantics", () => {
   assert.equal(countLines(""), 0);
   assert.equal(countLines("one\n"), 2);

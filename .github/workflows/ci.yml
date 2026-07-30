@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   BUZZ_TEST_POSTGRES_PASSWORD: buzz_dev
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+  CHECK_FILE_SIZES_ADOPTION_BASE: 3e48f1b2365d326ee1c9582448d86a99b44ecd5d
 
 jobs:
   changes:

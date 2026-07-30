@@ -11,6 +11,17 @@ function git(args, cwd, options = {}) {
   });
 }
 
+function isAncestor(repoRoot, ancestor, descendant) {
+  try {
+    git(["merge-base", "--is-ancestor", ancestor, descendant], repoRoot, {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function toPosixPath(relativePath) {
   return relativePath.split(path.sep).join("/");
 }
@@ -40,23 +51,40 @@ export function resolveBaseRef(repoRoot, env = process.env) {
     return env.CHECK_FILE_SIZES_BASE;
   }
 
-  if (env.GITHUB_ACTIONS === "true") {
-    return "HEAD^1";
-  }
-
+  let defaultBase;
   try {
-    const mergeBase = git(
-      ["merge-base", "origin/main", "HEAD"],
-      repoRoot,
-    ).trim();
-    const head = git(["rev-parse", "HEAD"], repoRoot).trim();
-    return mergeBase === head ? "HEAD" : mergeBase;
+    if (env.GITHUB_ACTIONS === "true") {
+      defaultBase = "HEAD^1";
+    } else {
+      const mergeBase = git(
+        ["merge-base", "origin/main", "HEAD"],
+        repoRoot,
+      ).trim();
+      const head = git(["rev-parse", "HEAD"], repoRoot).trim();
+      defaultBase = mergeBase === head ? "HEAD" : mergeBase;
+    }
   } catch (error) {
     throw new Error(
       "Could not resolve the file-size base from origin/main. Fetch origin/main or set CHECK_FILE_SIZES_BASE to an explicit commit.",
       { cause: error },
     );
   }
+
+  const adoptionBase = env.CHECK_FILE_SIZES_ADOPTION_BASE?.trim();
+  if (!adoptionBase) {
+    return defaultBase;
+  }
+
+  // During a deliberate upstream reset, the PR merge commit has the old fork
+  // as its first parent and the adopted upstream tree on its second. Compare
+  // against the approved adoption commit only at that boundary. Once main
+  // contains it, ordinary PR and push checks return to their normal base.
+  git(["cat-file", "-e", `${adoptionBase}^{commit}`], repoRoot);
+  const headContainsAdoption = isAncestor(repoRoot, adoptionBase, "HEAD");
+  const baseContainsAdoption = isAncestor(repoRoot, adoptionBase, defaultBase);
+  return headContainsAdoption && !baseContainsAdoption
+    ? adoptionBase
+    : defaultBase;
 }
 
 export function parseChangedFiles(output) {
