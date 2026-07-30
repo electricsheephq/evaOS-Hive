@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::Write,
     sync::{
-        atomic::{AtomicBool, AtomicU16},
+        atomic::{AtomicBool, AtomicI64, AtomicU16},
         Arc, Mutex,
     },
 };
@@ -30,6 +30,8 @@ pub struct AppState {
     /// Workspace-provided relay URL override. Set by `apply_workspace` on app
     /// init and takes priority over env vars and compile-time defaults.
     pub relay_url_override: Mutex<Option<String>>,
+    /// Unix expiry for the installed managed entitlement. Zero means none.
+    pub managed_entitlement_expires_at_unix: AtomicI64,
     /// Set during backend setup when managed agents are eligible for launch
     /// restore. `apply_workspace` consumes it after installing the workspace
     /// relay and identity, so agents never start against the fallback relay.
@@ -203,6 +205,7 @@ pub fn build_app_state() -> AppState {
              header across origins (redirect-hop SSRF)",
         ),
         relay_url_override: Mutex::new(None),
+        managed_entitlement_expires_at_unix: AtomicI64::new(0),
         managed_agent_restore_pending: AtomicBool::new(false),
         managed_agent_profile_reconcile_enabled: AtomicBool::new(true),
         shutdown_started: AtomicBool::new(false),
@@ -316,7 +319,6 @@ impl AppState {
             .map_err(|e| e.to_string())
             .map(|k| k.clone())
     }
-
     /// Emit the current huddle state to the frontend via Tauri event.
     ///
     /// Acquires both locks (app_handle + huddle_state), clones a snapshot,
@@ -335,7 +337,6 @@ impl AppState {
         crate::huddle::state::emit_huddle_state(&app, &snapshot);
     }
 }
-
 /// Resolve the user's identity key from the app data directory and wire
 /// the resulting [`RecoveryState`] into `AppState`.
 ///
@@ -358,7 +359,6 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
     if identity_from_env().is_some() {
         return Ok(());
     }
-
     let data_dir = app
         .path()
         .app_data_dir()

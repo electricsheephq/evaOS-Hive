@@ -22,7 +22,12 @@ export function ElectricSheepSettingsCard() {
   const refresh = React.useCallback(async () => {
     setRefreshing(true);
     try {
-      setStatus(await getEvaosTeamsAuthStatus());
+      const nextStatus = await getEvaosTeamsAuthStatus();
+      if (nextStatus.phase !== "active") {
+        window.location.reload();
+        return;
+      }
+      setStatus(nextStatus);
       setError(null);
     } catch (refreshError) {
       setError(

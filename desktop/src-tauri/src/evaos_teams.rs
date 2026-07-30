@@ -34,7 +34,6 @@ mod authorization;
 mod callback;
 mod company_agents;
 mod device_code;
-
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
@@ -52,7 +51,6 @@ const KEY_BINDING_KIND: u16 = 27_235;
 const KEY_BINDING_SCHEMA: &str = "evaos.buzz_key_binding.v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
 fn managed_store() -> &'static SecretStore {
     static STORE: OnceLock<SecretStore> = OnceLock::new();
     STORE.get_or_init(|| SecretStore::keyring(KEYRING_SERVICE))
@@ -456,13 +454,14 @@ fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Re
     }
     Ok(true)
 }
-
 fn disable_managed_access(app_state: &AppState) {
     if let Ok(mut relay) = app_state.relay_url_override.lock() {
+        app_state
+            .managed_entitlement_expires_at_unix
+            .store(0, std::sync::atomic::Ordering::Release);
         *relay = None;
     }
 }
-
 fn install_entitlement(
     app_state: &AppState,
     keys: &Keys,
@@ -482,11 +481,18 @@ fn install_entitlement(
         return Err("Native identity changed during managed verification".to_string());
     }
     let relay = validate_entitlement(entitlement, &active_public_key)?;
+    let expires_at = chrono::DateTime::parse_from_rfc3339(&entitlement.expires_at)
+        .map_err(|_| "managed entitlement expiry is invalid".to_string())?
+        .timestamp();
     disable_managed_access(app_state);
-    *app_state
+    let mut active_relay = app_state
         .relay_url_override
         .lock()
-        .map_err(|error| error.to_string())? = Some(relay);
+        .map_err(|error| error.to_string())?;
+    app_state
+        .managed_entitlement_expires_at_unix
+        .store(expires_at, std::sync::atomic::Ordering::Release);
+    *active_relay = Some(relay);
     app_state
         .managed_agent_restore_pending
         .store(true, std::sync::atomic::Ordering::Release);

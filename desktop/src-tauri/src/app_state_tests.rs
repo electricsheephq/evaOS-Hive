@@ -3,7 +3,6 @@ use super::*;
 fn assert_key_eq(a: &Keys, b: &Keys) {
     assert_eq!(a.public_key().to_hex(), b.public_key().to_hex());
 }
-
 /// `BUZZ_PRIVATE_KEY` is process-global; serialize the env-mutating tests
 /// so they don't race each other under the parallel test runner.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -917,6 +916,8 @@ fn reachable_but_empty_with_marker_and_no_file_returns_lost_ephemeral_not_persis
 
 #[cfg(feature = "evaos-teams-managed")]
 fn authorize_managed_signing_test(state: &AppState) {
+    let expiry = &state.managed_entitlement_expires_at_unix;
+    expiry.store(i64::MAX, std::sync::atomic::Ordering::Relaxed);
     *state.relay_url_override.lock().unwrap() = Some("wss://relay.example.com".to_string());
 }
 #[cfg(not(feature = "evaos-teams-managed"))]

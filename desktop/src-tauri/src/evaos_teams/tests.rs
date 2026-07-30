@@ -260,6 +260,12 @@ fn existing_native_key_activates_without_replacing_identity() {
         state.relay_url_override.lock().unwrap().as_deref(),
         Some("wss://relay.example.com")
     );
+    assert!(
+        state
+            .managed_entitlement_expires_at_unix
+            .load(std::sync::atomic::Ordering::Acquire)
+            > chrono::Utc::now().timestamp()
+    );
 }
 
 #[test]
@@ -276,6 +282,12 @@ fn entitlement_install_rejects_a_stale_verification_identity() {
 
     assert!(result.is_err());
     assert!(state.relay_url_override.lock().unwrap().is_none());
+    assert_eq!(
+        state
+            .managed_entitlement_expires_at_unix
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
 }
 
 #[test]
