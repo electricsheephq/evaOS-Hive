@@ -1,9 +1,7 @@
 use nostr::{Keys, ToBech32};
 use zeroize::Zeroizing;
 
-use super::{
-    migration_marker_path, write_migration_marker, AppState, IdentityKeyStore, IDENTITY_KEY_NAME,
-};
+use super::{migration_marker_path, write_migration_marker, IdentityKeyStore, IDENTITY_KEY_NAME};
 
 /// Persist a managed OAuth-recovered identity to the OS keyring without ever
 /// creating a plaintext file fallback.
@@ -45,7 +43,7 @@ pub(super) fn persist_managed_identity_to_keyring(
 #[cfg(feature = "evaos-teams-managed")]
 pub(crate) fn persist_managed_recovered_identity(
     store: &crate::secret_store::SecretStore,
-    state: &AppState,
+    state: &super::AppState,
     keys: &Keys,
     legacy_path: &std::path::Path,
     data_dir: &std::path::Path,

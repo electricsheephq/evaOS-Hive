@@ -661,7 +661,6 @@ async fn verify_key_challenge(
     bind_verified_entitlement(verified.entitlement, challenge, &public_key)
 }
 
-#[cfg(feature = "evaos-teams-managed")]
 fn pending_session_entries(session: &str) -> HashMap<String, String> {
     HashMap::from([
         (SESSION_KEY.to_string(), session.to_string()),
