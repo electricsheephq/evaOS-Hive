@@ -282,14 +282,11 @@ function ManagedSignOutSection() {
   async function handleManagedSignOut() {
     setIsPending(true);
     try {
-      const status = await logoutEvaosTeams();
-      if (status.phase !== "signed_out") {
-        throw new Error(status.message ?? "Hive sign-out is still pending.");
-      }
+      await logoutEvaosTeams();
       window.location.reload();
     } catch (error) {
-      setIsPending(false);
       toast.error(error instanceof Error ? error.message : "Sign out failed.");
+      window.location.reload();
     }
   }
 

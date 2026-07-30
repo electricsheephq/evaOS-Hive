@@ -9,11 +9,13 @@ use tokio::sync::oneshot;
 
 use super::device_code::normalize_device_code;
 
+/// State held by the single-use local OAuth callback listener.
 pub(super) struct LoginCallback {
     pub(super) expected_state: String,
     pub(super) sender: Mutex<Option<oneshot::Sender<Result<String, String>>>>,
 }
 
+/// Validate callback state and normalize the proof-bound device code.
 pub(super) fn callback_device_code(
     query: &HashMap<String, String>,
     expected_state: &str,
@@ -30,6 +32,8 @@ pub(super) fn callback_device_code(
     Err("Authentication callback did not match this login attempt".to_string())
 }
 
+/// Complete the local OAuth callback without exposing session material to the
+/// browser.
 pub(super) async fn login_callback(
     Query(query): Query<HashMap<String, String>>,
     State(state): State<std::sync::Arc<LoginCallback>>,

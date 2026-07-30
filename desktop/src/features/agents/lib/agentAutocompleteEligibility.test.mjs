@@ -175,7 +175,7 @@ test("shouldHideAgentFromMentions: never hides non-agents", () => {
   );
 });
 
-test("shouldHideAgentFromMentions: shows invocable agents even when non-member", () => {
+test("shouldHideAgentFromMentions: shows invocable relay agents even when absent from local managed agents", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,

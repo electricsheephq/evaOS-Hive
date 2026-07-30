@@ -1,5 +1,10 @@
 use super::*;
 
+#[test]
+fn managed_session_keyring_service_remains_upgrade_compatible() {
+    assert_eq!(KEYRING_SERVICE, "evaos-teams-desktop");
+}
+
 fn challenge(keys: &Keys) -> ChallengeResponse {
     let challenge = KeyBindingChallenge {
         schema_version: KEY_BINDING_SCHEMA.to_string(),
@@ -255,6 +260,22 @@ fn existing_native_key_activates_without_replacing_identity() {
         state.relay_url_override.lock().unwrap().as_deref(),
         Some("wss://relay.example.com")
     );
+}
+
+#[test]
+fn entitlement_install_rejects_a_stale_verification_identity() {
+    let verified_keys = Keys::generate();
+    let state = crate::app_state::build_app_state();
+    *state.keys.lock().unwrap() = Keys::generate();
+
+    let result = install_entitlement(
+        &state,
+        &verified_keys,
+        &entitlement(Some(verified_keys.public_key().to_hex())),
+    );
+
+    assert!(result.is_err());
+    assert!(state.relay_url_override.lock().unwrap().is_none());
 }
 
 #[test]

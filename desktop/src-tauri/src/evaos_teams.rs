@@ -22,7 +22,7 @@ use zeroize::Zeroizing;
 
 use crate::{app_state::AppState, secret_store::SecretStore};
 use authorization::native_identity_for_managed_verification;
-pub(crate) use authorization::require_managed_authorization;
+pub(crate) use authorization::{require_managed_authorization, require_managed_identity_recovery};
 #[cfg(test)]
 use callback::callback_device_code;
 use callback::{login_callback, LoginCallback};
@@ -43,7 +43,9 @@ const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
 // is intentionally absent from source control and is not an authorization
 // credential; authorization still comes only from the opaque desktop session.
 const SUPABASE_PUBLISHABLE_KEY: Option<&str> = option_env!("HIVE_SUPABASE_PUBLISHABLE_KEY");
-const KEYRING_SERVICE: &str = "hive-desktop";
+// Keep the legacy internal service name so upgrades retain and can revoke the
+// existing opaque desktop session. This identifier is not product copy.
+const KEYRING_SERVICE: &str = "evaos-teams-desktop";
 const SESSION_KEY: &str = "electric_desktop_session";
 const LOGOUT_PENDING_KEY: &str = "logout_pending";
 const KEY_BINDING_KIND: u16 = 27_235;
@@ -466,7 +468,20 @@ fn install_entitlement(
     keys: &Keys,
     entitlement: &EvaosTeamsEntitlement,
 ) -> Result<(), String> {
-    let relay = validate_entitlement(entitlement, &keys.public_key().to_hex())?;
+    let _identity_guard = app_state
+        .identity_mutation
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let active_public_key = app_state
+        .keys
+        .lock()
+        .map_err(|error| error.to_string())?
+        .public_key()
+        .to_hex();
+    if active_public_key != keys.public_key().to_hex() {
+        return Err("Native identity changed during managed verification".to_string());
+    }
+    let relay = validate_entitlement(entitlement, &active_public_key)?;
     disable_managed_access(app_state);
     *app_state
         .relay_url_override

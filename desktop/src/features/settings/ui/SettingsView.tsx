@@ -199,6 +199,9 @@ export function SettingsView({
     () => new Map(visibleSections.map((entry) => [entry.value, entry])),
     [visibleSections],
   );
+  const effectiveSection = visibleSectionByValue.has(section)
+    ? section
+    : (visibleSections[0]?.value ?? "appearance");
   const visibleNavGroups = React.useMemo(
     () =>
       settingsNavGroups
@@ -341,9 +344,9 @@ export function SettingsView({
           >
             <div
               className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4"
-              data-testid={`settings-panel-${section}`}
+              data-testid={`settings-panel-${effectiveSection}`}
             >
-              {renderSettingsSection(section, {
+              {renderSettingsSection(effectiveSection, {
                 currentPubkey,
                 fallbackDisplayName,
                 isUpdatingDesktopNotifications,

@@ -214,6 +214,7 @@ pub async fn import_identity(
         // this import.
         let state = app_handle.state::<AppState>();
         let _mutation_guard = state.identity_mutation.lock().map_err(|e| e.to_string())?;
+        crate::evaos_teams::require_managed_identity_recovery(&state)?;
 
         let data_dir = app_handle
             .path()
