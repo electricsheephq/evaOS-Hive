@@ -3,10 +3,10 @@ import test from "node:test";
 
 import {
   coalesceAgentAutocompleteCandidates,
-  getChannelAddableAgentPubkeys,
   getDirectMessageAgentPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
+  isAgentIdentityAddable,
   isAgentIdentityInManagedList,
   isAgentIdentityMentionable,
   relayAgentIsSharedWithUser,
@@ -48,6 +48,57 @@ test("getSharedChannelIds: includes only active joined channels", () => {
     ]),
     new Set(["joined"]),
   );
+});
+
+test("direct messages include verified company identities without granting mention policy", () => {
+  assert.deepEqual(
+    getDirectMessageAgentPubkeys({
+      companyAgentPubkeys: [PUB_B.toUpperCase()],
+      currentPubkey: CURRENT_PUBKEY,
+      managedAgentPubkeys: [PUB_A],
+      relayAgents: [],
+      sharedChannelIds: new Set(),
+    }),
+    new Set([PUB_A, PUB_B]),
+  );
+});
+
+test("channel add accepts verified provider identities without claiming local ownership", () => {
+  const candidate = { isAgent: true, pubkey: PUB_B.toUpperCase() };
+  assert.equal(
+    isAgentIdentityAddable(candidate, new Set(), new Set([PUB_B])),
+    true,
+  );
+  assert.equal(isAgentIdentityInManagedList(candidate, new Set()), false);
+});
+
+test("native bot membership admits a remote identity to current-channel mentions", () => {
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: true, isMember: true, pubkey: PUB_B, role: "bot" },
+      new Set(),
+    ),
+    true,
+  );
+  assert.equal(
+    isAgentIdentityMentionable(
+      { isAgent: true, isMember: false, pubkey: PUB_B, role: "bot" },
+      new Set(),
+    ),
+    false,
+  );
+});
+
+test("verified provider membership tolerates stale invocation metadata only in-channel", () => {
+  const base = {
+    isAgent: true,
+    pubkey: PUB_B,
+    mentionableAgentPubkeys: new Set(),
+    directoryAgentPubkeys: new Set([PUB_B]),
+    companyAgentPubkeys: new Set([PUB_B]),
+  };
+  assert.equal(shouldHideAgentFromMentions({ ...base, isMember: true }), false);
+  assert.equal(shouldHideAgentFromMentions({ ...base, isMember: false }), true);
 });
 
 test("relayAgentIsSharedWithUser: accepts shared anyone agents and rejects unshared ones", () => {
@@ -139,31 +190,6 @@ test("getMentionableAgentPubkeys: keeps managed agents and shared relay agents",
   assert.deepEqual(result, new Set([PUB_A, PUB_B, PUB_C]));
 });
 
-test("catalog-only agents are DM-addressable without becoming mentionable", () => {
-  const input = {
-    managedAgentPubkeys: [],
-    currentPubkey: CURRENT_PUBKEY,
-    relayAgents: [
-      {
-        pubkey: PUB_A,
-        respondTo: null,
-        respondToAllowlist: [],
-        channelIds: [],
-      },
-    ],
-    sharedChannelIds: new Set(),
-  };
-
-  assert.deepEqual(getMentionableAgentPubkeys(input), new Set());
-  assert.deepEqual(
-    getDirectMessageAgentPubkeys({
-      ...input,
-      companyAgentPubkeys: [PUB_A.toUpperCase()],
-    }),
-    new Set([PUB_A]),
-  );
-});
-
 test("isAgentIdentityInManagedList: keeps people and only current managed agent identities", () => {
   const managedAgentPubkeys = new Set([PUB_A]);
 
@@ -190,61 +216,6 @@ test("isAgentIdentityInManagedList: keeps people and only current managed agent 
   );
 });
 
-test("channel add eligibility admits verified company agents without trusting unrelated relay agents", () => {
-  const addableAgentPubkeys = getChannelAddableAgentPubkeys({
-    companyAgentPubkeys: [PUB_B.toUpperCase()],
-    managedAgentPubkeys: [PUB_A],
-  });
-
-  assert.equal(
-    isAgentIdentityInManagedList(
-      { isAgent: true, pubkey: PUB_B },
-      addableAgentPubkeys,
-    ),
-    true,
-  );
-  assert.equal(
-    isAgentIdentityInManagedList(
-      { isAgent: true, pubkey: PUB_C },
-      addableAgentPubkeys,
-    ),
-    false,
-  );
-});
-
-test("isAgentIdentityMentionable: admits verified in-channel agents without a bot membership role", () => {
-  const managedAgentPubkeys = new Set([PUB_A]);
-
-  assert.equal(
-    isAgentIdentityMentionable(
-      { isAgent: true, isMember: true, pubkey: PUB_B, role: "bot" },
-      managedAgentPubkeys,
-    ),
-    true,
-  );
-  assert.equal(
-    isAgentIdentityMentionable(
-      { isAgent: true, isMember: true, pubkey: PUB_B, role: "member" },
-      managedAgentPubkeys,
-    ),
-    true,
-  );
-  assert.equal(
-    isAgentIdentityMentionable(
-      { isAgent: true, pubkey: PUB_B },
-      managedAgentPubkeys,
-    ),
-    false,
-  );
-  assert.equal(
-    isAgentIdentityMentionable(
-      { isAgent: false, isMember: true, pubkey: PUB_B, role: "member" },
-      managedAgentPubkeys,
-    ),
-    true,
-  );
-});
-
 test("shouldHideAgentFromMentions: never hides non-agents", () => {
   assert.equal(
     shouldHideAgentFromMentions({
@@ -252,6 +223,7 @@ test("shouldHideAgentFromMentions: never hides non-agents", () => {
       isMember: false,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
+      directoryAgentPubkeys: new Set([PUB_A]),
     }),
     false,
   );
@@ -264,6 +236,7 @@ test("shouldHideAgentFromMentions: shows invocable agents even when non-member",
       isMember: false,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set([PUB_A]),
+      directoryAgentPubkeys: new Set([PUB_A]),
     }),
     false,
   );
@@ -276,30 +249,33 @@ test("shouldHideAgentFromMentions: hides non-member non-invocable agents", () =>
       isMember: false,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
+      directoryAgentPubkeys: new Set(),
     }),
     true,
   );
 });
 
-test("shouldHideAgentFromMentions: shows room bot members despite stale relay invocation policy", () => {
+test("shouldHideAgentFromMentions: hides member agents with an explicit not-invocable directory entry (Fizz)", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,
       isMember: true,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
+      directoryAgentPubkeys: new Set([PUB_A]),
     }),
-    false,
+    true,
   );
 });
 
-test("shouldHideAgentFromMentions: shows member agents with unknown invocability", () => {
+test("shouldHideAgentFromMentions: shows member agents with unknown invocability (not in directory)", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,
       isMember: true,
       pubkey: PUB_A,
       mentionableAgentPubkeys: new Set(),
+      directoryAgentPubkeys: new Set(),
     }),
     false,
   );
@@ -312,11 +288,12 @@ test("shouldHideAgentFromMentions: normalizes the pubkey before lookup", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,
-      isMember: false,
+      isMember: true,
       pubkey: mixedCase,
-      mentionableAgentPubkeys: new Set([normalized]),
+      mentionableAgentPubkeys: new Set(),
+      directoryAgentPubkeys: new Set([normalized]),
     }),
-    false,
+    true,
   );
 });
 

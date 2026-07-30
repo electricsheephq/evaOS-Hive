@@ -19,7 +19,6 @@
 //! short-circuit for the human key, child-process env injection for agents);
 //! adding an env tier here would duplicate that precedence and create a
 //! divergent-behavior trap.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -212,6 +211,7 @@ impl Drop for BlobLockGuard {
 }
 
 // ── End interprocess advisory lock ────────────────────────────────────────
+
 /// An OS keyring, addressed by service name. All secrets are stored in a
 /// single JSON blob entry (one OS prompt per process lifetime).
 pub struct SecretStore {

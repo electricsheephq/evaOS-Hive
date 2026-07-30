@@ -5,11 +5,9 @@ import {
   Rocket,
   Share2,
   Trash2,
-  Upload,
 } from "lucide-react";
 
 import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
-import { shouldPresentLocalAgentTeam } from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
 import {
   DropdownMenu,
@@ -39,7 +37,6 @@ type TeamsSectionProps = {
   onAddToChannel: (team: AgentTeam) => void;
   onShare: (team: AgentTeam) => void;
   onImport: () => void;
-  retireLocalWelcomePresentation: boolean;
 };
 
 export function TeamsSection({
@@ -55,12 +52,7 @@ export function TeamsSection({
   onAddToChannel,
   onShare,
   onImport,
-  retireLocalWelcomePresentation,
 }: TeamsSectionProps) {
-  const visibleTeams = teams.filter((team) =>
-    shouldPresentLocalAgentTeam(retireLocalWelcomePresentation, team.id),
-  );
-
   return (
     <section className="relative space-y-4" data-testid="agents-library-teams">
       <div className={TEAM_CARD_COLUMN_CLASS}>
@@ -92,7 +84,7 @@ export function TeamsSection({
 
       {!isLoading ? (
         <div className={TEAM_CARD_GRID_CLASS}>
-          {visibleTeams.map((team) => {
+          {teams.map((team) => {
             const resolution = resolveTeamPersonas(team, personas);
             const missingPersonaCount = resolution.missingPersonaCount;
             const hasMissingPersonas = resolution.hasMissingPersonas;
@@ -208,11 +200,7 @@ function NewTeamCard({
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <CreateIdentityCard
-          ariaLabel="New team"
-          dataTestId="new-team-card"
-          label="New team"
-        />
+        <CreateIdentityCard ariaLabel="New team" dataTestId="new-team-card" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
@@ -222,8 +210,7 @@ function NewTeamCard({
           Create team
         </DropdownMenuItem>
         <DropdownMenuItem disabled={isPending} onClick={onImport}>
-          <Upload className="h-4 w-4" />
-          Import team snapshot
+          Import
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

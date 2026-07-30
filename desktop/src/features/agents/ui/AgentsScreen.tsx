@@ -3,8 +3,6 @@ import * as React from "react";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { usePersonasQuery } from "@/features/agents/hooks";
 import { useOpenDmMutation } from "@/features/channels/hooks";
-import { useRetireLocalWelcomePresentation } from "@/features/evaosTeams/hooks";
-import { shouldPresentLocalWelcomePersona } from "@/features/onboarding/localWelcomeTeamPolicy";
 import {
   type ProfilePanelTab,
   type ProfilePanelView,
@@ -43,7 +41,6 @@ const AGENTS_PROFILE_SEARCH_KEYS = [
 export function AgentsScreen() {
   const identityQuery = useIdentityQuery();
   const personasQuery = usePersonasQuery();
-  const retireLocalWelcomePresentation = useRetireLocalWelcomePresentation();
   const { applyPatch, values } = useHistorySearchState(
     AGENTS_PROFILE_SEARCH_KEYS,
   );
@@ -58,24 +55,13 @@ export function AgentsScreen() {
       const persona = personasQuery.data?.find(
         (candidate) => candidate.id === values.profilePersona,
       );
-      if (
-        persona &&
-        shouldPresentLocalWelcomePersona(
-          retireLocalWelcomePresentation,
-          persona,
-        )
-      ) {
+      if (persona) {
         return { kind: "persona", persona };
       }
     }
 
     return null;
-  }, [
-    personasQuery.data,
-    retireLocalWelcomePresentation,
-    values.profile,
-    values.profilePersona,
-  ]);
+  }, [personasQuery.data, values.profile, values.profilePersona]);
   const threadPanelWidth = useThreadPanelWidth();
   const openDmMutation = useOpenDmMutation();
   const { goChannel } = useAppNavigation();

@@ -138,23 +138,29 @@ pub async fn sign_event(
 }
 
 #[tauri::command]
-pub fn decrypt_observer_event(
+pub async fn decrypt_observer_event(
     event_json: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let keys = state.signing_keys()?;
-    let event = Event::from_json(event_json).map_err(|error| format!("invalid event: {error}"))?;
 
-    // Defense-in-depth: verify event ID and signature before decrypting.
-    if !event.verify_id() {
-        return Err("observer event has invalid ID".into());
-    }
-    if !event.verify_signature() {
-        return Err("observer event has invalid signature".into());
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let event =
+            Event::from_json(event_json).map_err(|error| format!("invalid event: {error}"))?;
 
-    buzz_core_pkg::observer::decrypt_observer_payload(&keys, &event)
-        .map_err(|error| format!("decrypt observer event failed: {error}"))
+        // Defense-in-depth: verify event ID and signature before decrypting.
+        if !event.verify_id() {
+            return Err("observer event has invalid ID".into());
+        }
+        if !event.verify_signature() {
+            return Err("observer event has invalid signature".into());
+        }
+
+        buzz_core_pkg::observer::decrypt_observer_payload(&keys, &event)
+            .map_err(|error| format!("decrypt observer event failed: {error}"))
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
 #[tauri::command]
@@ -200,7 +206,7 @@ pub async fn import_identity(
     app_handle: tauri::AppHandle,
 ) -> Result<IdentityInfo, String> {
     if cfg!(feature = "evaos-teams-managed") {
-        return Err("Managed identity import is disabled".to_string());
+        return Err("Managed identity import is reserved for identity restoration".to_string());
     }
     tokio::task::spawn_blocking(move || {
         let trimmed = nsec.trim();
@@ -278,7 +284,7 @@ pub async fn persist_current_identity(
     app_handle: tauri::AppHandle,
 ) -> Result<IdentityInfo, String> {
     if cfg!(feature = "evaos-teams-managed") {
-        return Err("Managed identity persistence is broker-controlled".to_string());
+        return Err("Managed identity persistence is handled by native startup".to_string());
     }
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
@@ -347,7 +353,7 @@ pub async fn persist_current_identity(
 #[tauri::command]
 pub async fn sign_out(app: tauri::AppHandle) -> Result<(), String> {
     if cfg!(feature = "evaos-teams-managed") {
-        return Err("Use managed evaOS Teams logout".to_string());
+        return Err("Use Hive managed sign-out".to_string());
     }
     if is_shared_identity() {
         return Err(
@@ -423,7 +429,7 @@ pub async fn sign_nostr_identity_binding(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     if cfg!(feature = "evaos-teams-managed") {
-        return Err("Managed identity binding is broker-controlled".to_string());
+        return Err("Managed identity authority cannot be changed by deep link".to_string());
     }
     nostr_bind::validate_signing_request(
         &challenge_id,
@@ -433,7 +439,11 @@ pub async fn sign_nostr_identity_binding(
         &expires_at,
     )?;
 
-    let keys = state.signing_keys()?;
+    let keys = state
+        .keys
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         let event = build_nostr_identity_binding_event(

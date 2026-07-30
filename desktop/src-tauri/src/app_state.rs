@@ -15,8 +15,6 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::huddle::HuddleState;
 use crate::managed_agents::config_bridge::SessionConfigCache;
 use crate::managed_agents::{ManagedAgentPairRuntime, ManagedAgentRuntimeKey};
-mod signing;
-
 pub struct AppState {
     pub keys: Mutex<Keys>,
     pub http_client: reqwest::Client,
@@ -92,7 +90,6 @@ pub struct AppState {
     /// a newer imported key during concurrent calls. Deliberately separate from
     /// `keys` so readers (signing, get_identity, etc.) are not blocked during
     /// keyring I/O.
-    #[cfg_attr(feature = "evaos-teams-managed", allow(dead_code))]
     pub identity_mutation: Mutex<()>,
     /// Set when the boot-time Phase 2 reset attempted a wipe but verification
     /// failed. The sentinel is preserved so the next relaunch retries. All
@@ -102,13 +99,10 @@ pub struct AppState {
     /// Ordering: written once in `setup()` with `Ordering::Release`; read in
     /// `get_identity` with `Ordering::Acquire`.
     pub reset_failed: AtomicBool,
-    /// Managed builds may sign only after the Electric broker has refreshed a
-    /// current entitlement for the Keychain-held identity. Native Buzz keeps
-    /// this true and preserves its existing identity behavior.
+    /// Managed Hive builds may sign and publish only after Electric OAuth plus
+    /// canonical-key verification installs a current entitlement. Native Buzz
+    /// starts authorized and preserves its existing behavior.
     pub evaos_teams_authorized: AtomicBool,
-    /// Prevents repeated entitlement refreshes from starting duplicate native
-    /// owner-keyed reconciliation and pending-event workers.
-    pub evaos_teams_native_runtime_started: AtomicBool,
     /// Cached ACP session config from running agents, keyed by canonical
     /// `(agent pubkey, relay URL)` runtime identity.
     /// Populated when the harness emits `session_config_captured` observer events.
@@ -188,7 +182,6 @@ pub fn build_media_fetch_client() -> reqwest::Result<reqwest::Client> {
 pub fn build_app_state() -> AppState {
     // Env var takes precedence (dev/CI). If absent, resolve_persisted_identity()
     // in setup() will replace the ephemeral placeholder with a persisted key.
-    #[cfg(not(feature = "evaos-teams-managed"))]
     let keys = match identity_from_env() {
         Some(keys) => {
             eprintln!(
@@ -199,8 +192,6 @@ pub fn build_app_state() -> AppState {
         }
         None => Keys::generate(),
     };
-    #[cfg(feature = "evaos-teams-managed")]
-    let keys = Keys::generate();
 
     AppState {
         keys: Mutex::new(keys),
@@ -236,7 +227,6 @@ pub fn build_app_state() -> AppState {
         identity_lost: AtomicBool::new(false),
         reset_failed: AtomicBool::new(false),
         evaos_teams_authorized: AtomicBool::new(!cfg!(feature = "evaos-teams-managed")),
-        evaos_teams_native_runtime_started: AtomicBool::new(false),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]
@@ -324,6 +314,8 @@ impl AppState {
         crate::huddle::state::emit_huddle_state(&app, &snapshot);
     }
 }
+
+mod signing;
 
 /// Resolve the user's identity key from the app data directory and wire
 /// the resulting [`RecoveryState`] into `AppState`.
@@ -473,41 +465,7 @@ fn resolve_identity_with_store(
 
     match store.probe(IDENTITY_KEY_NAME) {
         KeyringProbe::Present => {
-            let loaded = match store.load(IDENTITY_KEY_NAME) {
-                Ok(value) => value,
-                Err(error) => {
-                    if legacy_path.exists() {
-                        match load_key_file(legacy_path) {
-                            Ok(keys) => {
-                                eprintln!(
-                                    "buzz-desktop: keyring identity present but unreadable \
-                                     ({error}); using identity.key fallback for this boot"
-                                );
-                                return Ok(ResolvedIdentity {
-                                    keys,
-                                    recovery: RecoveryState::None,
-                                });
-                            }
-                            Err(file_error) => eprintln!(
-                                "buzz-desktop: keyring identity present but unreadable \
-                                 ({error}); identity.key fallback failed ({file_error})"
-                            ),
-                        }
-                    }
-                    let ephemeral = Keys::generate();
-                    eprintln!(
-                        "buzz-desktop: keyring identity present but unreadable ({error}); \
-                         booting keyring-locked recovery with ephemeral key {} — \
-                         unlock the keyring and relaunch",
-                        ephemeral.public_key().to_hex()
-                    );
-                    return Ok(ResolvedIdentity {
-                        keys: ephemeral,
-                        recovery: RecoveryState::KeyringLocked,
-                    });
-                }
-            };
-            if let Some(nsec) = loaded {
+            if let Some(nsec) = store.load(IDENTITY_KEY_NAME)? {
                 match Keys::parse(nsec.trim()) {
                     Ok(keyring_keys) => {
                         eprintln!(
@@ -910,7 +868,6 @@ fn persist_imported_identity_impl(
 
 /// Public entry point binding [`persist_imported_identity_impl`] to the shared
 /// [`crate::secret_store::SecretStore`]. See the impl for the persistence policy.
-#[cfg_attr(feature = "evaos-teams-managed", allow(dead_code))]
 pub(crate) fn persist_imported_identity(
     store: &crate::secret_store::SecretStore,
     keys: &Keys,
@@ -1103,9 +1060,6 @@ pub(crate) fn save_key_file(path: &std::path::Path, keys: &Keys) -> Result<(), S
         .map_err(|e| format!("commit identity.key: {e}"))
 }
 
-#[cfg(test)]
-#[path = "app_state_keyring_read_failure_tests.rs"]
-mod keyring_read_failure_tests;
 #[cfg(test)]
 #[path = "app_state_tests.rs"]
 mod tests;

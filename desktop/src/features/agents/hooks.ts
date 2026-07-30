@@ -21,6 +21,7 @@ import { evictUsersBatchEntries } from "@/features/profile/hooks";
 import {
   createManagedAgent,
   deleteManagedAgent,
+  deleteCustomHarness,
   discoverAcpRuntimes,
   discoverBackendProviders,
   discoverGitBashPrerequisite,
@@ -33,19 +34,16 @@ import {
   getRuntimeFileConfig,
   installAcpRuntime,
   listManagedAgents,
+  saveCustomHarness,
   updateManagedAgent,
 } from "@/shared/api/tauri";
+import type { HarnessDefinitionInput } from "@/shared/api/tauri";
 import {
   setManagedAgentAutoRestart,
   setManagedAgentStartOnAppLaunch,
   startManagedAgent,
   stopManagedAgent,
 } from "@/shared/api/tauriManagedAgents";
-import { useHiveCompanyAgentsQuery } from "@/features/evaosTeams/hooks";
-import {
-  relayAgentsQueryKey,
-  useRelayAgentsQuery,
-} from "@/features/agents/relayAgentsQuery";
 import { bootstrapManagedAgentRuntimePairs } from "@/features/agents/managedAgentRuntimeHooks";
 import {
   createPersona,
@@ -65,6 +63,7 @@ import {
   updatePersona,
 } from "@/shared/api/tauriPersonas";
 import { teamsQueryKey } from "@/features/agents/teamHooks";
+import { relayAgentsQueryKey } from "@/features/agents/relayAgentsQuery";
 import type {
   AcpRuntime,
   AgentPersona,
@@ -75,6 +74,7 @@ import type {
   UpdateManagedAgentInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   AttachManagedAgentToChannelInput,
   CreateChannelManagedAgentInput,
@@ -84,10 +84,11 @@ import type {
   EnsureChannelAgentPresetResult,
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
-import { normalizePubkey } from "@/shared/lib/pubkey";
-import { isLocalWelcomePersonaId } from "@/features/onboarding/localWelcomeTeamPolicy";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 export { findReusableAgent } from "@/features/agents/agentReuse";
+export {
+  relayAgentsQueryKey,
+  useRelayAgentsQuery,
+} from "@/features/agents/relayAgentsQuery";
 export {
   teamsQueryKey,
   useCreateTeamMutation,
@@ -107,7 +108,6 @@ export type {
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
 
-export { relayAgentsQueryKey, useRelayAgentsQuery };
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
@@ -115,6 +115,7 @@ export const acpAuthMethodsQueryKey = ["acp-auth-methods"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 export const backendProvidersQueryKey = ["backend-providers"] as const;
 export const gitBashPrerequisiteQueryKey = ["git-bash-prerequisite"] as const;
+
 type InvalidateAgentQueriesOptions = {
   refetchChannels?: boolean;
 };
@@ -242,6 +243,32 @@ export function useInstallAcpRuntimeMutation() {
   });
 }
 
+export function useSaveCustomHarnessMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      definition,
+      originalId,
+    }: {
+      definition: HarnessDefinitionInput;
+      originalId?: string;
+    }) => saveCustomHarness(definition, originalId),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: acpRuntimesQueryKey });
+    },
+  });
+}
+
+export function useDeleteCustomHarnessMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteCustomHarness(id),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: acpRuntimesQueryKey });
+    },
+  });
+}
+
 export function useGitBashPrerequisiteQuery() {
   return useQuery({
     queryKey: gitBashPrerequisiteQueryKey,
@@ -259,8 +286,9 @@ export function useBackendProvidersQuery(options?: { enabled?: boolean }) {
   });
 }
 
-export function usePersonasQuery() {
+export function usePersonasQuery(options?: { enabled?: boolean }) {
   return useQuery({
+    enabled: options?.enabled ?? true,
     queryKey: personasQueryKey,
     queryFn: listPersonas,
     staleTime: 30_000,
@@ -294,8 +322,6 @@ export function useManagedAgentPrereqsQuery(
     staleTime: 15_000,
   });
 }
-
-export { useHiveCompanyAgentsQuery };
 
 export function useManagedAgentsQuery(options?: { enabled?: boolean }) {
   return useQuery({
@@ -750,14 +776,6 @@ export function useCreateChannelManagedAgentsMutation(
     ): Promise<CreateChannelManagedAgentsResult> => {
       if (!channelId) {
         throw new Error("No channel selected.");
-      }
-      if (
-        desktopProductPolicy().managed &&
-        inputs.some((input) => isLocalWelcomePersonaId(input.personaId))
-      ) {
-        throw new Error(
-          "Hive uses the canonical company VM agents for the starter team.",
-        );
       }
 
       return createChannelManagedAgents(channelId, inputs);

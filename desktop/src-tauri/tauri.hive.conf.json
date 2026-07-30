@@ -1,7 +1,7 @@
 {
   "productName": "Hive",
   "mainBinaryName": "Hive",
-  "version": "0.4.26-es.2",
+  "version": "0.5.1-es.1",
   "identifier": "com.electricsheephq.evaos.teams",
   "plugins": {
     "updater": {
@@ -9,7 +9,7 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["evaos-teams"]
+        "schemes": ["buzz"]
       }
     }
   },

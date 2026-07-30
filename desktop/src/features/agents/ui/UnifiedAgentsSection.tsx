@@ -1,28 +1,21 @@
 import * as React from "react";
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
-  MoreVertical,
   RefreshCw,
 } from "lucide-react";
 
-import { formatAgentModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
+import { resolveAgentCardModelLabel } from "@/features/agents/lib/agentCardModelLabel";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
-import { excludeLocalAgentDuplicates } from "@/features/agents/lib/companyAgentCatalog";
 import type { CompanyVmAgent } from "@/features/agents/lib/companyAgentCatalog";
 import { useUserProfileQuery } from "@/features/profile/hooks";
-import {
-  filterLocalWelcomeAgentsForPresentation,
-  filterLocalWelcomePersonasForPresentation,
-} from "@/features/onboarding/localWelcomeTeamPolicy";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import type { ProfilePanelOpenOptions } from "@/shared/context/ProfilePanelContext";
 import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import { Badge } from "@/shared/ui/badge";
-import { Button } from "@/shared/ui/button";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -53,7 +46,6 @@ type UnifiedAgentsSectionProps = {
   onOpenPersonaProfile: (persona: AgentPersona) => void;
   onStartAgent: (pubkey: string) => void;
   onStartPersona: (persona: AgentPersona) => void;
-  canChooseCatalog: boolean;
   personas: AgentPersona[];
   personasError: Error | null;
   personaFeedbackErrorMessage: string | null;
@@ -61,12 +53,13 @@ type UnifiedAgentsSectionProps = {
   isPersonasLoading: boolean;
   isPersonasPending: boolean;
   onCreatePersona: () => void;
-  onChooseCatalog: () => void;
+  onDiscoverPersonas: () => void;
   onDuplicatePersona: (persona: AgentPersona) => void;
   onEditPersona: (persona: AgentPersona) => void;
   onSharePersona: (
     persona: AgentPersona,
     linkedAgent: ManagedAgent | undefined,
+    effectiveAvatarUrl: string | null,
   ) => void;
   onDeactivatePersona: (persona: AgentPersona) => void;
   onDeletePersona: (persona: AgentPersona) => void;
@@ -74,13 +67,13 @@ type UnifiedAgentsSectionProps = {
   companyAgents: CompanyVmAgent[];
   companyAgentsError: Error | null;
   isCompanyAgentsLoading: boolean;
-  retireLocalWelcomePresentation: boolean;
   onRefreshCompanyAgents: () => void;
-  onEditCompanyAgentPolicy?: (agent: CompanyVmAgent) => void;
 };
 
 const AGENT_CARD_COLUMN_CLASS = "w-full";
-const AGENT_CARD_GRID_CLASS = `${AGENT_CARD_COLUMN_CLASS} mx-auto grid max-w-[996px] grid-cols-[repeat(auto-fill,minmax(220px,240px))] justify-center gap-3`;
+export const AGENT_CARD_GRID_COLUMNS_CLASS =
+  "grid-cols-[repeat(auto-fill,minmax(220px,240px))]";
+const AGENT_CARD_GRID_CLASS = `${AGENT_CARD_COLUMN_CLASS} ${AGENT_CARD_GRID_COLUMNS_CLASS} grid justify-start gap-3`;
 
 export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
   const {
@@ -97,7 +90,6 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onOpenPersonaProfile,
     onStartAgent,
     onStartPersona,
-    canChooseCatalog,
     personas,
     personasError,
     personaFeedbackErrorMessage,
@@ -105,7 +97,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     isPersonasLoading,
     isPersonasPending,
     onCreatePersona,
-    onChooseCatalog,
+    onDiscoverPersonas,
     onDuplicatePersona,
     onEditPersona,
     onSharePersona,
@@ -115,35 +107,12 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     companyAgents,
     companyAgentsError,
     isCompanyAgentsLoading,
-    retireLocalWelcomePresentation,
     onRefreshCompanyAgents,
-    onEditCompanyAgentPolicy,
   } = props;
-  const isManagedHive = desktopProductPolicy().managed;
-  const visibleLocalAgents = React.useMemo(
-    () =>
-      filterLocalWelcomeAgentsForPresentation(
-        retireLocalWelcomePresentation,
-        agents,
-      ),
-    [agents, retireLocalWelcomePresentation],
-  );
-  const visiblePersonas = React.useMemo(
-    () =>
-      filterLocalWelcomePersonasForPresentation(
-        retireLocalWelcomePresentation,
-        personas,
-      ),
-    [personas, retireLocalWelcomePresentation],
-  );
 
   const { groups, ungrouped, unknown } = React.useMemo(
-    () => buildUnifiedGroups(visiblePersonas, visibleLocalAgents),
-    [visibleLocalAgents, visiblePersonas],
-  );
-  const visibleCompanyAgents = React.useMemo(
-    () => excludeLocalAgentDuplicates(companyAgents, visibleLocalAgents),
-    [companyAgents, visibleLocalAgents],
+    () => buildUnifiedGroups(personas, agents),
+    [personas, agents],
   );
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const {
@@ -198,9 +167,11 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               const profileAgent = pickProfileAgent(group.agents);
               return (
                 <AgentPersonaCard
-                  actions={
+                  actions={(effectiveAvatarUrl, isEffectiveAvatarLoading) => (
                     <PersonaActionsMenu
-                      isActionPending={isActionPending}
+                      isActionPending={
+                        isActionPending || isEffectiveAvatarLoading
+                      }
                       isPending={isPersonasPending}
                       persona={group.persona}
                       linkedAgent={profileAgent}
@@ -208,9 +179,11 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
                       onDelete={onDeletePersona}
                       onDuplicate={onDuplicatePersona}
                       onEdit={onEditPersona}
-                      onShare={onSharePersona}
+                      onShare={(persona, linkedAgent) =>
+                        onSharePersona(persona, linkedAgent, effectiveAvatarUrl)
+                      }
                     />
-                  }
+                  )}
                   agent={profileAgent}
                   defaultModel={defaultModel}
                   key={group.persona.id}
@@ -225,31 +198,20 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               );
             })}
             <NewAgentCard
-              canChooseCatalog={canChooseCatalog}
-              isPersonasPending={isPersonasPending}
-              openFilePicker={openFilePicker}
-              onChooseCatalog={onChooseCatalog}
-              onCreatePersona={onCreatePersona}
+              isPending={isPersonasPending}
+              onCreate={onCreatePersona}
+              onDiscover={onDiscoverPersonas}
+              onImport={openFilePicker}
             />
-            {isManagedHive ? (
-              <CreateIdentityCard
-                ariaLabel="Refresh registered VM agents"
-                dataTestId="refresh-company-agents-card"
-                label="Refresh registered VM agents"
-                onClick={onRefreshCompanyAgents}
-              />
-            ) : null}
           </div>
 
-          {isManagedHive ? (
-            <CompanyVmAgentsSection
-              agents={visibleCompanyAgents}
-              error={companyAgentsError}
-              isLoading={isCompanyAgentsLoading}
-              onEditPolicy={onEditCompanyAgentPolicy}
-              onOpenAgentProfile={onOpenAgentProfile}
-            />
-          ) : null}
+          <CompanyVmAgentsSection
+            agents={companyAgents}
+            error={companyAgentsError}
+            isLoading={isCompanyAgentsLoading}
+            onOpenAgentProfile={onOpenAgentProfile}
+            onRefresh={onRefreshCompanyAgents}
+          />
 
           {unknown.length > 0 ? (
             <CollapsibleAgentGroup
@@ -298,6 +260,93 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
   );
 }
 
+function CompanyVmAgentsSection({
+  agents,
+  error,
+  isLoading,
+  onOpenAgentProfile,
+  onRefresh,
+}: {
+  agents: CompanyVmAgent[];
+  error: Error | null;
+  isLoading: boolean;
+  onOpenAgentProfile: (
+    pubkey: string,
+    options?: ProfilePanelOpenOptions,
+  ) => void;
+  onRefresh: () => void;
+}) {
+  if (!isLoading && !error && agents.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className={`${AGENT_CARD_COLUMN_CLASS} space-y-2`}>
+      <div className="flex items-start justify-between gap-3 px-1">
+        <div>
+          <h2 className="text-sm font-medium">Company VM agents</h2>
+          <p className="text-xs text-muted-foreground">
+            Read-only public identities hosted by Hermes on your company VMs.
+          </p>
+        </div>
+        <button
+          className="text-xs text-muted-foreground hover:text-foreground"
+          onClick={onRefresh}
+          type="button"
+        >
+          Refresh
+        </button>
+      </div>
+      {isLoading ? (
+        <LoadingSkeleton />
+      ) : error ? (
+        <p className="px-1 text-sm text-destructive">
+          Company VM agents could not be loaded.
+        </p>
+      ) : (
+        <div className={AGENT_CARD_GRID_CLASS}>
+          {agents.map((agent) => (
+            <CompanyVmAgentCard
+              agent={agent}
+              key={agent.pubkey}
+              onOpenAgentProfile={onOpenAgentProfile}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CompanyVmAgentCard({
+  agent,
+  onOpenAgentProfile,
+}: {
+  agent: CompanyVmAgent;
+  onOpenAgentProfile: (
+    pubkey: string,
+    options?: ProfilePanelOpenOptions,
+  ) => void;
+}) {
+  const profileQuery = useUserProfileQuery(agent.pubkey);
+  const label = profileQuery.data?.displayName?.trim() || agent.name;
+  return (
+    <AgentIdentityCard
+      ariaLabel={`${label} company VM agent profile`}
+      avatarUrl={profileQuery.data?.avatarUrl}
+      dataTestId={`company-vm-agent-${agent.pubkey}`}
+      label={label}
+      modelLabel={`${agent.runtime} · ${agent.status}`}
+      onClick={() => onOpenAgentProfile(agent.pubkey)}
+      statusBadge={
+        <Badge className="mt-1 w-fit" variant="outline">
+          VM hosted
+        </Badge>
+      }
+    />
+  );
+}
+
 function AgentPersonaCard({
   actions,
   agent,
@@ -310,7 +359,10 @@ function AgentPersonaCard({
   onStartAgent,
   onStartPersona,
 }: {
-  actions?: React.ReactNode;
+  actions?: (
+    effectiveAvatarUrl: string | null,
+    isEffectiveAvatarLoading: boolean,
+  ) => React.ReactNode;
   agent: ManagedAgent | undefined;
   defaultModel: string;
   persona: AgentPersona;
@@ -325,10 +377,11 @@ function AgentPersonaCard({
   onStartPersona: (persona: AgentPersona) => void;
 }) {
   const title = persona.displayName;
-  const explicitModel = agent?.model ?? persona.model;
-  const modelLabel = explicitModel?.trim()
-    ? formatAgentModelLabel(explicitModel)
-    : formatDefaultModelLabel(defaultModel);
+  const modelLabel = resolveAgentCardModelLabel({
+    agent,
+    personaModel: persona.model,
+    defaultModel,
+  });
   const isActive = agent ? isManagedAgentActive(agent) : false;
   const profileQuery = useUserProfileQuery(agent?.pubkey);
   const avatarUrl = agent
@@ -341,7 +394,10 @@ function AgentPersonaCard({
 
   return (
     <AgentIdentityCard
-      actions={actions}
+      actions={actions?.(
+        avatarUrl,
+        Boolean(agent && !persona.avatarUrl && profileQuery.isPending),
+      )}
       ariaLabel={`${title} agent profile`}
       avatar={
         agent ? (
@@ -386,7 +442,12 @@ function AgentPersonaCard({
         onOpenPersonaProfile(persona);
       }}
       statusBadge={
-        agent?.needsRestart ? (
+        agent?.personaOrphaned ? (
+          <Badge className="gap-1" variant="warning">
+            <AlertTriangle className="h-3 w-3" />
+            Configuration missing
+          </Badge>
+        ) : agent?.needsRestart ? (
           <Badge className="gap-1" variant="warning">
             <RefreshCw className="h-3 w-3" />
             Restart required
@@ -444,11 +505,11 @@ function StandaloneAgentCard({
       avatarUrl={profileQuery.data?.avatarUrl}
       dataTestId={`managed-agent-${agent.pubkey}`}
       label={title}
-      modelLabel={
-        agent.model?.trim()
-          ? formatAgentModelLabel(agent.model)
-          : formatDefaultModelLabel(defaultModel)
-      }
+      modelLabel={resolveAgentCardModelLabel({
+        agent,
+        personaModel: null,
+        defaultModel,
+      })}
       onClick={() => {
         onOpenAgentProfile(
           agent.pubkey,
@@ -456,7 +517,12 @@ function StandaloneAgentCard({
         );
       }}
       statusBadge={
-        agent.needsRestart ? (
+        agent.personaOrphaned ? (
+          <Badge className="gap-1" variant="warning">
+            <AlertTriangle className="h-3 w-3" />
+            Configuration missing
+          </Badge>
+        ) : agent.needsRestart ? (
           <Badge className="gap-1" variant="warning">
             <RefreshCw className="h-3 w-3" />
             Restart required
@@ -465,11 +531,6 @@ function StandaloneAgentCard({
       }
     />
   );
-}
-
-function formatDefaultModelLabel(defaultModel: string) {
-  const model = defaultModel.trim();
-  return model ? `Default model (${model})` : "Default model";
 }
 
 function firstAvatarUrl(
@@ -483,160 +544,40 @@ function firstAvatarUrl(
 }
 
 function NewAgentCard({
-  canChooseCatalog,
-  isPersonasPending,
-  openFilePicker,
-  onChooseCatalog,
-  onCreatePersona,
+  isPending,
+  onCreate,
+  onDiscover,
+  onImport,
 }: {
-  canChooseCatalog: boolean;
-  isPersonasPending: boolean;
-  openFilePicker: () => void;
-  onChooseCatalog: () => void;
-  onCreatePersona: () => void;
+  isPending: boolean;
+  onCreate: () => void;
+  onDiscover: () => void;
+  onImport: () => void;
 }) {
-  const label = "New agent";
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <CreateIdentityCard
-          ariaLabel={label}
-          dataTestId="new-agent-card"
-          label={label}
-        />
+        <CreateIdentityCard ariaLabel="New agent" dataTestId="new-agent-card" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
-        <DropdownMenuItem
-          disabled={isPersonasPending}
-          onClick={onCreatePersona}
-        >
-          Create from scratch
+        <DropdownMenuItem disabled={isPending} onClick={onCreate}>
+          Create agent
         </DropdownMenuItem>
-        {canChooseCatalog ? (
-          <DropdownMenuItem
-            disabled={isPersonasPending}
-            onClick={onChooseCatalog}
-          >
-            Choose from catalog
-          </DropdownMenuItem>
-        ) : null}
+        <DropdownMenuItem disabled={isPending} onClick={onDiscover}>
+          Discover agents
+        </DropdownMenuItem>
         <DropdownMenuItem
           data-testid="import-agent-snapshot-menu-item"
-          onClick={openFilePicker}
+          disabled={isPending}
+          onClick={onImport}
         >
-          Import agent snapshot
+          Import
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-function CompanyVmAgentsSection({
-  agents,
-  error,
-  isLoading,
-  onEditPolicy,
-  onOpenAgentProfile,
-}: {
-  agents: CompanyVmAgent[];
-  error: Error | null;
-  isLoading: boolean;
-  onEditPolicy?: (agent: CompanyVmAgent) => void;
-  onOpenAgentProfile: (
-    pubkey: string,
-    options?: ProfilePanelOpenOptions,
-  ) => void;
-}) {
-  return (
-    <div className={`${AGENT_CARD_COLUMN_CLASS} space-y-2`}>
-      <div className="px-1">
-        <h2 className="text-sm font-medium">Company VM agents</h2>
-        <p className="text-xs text-muted-foreground">
-          Registered public Hive identities from your company VMs. Runtime setup
-          remains in Hermes.
-        </p>
-      </div>
-      {isLoading ? (
-        <LoadingSkeleton />
-      ) : error ? (
-        <p className="px-1 text-sm text-destructive">
-          Company VM agents could not be loaded. Refresh the registered VM
-          agents to try again.
-        </p>
-      ) : agents.length > 0 ? (
-        <div className={AGENT_CARD_GRID_CLASS}>
-          {agents.map((agent) => (
-            <CompanyVmAgentCard
-              agent={agent}
-              key={agent.pubkey}
-              onEditPolicy={onEditPolicy}
-              onOpenAgentProfile={onOpenAgentProfile}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="px-1 text-sm text-muted-foreground">
-          No registered company VM agent identity is available yet. Register the
-          profile on its VM, then refresh.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function CompanyVmAgentCard({
-  agent,
-  onEditPolicy,
-  onOpenAgentProfile,
-}: {
-  agent: CompanyVmAgent;
-  onEditPolicy?: (agent: CompanyVmAgent) => void;
-  onOpenAgentProfile: (
-    pubkey: string,
-    options?: ProfilePanelOpenOptions,
-  ) => void;
-}) {
-  const profileQuery = useUserProfileQuery(agent.pubkey);
-  const label = profileQuery.data?.displayName?.trim() || agent.name;
-
-  return (
-    <AgentIdentityCard
-      actions={
-        onEditPolicy ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                aria-label={`Open ${label} agent actions`}
-                onClick={(event) => event.stopPropagation()}
-                size="icon"
-                variant="ghost"
-              >
-                <MoreVertical aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => onEditPolicy(agent)}>
-                Edit responder access
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : undefined
-      }
-      ariaLabel={`${label} company VM agent profile`}
-      avatarUrl={profileQuery.data?.avatarUrl}
-      dataTestId={`company-vm-agent-${agent.pubkey}`}
-      label={label}
-      modelLabel={`${agent.agentType} · ${agent.status}`}
-      onClick={() => onOpenAgentProfile(agent.pubkey)}
-      statusBadge={
-        <Badge className="mt-1 w-fit" variant="outline">
-          VM hosted
-        </Badge>
-      }
-    />
   );
 }
 

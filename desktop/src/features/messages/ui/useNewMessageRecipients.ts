@@ -1,18 +1,9 @@
 import * as React from "react";
 
 import {
-  useHiveCompanyAgentsQuery,
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
-import {
-  filterLocalWelcomeAgentsForPresentation,
-  hasCanonicalCompanyWelcomeAgents,
-  shouldPresentLocalWelcomeAgent,
-} from "@/features/onboarding/localWelcomeTeamPolicy";
-import { useHiveCompanyUserDirectory } from "@/features/evaosTeams/useHiveCompanyUserDirectory";
-import { preferIdentityDisplayName } from "@/features/evaosTeams/lib/companyAgentIdentity";
-import { retainManagedSelectedRecipients } from "@/features/evaosTeams/lib/companyMemberDirectory";
 import {
   coalesceAgentAutocompleteCandidates,
   getDirectMessageAgentPubkeys,
@@ -95,7 +86,6 @@ export function useNewMessageRecipients({
   );
 
   const identityQuery = useIdentityQuery();
-  const companyAgentsQuery = useHiveCompanyAgentsQuery({ enabled: active });
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: active });
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: active });
   const channelsQuery = useChannelsQuery({ enabled: active });
@@ -106,59 +96,12 @@ export function useNewMessageRecipients({
     limit: DIRECTORY_PAGE_SIZE,
   });
   const userSearchResults = useFlattenedUserSearchResults(userSearchQuery.data);
-  const companyDirectory = useHiveCompanyUserDirectory({
-    enabled: active,
-    relayUsers: userSearchResults,
-  });
-  const retireLocalWelcomePresentation = hasCanonicalCompanyWelcomeAgents(
-    companyAgentsQuery.data ?? [],
-  );
-  const visibleManagedAgents = React.useMemo(
-    () =>
-      filterLocalWelcomeAgentsForPresentation(
-        retireLocalWelcomePresentation,
-        managedAgentsQuery.data ?? [],
-      ),
-    [managedAgentsQuery.data, retireLocalWelcomePresentation],
-  );
-  const hiddenLocalWelcomeAgentPubkeys = React.useMemo(
-    () =>
-      new Set(
-        (managedAgentsQuery.data ?? [])
-          .filter(
-            (agent) =>
-              !shouldPresentLocalWelcomeAgent(
-                retireLocalWelcomePresentation,
-                agent,
-              ),
-          )
-          .map((agent) => normalizePubkey(agent.pubkey)),
-      ),
-    [managedAgentsQuery.data, retireLocalWelcomePresentation],
-  );
-  React.useEffect(() => {
-    if (!active) return;
-    setSelectedUsers((current) => {
-      const retained = retainManagedSelectedRecipients({
-        managed: companyDirectory.managed,
-        memberPubkeys: companyDirectory.memberPubkeys,
-        selected: current,
-        settled: companyDirectory.settled,
-      });
-      return retained.length === current.length ? current : retained;
-    });
-  }, [
-    active,
-    companyDirectory.managed,
-    companyDirectory.memberPubkeys,
-    companyDirectory.settled,
-  ]);
   const isArchivedDiscovery = useIsArchivedPredicate();
 
   const searchResults = React.useMemo(() => {
     const candidatesByPubkey = new Map<string, NewMessageRecipientCandidate>();
     const managedAgentsByPubkey = new Map(
-      visibleManagedAgents.map((agent) => [
+      (managedAgentsQuery.data ?? []).map((agent) => [
         normalizePubkey(agent.pubkey),
         agent,
       ]),
@@ -167,11 +110,11 @@ export function useNewMessageRecipients({
       ? normalizePubkey(currentPubkey)
       : null;
     const eligibleAgentPubkeys = getDirectMessageAgentPubkeys({
-      companyAgentPubkeys: (companyAgentsQuery.data ?? []).map(
-        (agent) => agent.publicKey,
-      ),
+      companyAgentPubkeys: relayAgentsQuery.companyAgentPubkeys,
       currentPubkey,
-      managedAgentPubkeys: visibleManagedAgents.map((agent) => agent.pubkey),
+      managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
+        (agent) => agent.pubkey,
+      ),
       relayAgents: relayAgentsQuery.data,
       sharedChannelIds: getSharedChannelIds(channelsQuery.data),
     });
@@ -184,7 +127,6 @@ export function useNewMessageRecipients({
 
       if (
         pubkey === currentPubkeyNormalized ||
-        hiddenLocalWelcomeAgentPubkeys.has(pubkey) ||
         (!options.includeSelected && selectedPubkeys.has(pubkey)) ||
         isArchivedDiscovery(pubkey) ||
         (candidate.isAgent && !eligibleAgentPubkeys.has(pubkey))
@@ -205,9 +147,11 @@ export function useNewMessageRecipients({
         pubkey,
         avatarUrl: current.avatarUrl ?? candidate.avatarUrl ?? null,
         displayName:
-          current.isAgent || candidate.isAgent
-            ? preferIdentityDisplayName(currentName, candidateName, pubkey)
-            : (currentName ?? candidateName),
+          candidate.isAgent && candidateName
+            ? candidateName
+            : current.isAgent
+              ? currentName
+              : (currentName ?? candidateName),
         nip05Handle: current.nip05Handle ?? candidate.nip05Handle ?? null,
         ownerPubkey: current.ownerPubkey ?? candidate.ownerPubkey ?? null,
         isAgent: current.isAgent || candidate.isAgent,
@@ -217,7 +161,7 @@ export function useNewMessageRecipients({
       });
     };
 
-    for (const user of companyDirectory.candidates) {
+    for (const user of userSearchResults) {
       addCandidate(candidateWithAgentMetadata(user, managedAgentsByPubkey), {
         includeSelected: deferredSearchQuery.length > 0,
       });
@@ -241,11 +185,11 @@ export function useNewMessageRecipients({
       );
     }
 
-    for (const agent of companyAgentsQuery.data ?? []) {
+    for (const agent of relayAgentsQuery.companyVmAgents) {
       addCandidate(
         {
-          pubkey: agent.publicKey,
-          displayName: agent.displayName,
+          pubkey: agent.pubkey,
+          displayName: agent.name,
           avatarUrl: null,
           nip05Handle: null,
           ownerPubkey: null,
@@ -255,7 +199,7 @@ export function useNewMessageRecipients({
       );
     }
 
-    for (const agent of visibleManagedAgents) {
+    for (const agent of managedAgentsQuery.data ?? []) {
       addCandidate(
         {
           pubkey: agent.pubkey,
@@ -288,21 +232,20 @@ export function useNewMessageRecipients({
     });
   }, [
     channelsQuery.data,
-    companyAgentsQuery.data,
-    companyDirectory.candidates,
     currentPubkey,
     deferredSearchQuery,
-    hiddenLocalWelcomeAgentPubkeys,
     isArchivedDiscovery,
+    managedAgentsQuery.data,
+    relayAgentsQuery.companyAgentPubkeys,
+    relayAgentsQuery.companyVmAgents,
     relayAgentsQuery.data,
     selectedPubkeys,
-    visibleManagedAgents,
+    userSearchResults,
   ]);
 
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
-    companyAgentsQuery.isLoading ||
-    companyDirectory.isLoading ||
+    relayAgentsQuery.companyAgentsQuery.isLoading ||
     managedAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;
@@ -394,11 +337,7 @@ export function useNewMessageRecipients({
     removeUser,
     reset,
     searchError:
-      companyDirectory.error instanceof Error
-        ? companyDirectory.error
-        : userSearchQuery.error instanceof Error
-          ? userSearchQuery.error
-          : null,
+      userSearchQuery.error instanceof Error ? userSearchQuery.error : null,
     searchQuery,
     searchResults,
     selectUser,

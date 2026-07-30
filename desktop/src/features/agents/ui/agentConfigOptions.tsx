@@ -4,7 +4,6 @@ import type {
 } from "@/shared/api/types";
 import { BUZZ_AGENT_THINKING_EFFORT } from "./buzzAgentConfig";
 import type { RuntimeFileConfigSubset } from "@/shared/api/tauri";
-import { desktopProductCopy } from "@/shared/product/productIdentity";
 // Dialogs import getDefaultPersonaRuntime via this re-export; lib code imports
 // directly from lib/resolvePersonaRuntime.
 export { getDefaultPersonaRuntime } from "../lib/resolvePersonaRuntime";
@@ -286,9 +285,8 @@ export function providerRequiresExplicitModel(
 
 export function providerDisplayLabel(providerId: string) {
   const trimmedProvider = providerId.trim();
-  return trimmedProvider === "relay-mesh" ||
-    trimmedProvider === "Buzz shared compute"
-    ? desktopProductCopy("Buzz shared compute")
+  return trimmedProvider === "relay-mesh"
+    ? "Buzz shared compute"
     : trimmedProvider;
 }
 
@@ -420,29 +418,66 @@ export function formatRuntimeOptionLabel(runtime: AcpRuntimeCatalogEntry) {
       ? " (adapter missing)"
       : runtime.availability === "adapter_outdated"
         ? " (adapter outdated)"
-        : runtime.availability === "dependency_missing"
-          ? " (setup needed)"
-          : runtime.availability === "cli_missing"
-            ? " (CLI missing)"
-            : runtime.availability === "not_installed"
-              ? " (not installed)"
-              : "";
+        : runtime.availability === "cli_missing"
+          ? " (CLI missing)"
+          : runtime.availability === "not_installed"
+            ? " (not installed)"
+            : "";
   return `${runtime.label}${suffix}`;
 }
 
-export function runtimeUnavailableMessage(runtime: AcpRuntimeCatalogEntry) {
-  switch (runtime.availability) {
-    case "adapter_missing":
-      return `${runtime.label} CLI is installed but the ACP adapter is missing.`;
-    case "adapter_outdated":
-      return `${runtime.label} ACP adapter is outdated — reinstall to continue.`;
-    case "dependency_missing":
-      return `${runtime.label} is installed but its ACP dependencies need setup.`;
-    case "cli_missing":
-      return `${runtime.label} ACP adapter is installed but the CLI is missing.`;
-    default:
-      return `${runtime.label} is not installed.`;
+export function buildPersonaRuntimeDropdownOptions({
+  defaultRuntimeId,
+  isCreateMode,
+  runtime,
+  runtimes,
+  runtimesLoading,
+}: {
+  defaultRuntimeId?: string;
+  isCreateMode: boolean;
+  runtime: string;
+  runtimes: AcpRuntimeCatalogEntry[];
+  runtimesLoading: boolean;
+}): {
+  blankRuntimeOptionLabel: string;
+  runtimeDropdownOptions: PersonaDropdownOption[];
+} {
+  const blankRuntimeOptionLabel = runtimesLoading
+    ? "Loading harnesses..."
+    : isCreateMode
+      ? "Choose a harness"
+      : "No preference (use app default)";
+  const runtimeDropdownOptions: PersonaDropdownOption[] = [
+    ...(!isCreateMode
+      ? [
+          {
+            label: blankRuntimeOptionLabel,
+            value: NO_RUNTIME_DROPDOWN_VALUE,
+          },
+        ]
+      : []),
+    ...sortPersonaRuntimes(runtimes).map((candidate) => ({
+      disabled:
+        isCreateMode &&
+        defaultRuntimeId !== undefined &&
+        candidate.availability !== "available",
+      label: `${formatRuntimeOptionLabel(candidate)}${
+        isCreateMode && candidate.id === defaultRuntimeId ? " (default)" : ""
+      }`,
+      value: candidate.id,
+    })),
+  ];
+  const currentRuntime = runtime.trim();
+  if (
+    currentRuntime.length > 0 &&
+    !runtimeDropdownOptions.some((option) => option.value === currentRuntime)
+  ) {
+    runtimeDropdownOptions.push({
+      label: `${currentRuntime} (current)`,
+      value: currentRuntime,
+    });
   }
+  return { blankRuntimeOptionLabel, runtimeDropdownOptions };
 }
 
 function runtimeAvailabilitySortRank(
@@ -452,8 +487,6 @@ function runtimeAvailabilitySortRank(
     case "available":
       return 0;
     case "cli_missing":
-      return 1;
-    case "dependency_missing":
       return 1;
     case "not_installed":
       return 2;

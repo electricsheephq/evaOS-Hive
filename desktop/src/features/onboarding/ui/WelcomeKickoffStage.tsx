@@ -4,7 +4,6 @@ import {
   isWelcomeKickoffStageExiting,
   type WelcomeKickoffStagePhase,
 } from "@/features/onboarding/useWelcomeKickoffStage";
-import { STARTER_PERSONA_PRESENTATION } from "@/features/onboarding/starterPersonaPresentation";
 import { cn } from "@/shared/lib/cn";
 
 type StageCharacter = {
@@ -12,20 +11,11 @@ type StageCharacter = {
   animationUrl: string;
 };
 
-/** Same presentation data the "Meet your starter team" onboarding step uses. */
+/** Same animated APNGs the "Meet your starter team" onboarding step uses. */
 const STAGE_CHARACTERS: readonly StageCharacter[] = [
-  {
-    name: STARTER_PERSONA_PRESENTATION[0].name,
-    animationUrl: STARTER_PERSONA_PRESENTATION[0].avatarUrl,
-  },
-  {
-    name: STARTER_PERSONA_PRESENTATION[1].name,
-    animationUrl: STARTER_PERSONA_PRESENTATION[1].avatarUrl,
-  },
-  {
-    name: STARTER_PERSONA_PRESENTATION[2].name,
-    animationUrl: STARTER_PERSONA_PRESENTATION[2].avatarUrl,
-  },
+  { name: "Fizz", animationUrl: "/onboarding/starter-team/fizz.png" },
+  { name: "Honey", animationUrl: "/onboarding/starter-team/honey.png" },
+  { name: "Bumble", animationUrl: "/onboarding/starter-team/bumble.png" },
 ];
 
 const STAGE_EXIT_ANIMATION = "motion-kickoff-stage-exit";

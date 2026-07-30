@@ -9,7 +9,6 @@ import {
   Cpu,
   Download,
   FlaskConical,
-  Info,
   Keyboard,
   LayoutTemplate,
   MessagesSquare,
@@ -38,11 +37,6 @@ import {
   type ThreadViewMode,
 } from "@/features/channels/lib/threadViewModePreference";
 import { cn } from "@/shared/lib/cn";
-import { HiveAboutCard } from "@/features/evaosTeams/HiveAboutCard";
-import {
-  desktopProductCopy,
-  desktopProductPolicy,
-} from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -75,7 +69,7 @@ import {
   withAccentPreviewVars,
 } from "@/shared/theme/useThemePreviewVars";
 import { ChannelTemplatesSettingsCard } from "./ChannelTemplatesSettingsCard";
-import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
+import { HarnessesSettingsPanel } from "./HarnessesSettingsPanel";
 import { ExperimentalFeaturesCard } from "./ExperimentalFeaturesCard";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MeshComputeSettingsCard } from "@/features/mesh-compute/ui/MeshComputeSettingsCard";
@@ -83,7 +77,6 @@ import { MobilePairingCard } from "./MobilePairingCard";
 import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { PreventSleepSettingsCard } from "./PreventSleepSettingsCard";
-import { ActiveAgentCommunitiesSettingsCard } from "./ActiveAgentCommunitiesSettingsCard";
 import { AgentDefaultsSettingsCard } from "./AgentDefaultsSettingsCard";
 import { HostedCommunitiesSettingsCard } from "./HostedCommunitiesSettingsCard";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
@@ -106,8 +99,7 @@ export type SettingsSection =
   | "custom-emoji"
   | "local-archive"
   | "mobile"
-  | "updates"
-  | "about";
+  | "updates";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
@@ -127,7 +119,6 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "local-archive",
   "mobile",
   "updates",
-  "about",
 ];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -239,20 +230,13 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     label: "Updates",
     icon: Download,
   },
-  {
-    value: "about",
-    label: "About",
-    icon: Info,
-  },
 ];
 
 function formatThemeLabel(name: string): string {
-  return desktopProductCopy(
-    name
-      .split("-")
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(" "),
-  );
+  return name
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
 
 /**
@@ -533,7 +517,7 @@ function ThemeSettingsCard() {
     >
       <SettingsSectionHeader
         title="Appearance"
-        description={`Choose a theme for ${desktopProductPolicy().productName}.`}
+        description="Choose a theme for Buzz."
       />
 
       {/* Mode selector: System / Light / Dark */}
@@ -829,8 +813,7 @@ export function renderSettingsSection(
       return (
         <div className="space-y-12">
           <PreventSleepSettingsCard />
-          <DoctorSettingsPanel />
-          <ActiveAgentCommunitiesSettingsCard />
+          <HarnessesSettingsPanel />
           <AgentDefaultsSettingsCard />
         </div>
       );
@@ -858,8 +841,6 @@ export function renderSettingsSection(
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":
       return <UpdateChecker />;
-    case "about":
-      return <HiveAboutCard />;
     default: {
       const exhaustiveCheck: never = section;
       return exhaustiveCheck;

@@ -3,7 +3,6 @@ import {
   formatNotificationTitle,
   truncateNotificationBody,
 } from "@/features/notifications/lib/notificationFormat";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 export type NotificationChannel = Pick<Channel, "id" | "name" | "channelType">;
 
@@ -68,7 +67,7 @@ export function notificationBody(item: FeedItem) {
   const fallback =
     item.kind === 46010
       ? "A workflow is waiting for your approval."
-      : `Something in ${desktopProductPolicy().productName} needs your attention.`;
+      : "Something in Buzz needs your attention.";
   return truncateNotificationBody(item.content, fallback);
 }
 

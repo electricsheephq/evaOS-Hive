@@ -20,7 +20,6 @@ import type {
   AcpRuntimeCatalogEntry,
   GlobalAgentConfig,
 } from "@/shared/api/types";
-import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
 import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
@@ -33,7 +32,6 @@ import {
   getReadyOnboardingRuntimes,
   getVisibleOnboardingRuntimes,
 } from "./onboardingRuntimeSelection";
-import { getRuntimeDisplayLabel } from "./RuntimeIcon";
 import type { DefaultConfigStepActions } from "./types";
 
 type DefaultConfigStepProps = {
@@ -44,7 +42,7 @@ type DefaultConfigStepProps = {
 
 function formatHarnessLabel(runtime: AcpRuntimeCatalogEntry | undefined) {
   if (!runtime) return "Select a harness";
-  return getRuntimeDisplayLabel(runtime);
+  return runtime.id === "buzz-agent" ? "Buzz" : runtime.label;
 }
 
 function AgentDefaultsSection({
@@ -70,6 +68,7 @@ function AgentDefaultsSection({
     cancel: () => void;
   } | null>(null);
   const [isSaving, setIsSaving] = React.useState(false);
+  const [configIsValid, setConfigIsValid] = React.useState(false);
 
   React.useEffect(() => {
     let unmounted = false;
@@ -189,10 +188,19 @@ function AgentDefaultsSection({
   );
   React.useEffect(() => {
     onPersistenceStateChange({
-      canComplete: selectedRuntimeId.length > 0 && !isSaving,
+      // configIsValid comes from AgentConfigFields' onValidityChange and
+      // covers model + provider credentials — a harness selection alone is
+      // not a working default (e.g. buzz-agent with no provider configured).
+      canComplete: selectedRuntimeId.length > 0 && configIsValid && !isSaving,
       flush: flushPersistence,
     });
-  }, [flushPersistence, isSaving, onPersistenceStateChange, selectedRuntimeId]);
+  }, [
+    configIsValid,
+    flushPersistence,
+    isSaving,
+    onPersistenceStateChange,
+    selectedRuntimeId,
+  ]);
 
   return (
     <section className="w-full space-y-4 text-left text-sm">
@@ -241,6 +249,7 @@ function AgentDefaultsSection({
             }}
             onCustomModelEditingChange={setIsCustomModelEditing}
             onIsCustomProviderChange={setIsCustomProvider}
+            onValidityChange={setConfigIsValid}
             placeholderClassName="text-foreground/70"
             runtimeFileConfig={runtimeFileConfig}
             selectClassName="h-12 rounded-2xl border-foreground/15 bg-white px-4 py-2 text-sm shadow-none hover:bg-white/95"
@@ -297,9 +306,9 @@ export function DefaultConfigStep({
           Configure your default model settings
         </h1>
         <p className="mx-auto mt-3 max-w-[440px] text-sm leading-5 text-foreground/80">
-          {desktopProductCopy(
-            "This will be set as your default model configuration across Buzz. You can always change this in your Settings or give specific agents a different configuration.",
-          )}
+          This will be set as your default model configuration across Buzz. You
+          can always change this in your Settings or give specific agents a
+          different configuration.
         </p>
       </div>
 

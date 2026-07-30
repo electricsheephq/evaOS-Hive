@@ -30,7 +30,6 @@ import {
 import type { ProfilePanelTab } from "@/features/profile/ui/UserProfilePanelUtils";
 import { cn } from "@/shared/lib/cn";
 import { useNow } from "@/shared/lib/useNow";
-import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { Button } from "@/shared/ui/button";
 import {
   Carousel,
@@ -864,9 +863,7 @@ export function ProfileRuntimeTabContent({
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {autoRestartEnabled
-                ? desktopProductCopy(
-                    "Configuration changed since this agent started. Buzz can restart it automatically after ~3 minutes idle, or stop and respawn it to apply now.",
-                  )
+                ? "Configuration changed since this agent started. Buzz can restart it automatically after ~3 minutes idle, or stop and respawn it to apply now."
                 : "Configuration changed since this agent started. Automatic restart is off for this agent \u2014 stop and respawn it to apply the changes."}
             </p>
           </div>

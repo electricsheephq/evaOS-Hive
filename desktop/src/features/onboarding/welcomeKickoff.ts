@@ -9,7 +9,6 @@ import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { clearActiveTurnsForAgentOnStop } from "@/features/agents/managedAgentRuntimeHooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { welcomeKickoffMarker } from "@/features/onboarding/devFreshOnboarding";
-import { shouldUseLocalWelcomeTeam } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { resolveAgentReadiness } from "@/features/onboarding/ui/agentReadiness";
 import {
   ensureWelcomeTeam,
@@ -30,10 +29,6 @@ import { getPresence, listManagedAgents } from "@/shared/api/tauri";
 import { getProfile } from "@/shared/api/tauriProfiles";
 import type { Channel, ManagedAgent, RelayEvent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import {
-  desktopProductCopy,
-  desktopProductPolicy,
-} from "@/shared/product/productIdentity";
 import { useQueryClient } from "@tanstack/react-query";
 
 export const WELCOME_KICKOFF_OPENER_MARKER = "buzz-welcome-kickoff.opener.v1";
@@ -182,14 +177,10 @@ export function buildWelcomeKickoffOpener(
   if (introTeammates.length === 0) {
     const teammateNames = formatAgentNames(allTeammates);
     const teammatePhrase = teammateNames ? ` with ${teammateNames}` : "";
-    return desktopProductCopy(
-      `${greeting} Welcome to Buzz. This is your private home base, and I'm here${teammatePhrase} to help you get oriented or work through something you're building.\n\n${WELCOME_KICKOFF_CTA}`,
-    );
+    return `${greeting} Welcome to Buzz. This is your private home base, and I'm here${teammatePhrase} to help you get oriented or work through something you're building.\n\n${WELCOME_KICKOFF_CTA}`;
   }
 
-  return desktopProductCopy(
-    `${greeting} Welcome to Buzz. This is your private home base, and we're here to help you get oriented or work through something you're building.\n\n${introNames}, introduce ${introTeammates.length === 1 ? "yourself" : "yourselves"} in a sentence or two — share what you're good at and when to bring you in. Don't start any work yet.`,
-  );
+  return `${greeting} Welcome to Buzz. This is your private home base, and we're here to help you get oriented or work through something you're building.\n\n${introNames}, introduce ${introTeammates.length === 1 ? "yourself" : "yourselves"} in a sentence or two — share what you're good at and when to bring you in. Don't start any work yet.`;
 }
 
 export function onlineWelcomeTeammates(
@@ -506,9 +497,6 @@ export function useWelcomeKickoff(
   const runtimesQuery = useAcpRuntimesQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
   const { globalConfig, isLoading: configLoading } = useGlobalAgentConfig();
-  const localWelcomeTeamEnabled = shouldUseLocalWelcomeTeam(
-    desktopProductPolicy().managed,
-  );
   const channelId = activeChannel?.id ?? null;
   const isActiveWelcome = isWelcomeChannel(activeChannel);
   const focusedWelcomeChannelRef = React.useRef<string | null>(null);
@@ -537,9 +525,7 @@ export function useWelcomeKickoff(
   >(null);
   const kickoffResolved = channelId !== null && resolvedChannelId === channelId;
   const openerThreadQuery = useThreadReplies(
-    localWelcomeTeamEnabled && isActiveWelcome && !kickoffResolved
-      ? activeChannel
-      : null,
+    isActiveWelcome && !kickoffResolved ? activeChannel : null,
     openerEvent?.id ?? null,
   );
   const kickoffEvents = React.useMemo(
@@ -567,7 +553,6 @@ export function useWelcomeKickoff(
   );
   React.useEffect(() => {
     if (
-      !localWelcomeTeamEnabled ||
       !channelId ||
       !isActiveWelcome ||
       configLoading ||
@@ -705,7 +690,6 @@ export function useWelcomeKickoff(
     channelId,
     configLoading,
     isActiveWelcome,
-    localWelcomeTeamEnabled,
     onKickoffOpenerPosted,
     queryClient,
     readiness,
@@ -728,7 +712,6 @@ export function useWelcomeKickoff(
 
   React.useEffect(() => {
     if (
-      !localWelcomeTeamEnabled ||
       !channelId ||
       !isActiveWelcome ||
       !agentSet ||
@@ -867,7 +850,6 @@ export function useWelcomeKickoff(
     kickoffResolved,
     channelId,
     isActiveWelcome,
-    localWelcomeTeamEnabled,
     queryClient,
   ]);
 }

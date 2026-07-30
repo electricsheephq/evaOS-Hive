@@ -29,38 +29,6 @@ use crate::handlers::side_effects::{
 };
 use crate::state::AppState;
 
-const RELAY_MEMBERSHIP_REMOVED_REASON: &str = "blocked: relay membership removed";
-
-#[derive(Debug, Eq, PartialEq)]
-enum RemovalDisposition {
-    Removed,
-    AlreadyAbsent,
-}
-
-fn removal_disposition(
-    result: RemoveResult,
-    target_is_virtual_agent: bool,
-    require_relay_membership: bool,
-) -> Result<RemovalDisposition, String> {
-    match result {
-        RemoveResult::Removed => Ok(RemovalDisposition::Removed),
-        // A repeated command must be safe and must re-fan-out the disconnect
-        // in case the first Redis publish was lost. Durable absence is still
-        // the authorization backstop. A NIP-OA virtual agent is deliberately
-        // absent from relay_members, so it is not a valid idempotent retry.
-        RemoveResult::NotFound if require_relay_membership && !target_is_virtual_agent => {
-            Ok(RemovalDisposition::AlreadyAbsent)
-        }
-        RemoveResult::NotFound => {
-            Err("member not found: absence does not prove a removable member".to_string())
-        }
-        RemoveResult::IsOwner => Err("cannot remove the relay owner".to_string()),
-        RemoveResult::RoleMismatch => {
-            Err("actor not authorized: admins can only remove members".to_string())
-        }
-    }
-}
-
 /// Extract the hex pubkey from the first `p` tag, returning it as a `String`.
 fn extract_p_tag_hex(event: &Event) -> Option<String> {
     for tag in event.tags.iter() {
@@ -370,50 +338,30 @@ async fn execute_relay_admin_command(
                     .map_err(|e| format!("database error: {e}"))?
             };
 
-            let target_pubkey = hex::decode(&target_hex)
-                .map_err(|e| format!("invalid target pubkey encoding: {e}"))?;
-            let target_is_virtual_agent = if remove_result == RemoveResult::NotFound {
-                state
-                    .db
-                    .get_agent_channel_policy(tenant.community(), &target_pubkey)
-                    .await
-                    .map_err(|e| format!("database error: {e}"))?
-                    .is_some_and(|(_, owner)| owner.is_some())
-            } else {
-                false
-            };
-            let disposition = removal_disposition(
-                remove_result,
-                target_is_virtual_agent,
-                state.config.require_relay_membership,
-            )?;
-
-            // The DB mutation/absence check above is the durable authorization
-            // backstop. Close matching sockets on this pod and fan the same
-            // community-scoped command to every other pod. Repeating an
-            // already-completed removal intentionally replays this fan-out.
-            let closed_locally = state.disconnect_pubkey_clusterwide(
-                tenant,
-                &target_pubkey,
-                &event.id.to_hex(),
-                RELAY_MEMBERSHIP_REMOVED_REASON,
-            );
+            match remove_result {
+                RemoveResult::Removed => {}
+                RemoveResult::IsOwner => {
+                    return Err("cannot remove the relay owner".to_string());
+                }
+                RemoveResult::NotFound => {
+                    return Err(format!("member not found: {target_hex}"));
+                }
+                RemoveResult::RoleMismatch => {
+                    return Err("actor not authorized: admins can only remove members".to_string());
+                }
+            }
 
             info!(
                 sender = %sender_hex,
                 target = %target_hex,
-                ?disposition,
-                closed_locally,
-                "relay member removal enforced"
+                "relay member removed"
             );
 
-            if disposition == RemovalDisposition::Removed {
-                if let Err(e) = publish_nip43_member_removed(tenant, state, &target_hex).await {
-                    warn!(error = %e, "failed to publish NIP-43 member removed event");
-                }
-                if let Err(e) = publish_nip43_membership_list(tenant, state).await {
-                    warn!(error = %e, "failed to publish NIP-43 membership list");
-                }
+            if let Err(e) = publish_nip43_member_removed(tenant, state, &target_hex).await {
+                warn!(error = %e, "failed to publish NIP-43 member removed event");
+            }
+            if let Err(e) = publish_nip43_membership_list(tenant, state).await {
+                warn!(error = %e, "failed to publish NIP-43 membership list");
             }
         }
 
@@ -607,46 +555,6 @@ mod tests {
     fn extract_tag_value_wrong_name() {
         let event = make_test_event(9030, vec![vec!["role", "admin"]]);
         assert_eq!(extract_tag_value(&event, "p"), None);
-    }
-
-    #[test]
-    fn removal_disposition_accepts_idempotent_retry() {
-        assert_eq!(
-            removal_disposition(RemoveResult::Removed, false, true),
-            Ok(RemovalDisposition::Removed)
-        );
-        assert_eq!(
-            removal_disposition(RemoveResult::NotFound, false, true),
-            Ok(RemovalDisposition::AlreadyAbsent)
-        );
-    }
-
-    #[test]
-    fn removal_disposition_rejects_virtual_agent_as_retry() {
-        assert_eq!(
-            removal_disposition(RemoveResult::NotFound, true, true),
-            Err("member not found: absence does not prove a removable member".to_string())
-        );
-    }
-
-    #[test]
-    fn removal_disposition_rejects_absent_target_on_open_relay() {
-        assert_eq!(
-            removal_disposition(RemoveResult::NotFound, false, false),
-            Err("member not found: absence does not prove a removable member".to_string())
-        );
-    }
-
-    #[test]
-    fn removal_disposition_preserves_protected_role_errors() {
-        assert_eq!(
-            removal_disposition(RemoveResult::IsOwner, false, true),
-            Err("cannot remove the relay owner".to_string())
-        );
-        assert_eq!(
-            removal_disposition(RemoveResult::RoleMismatch, false, true),
-            Err("actor not authorized: admins can only remove members".to_string())
-        );
     }
 
     #[test]

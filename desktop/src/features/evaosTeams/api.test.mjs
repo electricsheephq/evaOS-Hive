@@ -1,62 +1,67 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaosTeamsRefreshDelay, evaosTeamsStatusCopy } from "./api.ts";
+import {
+  evaosTeamsGateBypassed,
+  evaosTeamsLogoutClosesGate,
+  evaosTeamsRefreshDelay,
+  evaosTeamsStatusCopy,
+} from "./api.ts";
 
-test("managed auth copy never claims authentication while refresh is unknown", () => {
-  const status = {
-    managed: true,
-    phase: "reauth_required",
-    authenticated: false,
-    keychainAvailable: true,
-    message: "Session refresh failed",
-  };
-  const copy = evaosTeamsStatusCopy(status);
-  assert.equal(copy.title, "Sign in again");
-  assert.doesNotMatch(
-    JSON.stringify(copy),
-    /authenticated|desktop_session|nsec/,
+const status = (phase, refreshAfterSeconds) => ({
+  managed: true,
+  phase,
+  authenticated: phase === "active",
+  keychainAvailable: true,
+  ...(refreshAfterSeconds
+    ? {
+        entitlement: {
+          communityId: "10000000-0000-4000-8000-000000000003",
+          relayHost: "https://relay.example.com",
+          publicKey: "a".repeat(64),
+          role: "member",
+          accessRevision: 1,
+          expiresAt: "2030-01-01T00:00:00Z",
+          refreshAfterSeconds,
+        },
+      }
+    : {}),
+});
+
+test("every non-active managed logout result closes the native app gate", () => {
+  assert.equal(evaosTeamsLogoutClosesGate(status("signed_out")), true);
+  assert.equal(evaosTeamsLogoutClosesGate(status("logout_pending")), true);
+  assert.equal(evaosTeamsLogoutClosesGate(status("keychain_locked")), true);
+  assert.equal(evaosTeamsLogoutClosesGate(status("active")), false);
+});
+
+test("refresh delay is bounded by the validated entitlement interval", () => {
+  assert.equal(evaosTeamsRefreshDelay(status("active", 29)), 30_000);
+  assert.equal(evaosTeamsRefreshDelay(status("active", 300)), 300_000);
+  assert.equal(evaosTeamsRefreshDelay(status("active", 3601)), 3_600_000);
+});
+
+test("status copy distinguishes identity restoration from reauthentication", () => {
+  assert.match(
+    evaosTeamsStatusCopy(status("identity_restore_required")).title,
+    /Restore/,
+  );
+  assert.match(
+    evaosTeamsStatusCopy(status("reauth_required")).title,
+    /Sign in/,
   );
 });
 
-test("managed identity recovery copy never claims active authentication", () => {
-  const status = {
-    managed: true,
-    phase: "identity_recovery_required",
-    authenticated: false,
-    keychainAvailable: true,
-    message: "Recover the Hive identity key ending in abcdef12.",
-  };
-  const copy = evaosTeamsStatusCopy(status);
-  assert.equal(copy.title, "Recover this Hive identity");
-  assert.match(copy.body, /Recover/);
-  assert.doesNotMatch(
-    JSON.stringify(copy),
-    /authenticated|desktop_session|nsec|private key/i,
-  );
-});
-
-test("managed entitlement controls a bounded refresh delay", () => {
-  const status = {
-    managed: true,
-    phase: "active",
-    authenticated: true,
-    keychainAvailable: true,
-    entitlement: {
-      communityId: "10000000-0000-4000-8000-000000000001",
-      relayHost: "https://relay.example.com",
-      role: "member",
-      accessRevision: 4,
-      expiresAt: "2030-01-01T00:00:00Z",
-      refreshAfterSeconds: 300,
-    },
-  };
-  assert.equal(evaosTeamsRefreshDelay(status), 300_000);
+test("unmanaged and native status bypass the managed auth gate", () => {
+  assert.equal(evaosTeamsGateBypassed(false, null), true);
   assert.equal(
-    evaosTeamsRefreshDelay({
-      ...status,
-      entitlement: { ...status.entitlement, refreshAfterSeconds: 1 },
+    evaosTeamsGateBypassed(true, {
+      managed: false,
+      phase: "native",
+      authenticated: false,
+      keychainAvailable: true,
     }),
-    30_000,
+    true,
   );
+  assert.equal(evaosTeamsGateBypassed(true, status("signed_out")), false);
 });

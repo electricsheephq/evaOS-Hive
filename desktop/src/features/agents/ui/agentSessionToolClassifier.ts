@@ -15,7 +15,6 @@ import {
   getToolString,
   getToolStringList,
 } from "./agentSessionUtils";
-import { desktopProductCopy } from "@/shared/product/productIdentity";
 
 type ToolItem = Extract<TranscriptItem, { type: "tool" }>;
 
@@ -141,7 +140,7 @@ export function classifyToolItem(item: ToolItem): AgentActivityDescriptor {
 }
 
 export function renderClassLabel(renderClass: AgentActivityRenderClass) {
-  return desktopProductCopy(TOOL_CLASS_LABELS[renderClass]);
+  return TOOL_CLASS_LABELS[renderClass];
 }
 
 function classifyLoadSkillTool(
@@ -435,13 +434,13 @@ function buzzOperationObject(operation: string) {
   if (isBuzzMessageSend(operation)) return "message";
   if (operation.includes(".")) {
     const [group] = operation.split(".");
-    return group ? group.replace(/[-_]+/g, " ") : desktopProductCopy("Buzz");
+    return group ? group.replace(/[-_]+/g, " ") : "Buzz";
   }
   const object = operation.replace(
     /^(add|approve|archive|create|delete|edit|get|hide|join|leave|list|open|publish|remove|search|send|set|trigger|unarchive|update|vote)_/,
     "",
   );
-  return object ? object.replace(/[-_]+/g, " ") : desktopProductCopy("Buzz");
+  return object ? object.replace(/[-_]+/g, " ") : "Buzz";
 }
 
 function buzzCliTone(group: string, verb: string): AgentActivityTone {

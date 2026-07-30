@@ -397,16 +397,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "atomic-write-file"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84790c55b5704b0d35130bf16a4ce22a8e70eb0ea773522557524d9a4852663d"
-dependencies = [
- "nix 0.30.1",
- "rand 0.9.4",
-]
-
-[[package]]
 name = "attohttpc"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -775,7 +765,6 @@ name = "buzz-acp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "atomic-write-file",
  "base64",
  "buzz-core",
  "buzz-persona",
@@ -783,7 +772,6 @@ dependencies = [
  "chrono",
  "clap",
  "evalexpr",
- "fs2",
  "futures-util",
  "hex",
  "httparse",
@@ -937,6 +925,7 @@ dependencies = [
 name = "buzz-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "hex",
  "hmac 0.13.0",
@@ -961,6 +950,7 @@ dependencies = [
  "chrono",
  "hex",
  "nostr",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2184,7 +2174,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.117",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2866,16 +2856,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3061,11 +3041,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if 1.0.4",
- "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -5395,18 +5373,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.30.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
-dependencies = [
- "bitflags 2.13.0",
- "cfg-if 1.0.4",
- "cfg_aliases",
- "libc",
-]
-
-[[package]]
-name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
@@ -6857,15 +6823,16 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
 dependencies = [
  "aws-lc-rs",
  "bytes",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "lru-slab",
- "rand 0.9.4",
+ "rand 0.10.1",
+ "rand_pcg",
  "ring",
  "rustc-hash",
  "rustls",

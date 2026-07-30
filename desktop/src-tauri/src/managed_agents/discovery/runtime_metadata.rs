@@ -57,22 +57,11 @@ pub(crate) struct KnownAcpRuntime {
     /// Keys match the camelCase names used in `NormalizedConfig` (e.g. "model", "provider").
     pub required_normalized_fields: &'static [&'static str],
     /// Human-readable hint shown in Doctor when the runtime is available but not
-    /// authenticated. `None` when authentication is not established by a CLI probe.
+    /// authenticated. `None` for runtimes that have no login step (goose, buzz-agent).
     pub login_hint: Option<&'static str>,
-    /// Args appended to the runtime's normal ACP command for probing dependency
-    /// readiness. This must not be used to infer provider authentication.
-    pub readiness_probe_suffix: Option<&'static [&'static str]>,
-    pub auth_probe: RuntimeAuthProbe,
-}
-
-/// How Buzz can truthfully discover authentication/setup for a runtime.
-#[derive(Clone, Copy)]
-pub(crate) enum RuntimeAuthProbe {
-    NotApplicable,
-    /// CLI args for probing authentication status. `args[0]` is the binary.
-    Cli(&'static [&'static str]),
-    /// Use the bounded ACP initialize/auth-method handshake at launch.
-    AcpHandshake,
+    /// CLI args for probing authentication status. `args[0]` is the binary name;
+    /// the remainder are the subcommand. `None` for runtimes with no login step.
+    pub auth_probe_args: Option<&'static [&'static str]>,
 }
 
 impl KnownAcpRuntime {
@@ -104,7 +93,7 @@ mod tests {
             "https://goose-docs.ai/docs/getting-started/installation/"
         );
         assert!(goose.adapter_install_instructions_url.is_empty());
-        assert!(goose.cli_install_hint.contains("desktop app alone"));
+        assert!(goose.cli_install_hint.contains("Goose CLI"));
         assert!(goose
             .cli_install_commands_windows
             .iter()
@@ -122,7 +111,7 @@ mod tests {
         assert!(claude
             .adapter_install_instructions_url
             .contains("claude-agent-acp"));
-        assert!(claude.cli_install_hint.contains("desktop app alone"));
+        assert!(claude.cli_install_hint.contains("Claude Code CLI"));
 
         let codex = known_acp_runtime_exact("codex").unwrap();
         assert_eq!(
@@ -130,6 +119,6 @@ mod tests {
             "https://developers.openai.com/codex/cli/"
         );
         assert!(codex.adapter_install_instructions_url.contains("codex-acp"));
-        assert!(codex.cli_install_hint.contains("desktop app alone"));
+        assert!(codex.cli_install_hint.contains("Codex CLI"));
     }
 }

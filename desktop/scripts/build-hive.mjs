@@ -15,6 +15,9 @@ for (const name of ["BUZZ_UPDATER_PUBLIC_KEY", "BUZZ_UPDATER_ENDPOINT"]) {
 if (process.env.HIVE_RELEASE === "1" && !process.env.HIVE_UPDATER_PUBLIC_KEY) {
   throw new Error("HIVE_RELEASE=1 requires HIVE_UPDATER_PUBLIC_KEY");
 }
+if (!process.env.HIVE_SUPABASE_PUBLISHABLE_KEY?.trim()) {
+  throw new Error("Hive builds require HIVE_SUPABASE_PUBLISHABLE_KEY");
+}
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const result = spawnSync(

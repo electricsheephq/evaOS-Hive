@@ -9,10 +9,8 @@ import {
 import { attachManagedAgentToChannel } from "@/features/agents/channelAgents";
 import {
   coalesceAgentAutocompleteCandidates,
-  getChannelAddableAgentPubkeys,
-  isAgentIdentityInManagedList,
+  isAgentIdentityAddable,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
-import { useLocalWelcomePresentation } from "@/features/onboarding/useLocalWelcomePresentation";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
@@ -22,10 +20,7 @@ import {
   useUserSearchFetchMoreOnScroll,
   useUsersBatchQuery,
 } from "@/features/profile/hooks";
-import {
-  formatOwnerLabel,
-  resolveUserLabel,
-} from "@/features/profile/lib/identity";
+import { formatOwnerLabel } from "@/features/profile/lib/identity";
 import { rankUserCandidatesBySearch } from "@/features/profile/lib/userCandidateSearch";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -189,11 +184,6 @@ export function MembersSidebar({
     managedAgentsQuery,
     relayAgentsQuery,
   } = useClassifiedMembers(rawMembers, currentPubkey);
-  const { hiddenLocalWelcomeAgentPubkeys, visibleManagedAgents } =
-    useLocalWelcomePresentation({
-      enabled: open,
-      managedAgents: managedAgentsQuery.data ?? [],
-    });
   const activeMembers = React.useMemo(
     () =>
       [...people, ...bots].sort((left, right) =>
@@ -270,21 +260,19 @@ export function MembersSidebar({
 
     const candidatesByPubkey = new Map<string, AddMemberSearchCandidate>();
     const managedAgentsByPubkey = new Map(
-      visibleManagedAgents.map((agent) => [
+      (managedAgentsQuery.data ?? []).map((agent) => [
         normalizePubkey(agent.pubkey),
         agent,
       ]),
     );
-    const addableAgentPubkeys = getChannelAddableAgentPubkeys({
-      companyAgentPubkeys: relayAgentsQuery.companyAgentPubkeys,
-      managedAgentPubkeys: managedAgentsByPubkey.keys(),
-    });
     const memberAgentLabels = new Set(
       rawMembers
         .filter((member) => member.isAgent === true || member.role === "bot")
         .map((member) => member.displayName?.trim().toLowerCase())
         .filter((label): label is string => Boolean(label)),
     );
+    const managedAgentPubkeys = new Set(managedAgentsByPubkey.keys());
+
     const addCandidate = (candidate: AddMemberSearchCandidate) => {
       const pubkey = normalizePubkey(candidate.pubkey);
       if (
@@ -293,9 +281,12 @@ export function MembersSidebar({
             formatAddCandidateName(candidate).toLowerCase(),
           )) ||
         memberPubkeys.has(pubkey) ||
-        hiddenLocalWelcomeAgentPubkeys.has(pubkey) ||
         isArchivedDiscovery(pubkey) ||
-        !isAgentIdentityInManagedList(candidate, addableAgentPubkeys)
+        !isAgentIdentityAddable(
+          candidate,
+          managedAgentPubkeys,
+          relayAgentsQuery.companyAgentPubkeys,
+        )
       ) {
         return;
       }
@@ -344,7 +335,18 @@ export function MembersSidebar({
       });
     }
 
-    for (const agent of visibleManagedAgents) {
+    for (const agent of relayAgentsQuery.companyVmAgents) {
+      addCandidate({
+        pubkey: agent.pubkey,
+        displayName: agent.name,
+        avatarUrl: null,
+        nip05Handle: null,
+        ownerPubkey: null,
+        isAgent: true,
+      });
+    }
+
+    for (const agent of managedAgentsQuery.data ?? []) {
       addCandidate({
         pubkey: agent.pubkey,
         displayName: agent.name,
@@ -374,21 +376,22 @@ export function MembersSidebar({
     });
   }, [
     canAddMembers,
-    hiddenLocalWelcomeAgentPubkeys,
     isArchivedDiscovery,
     currentPubkey,
+    managedAgentsQuery.data,
     memberPubkeys,
     normalizedDeferredSearchQuery,
     relayAgentsQuery.companyAgentPubkeys,
+    relayAgentsQuery.companyVmAgents,
     relayAgentsQuery.data,
     userSearchResults,
     rawMembers,
-    visibleManagedAgents,
   ]);
   const isAddSearchLoading =
     userSearchQuery.isLoading ||
     managedAgentsQuery.isLoading ||
-    relayAgentsQuery.isLoading;
+    relayAgentsQuery.isLoading ||
+    relayAgentsQuery.companyAgentsQuery.isLoading;
   const handlePeopleSearchScroll = useUserSearchFetchMoreOnScroll(
     userSearchQuery,
     canAddMembers && normalizedDeferredSearchQuery.length > 0,
@@ -473,25 +476,13 @@ export function MembersSidebar({
       ),
     [managedAgentsQuery.data],
   );
-  const visibleManagedAgentByPubkey = React.useMemo(
-    () =>
-      new Map(
-        visibleManagedAgents.map((agent) => [
-          normalizePubkey(agent.pubkey),
-          agent,
-        ]),
-      ),
-    [visibleManagedAgents],
-  );
   const controllableManagedBots = React.useMemo(
     () =>
       bots.flatMap((member) => {
-        const agent = visibleManagedAgentByPubkey.get(
-          normalizePubkey(member.pubkey),
-        );
+        const agent = managedAgentByPubkey.get(normalizePubkey(member.pubkey));
         return agent ? [agent] : [];
       }),
-    [bots, visibleManagedAgentByPubkey],
+    [bots, managedAgentByPubkey],
   );
   const canRemoveMember = React.useCallback(
     (member: ChannelMember) => {
@@ -617,19 +608,13 @@ export function MembersSidebar({
   function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
     const memberProfile =
       memberProfilesQuery.data?.profiles[member.pubkey.toLowerCase()];
-    const memberLabel = resolveUserLabel({
-      currentPubkey,
-      fallbackName: member.displayName,
-      profiles: memberProfilesQuery.data?.profiles,
-      pubkey: member.pubkey,
-    });
     const viewerIsOwner = Boolean(
       memberProfile?.ownerPubkey &&
         currentPubkey &&
         memberProfile.ownerPubkey.toLowerCase() === currentPubkey.toLowerCase(),
     );
     const managedAgent = memberIsBot
-      ? visibleManagedAgentByPubkey.get(normalizePubkey(member.pubkey))
+      ? managedAgentByPubkey.get(normalizePubkey(member.pubkey))
       : undefined;
     const managedAgentRuntime =
       memberIsBot && relayUrl
@@ -662,8 +647,10 @@ export function MembersSidebar({
           managedAgentRuntime={managedAgentRuntime}
           member={member}
           memberIsBot={memberIsBot}
-          memberAvatarLabel={memberLabel}
-          memberLabel={memberLabel}
+          memberAvatarLabel={
+            member.displayName ?? truncatePubkey(member.pubkey)
+          }
+          memberLabel={formatMemberName(member, currentPubkey)}
           moderationState={moderationStateByPubkey.get(
             normalizePubkey(member.pubkey),
           )}

@@ -4,6 +4,10 @@ use std::sync::Arc;
 
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+fn log_env_filter(rust_log: Option<&str>) -> EnvFilter {
+    EnvFilter::new(rust_log.unwrap_or("buzz_relay=info"))
+}
 use uuid::Uuid;
 
 use buzz_audit::AuditService;
@@ -107,9 +111,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tracing_subscriber::registry()
-        .with(fmt::layer().json().flatten_event(true))
-        .with(EnvFilter::from_default_env().add_directive("buzz_relay=info".parse()?))
-        .with(otel_layer)
+        .with(
+            fmt::layer()
+                .json()
+                .flatten_event(true)
+                .with_filter(log_env_filter(std::env::var("RUST_LOG").ok().as_deref())),
+        )
+        .with(otel_layer.map(|layer| {
+            layer.with_filter(telemetry::otel_env_filter(
+                std::env::var("BUZZ_OTEL_FILTER").ok().as_deref(),
+            ))
+        }))
         .init();
 
     // Log any exporter-build failure now that the subscriber is installed.
@@ -146,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
     let db_config = DbConfig {
         database_url: config.database_url.clone(),
         read_database_url: config.read_database_url.clone(),
+        max_connections: config.db_pool_size,
         ..DbConfig::default()
     };
     let db = Db::new(&db_config).await.map_err(|e| {
@@ -892,21 +905,6 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    // Durable relay-membership backstop: a pod can miss a Redis disconnect
-    // while offline or disconnected. Recheck only principals that currently
-    // authorize local sockets and converge within 15 seconds.
-    if state.config.require_relay_membership {
-        let membership_state = Arc::clone(&state);
-        let interval_value = std::env::var("BUZZ_RELAY_MEMBERSHIP_REVALIDATE_INTERVAL_SECS").ok();
-        let interval_secs = membership_revalidate_interval_secs(interval_value.as_deref());
-        let cancel = membership_state.community_revalidator_cancel.clone();
-        tokio::spawn(run_membership_revalidator(
-            membership_state,
-            std::time::Duration::from_secs(interval_secs),
-            cancel,
-        ));
-    }
-
     // Cross-pod connection-control consumer: receive disconnect commands from
     // Redis pub/sub (published by the pod that recorded a ban) and close any
     // matching local sockets. A member's live connections may land on any pod,
@@ -1075,6 +1073,52 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod env_filter_tests {
+    use super::log_env_filter;
+    use buzz_relay::telemetry::otel_env_filter;
+    use tracing_subscriber::prelude::*;
+
+    #[test]
+    fn unset_enables_datastore_only_for_otel_filter() {
+        let logs = tracing_subscriber::registry().with(log_env_filter(None));
+        tracing::subscriber::with_default(logs, || {
+            assert!(!tracing::enabled!(target: "buzz_datastore", tracing::Level::INFO));
+            assert!(tracing::enabled!(target: "buzz_relay", tracing::Level::INFO));
+        });
+
+        let otel = tracing_subscriber::registry().with(otel_env_filter(None));
+        tracing::subscriber::with_default(otel, || {
+            assert!(tracing::enabled!(target: "buzz_datastore", tracing::Level::INFO));
+        });
+    }
+
+    #[test]
+    fn explicit_datastore_off_is_preserved_alone() {
+        assert_eq!(
+            otel_env_filter(Some("buzz_datastore=off")).to_string(),
+            "buzz_datastore=off"
+        );
+    }
+
+    #[test]
+    fn explicit_datastore_debug_is_preserved_alone() {
+        assert_eq!(
+            otel_env_filter(Some("buzz_datastore=debug")).to_string(),
+            "buzz_datastore=debug"
+        );
+    }
+
+    #[test]
+    fn log_and_otel_filters_are_configured_independently() {
+        assert_eq!(log_env_filter(Some("warn")).to_string(), "warn");
+        assert_eq!(
+            otel_env_filter(Some("buzz_relay=debug")).to_string(),
+            "buzz_relay=debug"
+        );
+    }
+}
+
 async fn run_community_revalidator(
     state: Arc<AppState>,
     period: std::time::Duration,
@@ -1090,30 +1134,6 @@ async fn run_community_revalidator(
         }
     })
     .await;
-}
-
-async fn run_membership_revalidator(
-    state: Arc<AppState>,
-    period: std::time::Duration,
-    cancel: CancellationToken,
-) {
-    run_periodic_until_cancelled(period, cancel, || async {
-        let closed = state.revalidate_live_memberships().await;
-        if closed > 0 {
-            tracing::info!(
-                closed,
-                "closed sockets for removed relay members during revalidation"
-            );
-        }
-    })
-    .await;
-}
-
-fn membership_revalidate_interval_secs(value: Option<&str>) -> u64 {
-    value
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(10)
-        .clamp(1, 15)
 }
 
 async fn run_periodic_until_cancelled<Tick, TickFuture>(
@@ -1464,6 +1484,20 @@ async fn run_usage_metrics_tick(
             warn!("Usage metrics leader demoting: DB collection failed");
             *leader = None;
             return Err(error);
+        }
+        let invite_retention_cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+        match state
+            .db
+            .reap_expired_relay_invites(invite_retention_cutoff)
+            .await
+        {
+            Ok(deleted) if deleted > 0 => {
+                info!(deleted, "reaped expired relay invites");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(error = %error, "failed to reap expired relay invites");
+            }
         }
         run_storage_sweep_tick(state, emission_scope, &host_map).await;
     }
@@ -1855,8 +1889,8 @@ mod tests {
 
     use super::{
         buzz_auto_migrate_enabled, dropped_in_memory_keys, idle_timeout_secs,
-        membership_revalidate_interval_secs, refresh_legacy_active_gauge_recency,
-        run_periodic_until_cancelled, EmissionScope, InMemoryMetricKey,
+        refresh_legacy_active_gauge_recency, run_periodic_until_cancelled, EmissionScope,
+        InMemoryMetricKey,
     };
     use metrics::GaugeFn;
     use metrics_util::{
@@ -1902,14 +1936,6 @@ mod tests {
         assert!(buzz_auto_migrate_enabled(Some(" 1 ")));
         assert!(buzz_auto_migrate_enabled(Some("yes")));
         assert!(buzz_auto_migrate_enabled(Some("on")));
-    }
-
-    #[test]
-    fn membership_revalidation_interval_never_exceeds_fifteen_seconds() {
-        assert_eq!(membership_revalidate_interval_secs(None), 10);
-        assert_eq!(membership_revalidate_interval_secs(Some("0")), 1);
-        assert_eq!(membership_revalidate_interval_secs(Some("15")), 15);
-        assert_eq!(membership_revalidate_interval_secs(Some("300")), 15);
     }
 
     #[test]

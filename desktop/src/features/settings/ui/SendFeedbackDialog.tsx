@@ -94,6 +94,7 @@ export function SendFeedbackDialog({
   const [includeLogs, setIncludeLogs] = React.useState(false);
   const [previewOpen, setPreviewOpen] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const productPolicy = desktopProductPolicy();
 
   React.useEffect(() => {
     if (!open) {
@@ -166,9 +167,25 @@ export function SendFeedbackDialog({
             className="pt-2 text-sm text-muted-foreground"
             data-testid="feedback-privacy-disclosure"
           >
-            Feedback is sent privately to this{" "}
-            {desktopProductPolicy().productName} deployment and is not posted to
-            a channel. Attachments are uploaded before you send.
+            {productPolicy.managed ? (
+              <>
+                Feedback is sent privately through your Hive deployment and is
+                not posted to a channel. It does not send an email; email
+                support is{" "}
+                <a
+                  className="underline underline-offset-2"
+                  href="mailto:support@electricsheephq.com"
+                >
+                  support@electricsheephq.com
+                </a>
+                . Attachments are uploaded before you send.
+              </>
+            ) : (
+              <>
+                Feedback is sent privately to this Buzz deployment and is not
+                posted to a channel. Attachments are uploaded before you send.
+              </>
+            )}
           </p>
         </DialogHeader>
 

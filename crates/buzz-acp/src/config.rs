@@ -247,12 +247,6 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_AGENT_OWNER")]
     pub agent_owner: Option<String>,
 
-    /// Optional revisioned company-agent responder policy endpoint. When set,
-    /// the signed remote policy can only narrow native relay memberships and
-    /// replaces the static author gate for ordinary prompt events.
-    #[arg(long, env = "BUZZ_ACP_COMPANY_AGENT_POLICY_URL")]
-    pub company_agent_policy_url: Option<String>,
-
     #[arg(long, env = "BUZZ_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
@@ -347,10 +341,6 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_CONFIG", default_value = "./buzz-acp.toml")]
     pub config: PathBuf,
 
-    /// Durable channel-to-ACP-session mapping file. Defaults beside --config.
-    #[arg(long, env = "BUZZ_ACP_SESSION_STORE")]
-    pub session_store: Option<PathBuf>,
-
     #[arg(long, env = "BUZZ_ACP_DEDUP", default_value = "queue", value_enum)]
     pub dedup: DedupMode,
 
@@ -432,6 +422,12 @@ pub struct CliArgs {
     /// Use `buzz-acp models` to discover available model IDs.
     #[arg(long, env = "BUZZ_ACP_MODEL")]
     pub model: Option<String>,
+
+    /// Title for the agent's ACP sessions, passed out-of-band in `session/new`
+    /// `_meta`. Adapters that recognize it name the session after this value;
+    /// others ignore it. Never enters the prompt.
+    #[arg(long, env = "BUZZ_ACP_SESSION_TITLE")]
+    pub session_title: Option<String>,
 
     /// Permission mode for agents that support `session/set_config_option`
     /// with `configId: "mode"` (e.g. `claude-agent-acp`).
@@ -520,7 +516,6 @@ pub struct Config {
     pub channels_override: Option<Vec<String>>,
     pub no_mention_filter: bool,
     pub config_path: PathBuf,
-    pub session_store_path: PathBuf,
     pub context_message_limit: u32,
     /// Maximum turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
@@ -533,6 +528,9 @@ pub struct Config {
     pub memory_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
+    /// Sanitized session title, sent as `_meta.sessionTitle` on `session/new`.
+    /// `None` when unset or when the configured value sanitized to empty.
+    pub session_title: Option<String>,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
     /// Inbound author gate mode.
@@ -557,15 +555,74 @@ pub struct Config {
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
     /// Replaces the old REST-based owner lookup.
     pub agent_owner: Option<String>,
-    /// Validated HTTPS endpoint for the optional signed responder policy.
-    /// `None` preserves native/static buzz-acp behavior.
-    pub company_agent_policy_url: Option<String>,
     /// Disable the [Base] platform-context section prepended to every prompt.
     pub no_base_prompt: bool,
     /// Resolved content from `--base-prompt-file`, read and validated in
     /// `from_cli()`. `None` when using the compiled-in default or when
     /// `--no-base-prompt` is set.
     pub base_prompt_content: Option<String>,
+}
+
+/// Maximum length, in characters, of a session title sent to the adapter.
+const SESSION_TITLE_MAX_CHARS: usize = 80;
+
+/// Normalize a configured session title into something safe to hand an adapter.
+///
+/// Control characters are dropped, runs of whitespace collapse to a single
+/// space, and the result is trimmed and capped at
+/// [`SESSION_TITLE_MAX_CHARS`]. Returns `None` when nothing printable is left.
+///
+/// Buzz is the only guard here: Codex's own `normalize_thread_name` merely
+/// trims, so an unbounded display name would be persisted verbatim into its
+/// thread store.
+fn sanitize_session_title(raw: &str) -> Option<String> {
+    let collapsed = raw
+        .split_whitespace()
+        .map(|word| word.chars().filter(|c| !c.is_control()).collect::<String>())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Truncate by chars, not bytes, so a multi-byte name can't be cut mid-UTF-8.
+    let title: String = collapsed
+        .chars()
+        .take(SESSION_TITLE_MAX_CHARS)
+        .collect::<String>()
+        .trim_end()
+        .to_string();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+/// Separator between the agent name and the channel in a composed title.
+/// U+00B7 MIDDLE DOT, spaces on both sides.
+const SESSION_TITLE_SEPARATOR: &str = " · ";
+
+/// Compose a per-session title as `Agent · #channel`.
+///
+/// One agent in five channels gets five sessions; a bare agent name would show
+/// five identical rows in the adapter's thread list. Only the channel part is
+/// truncated to fit [`SESSION_TITLE_MAX_CHARS`], so the agent name always
+/// survives. Returns the bare agent name when there is no channel, the channel
+/// name is blank, or no room is left for it.
+pub(crate) fn compose_session_title(agent: &str, channel_name: Option<&str>) -> String {
+    let Some(channel) = channel_name.and_then(sanitize_session_title) else {
+        return agent.to_string();
+    };
+    // Reserve the separator and the `#` sigil alongside the agent name.
+    let reserved = agent.chars().count() + SESSION_TITLE_SEPARATOR.chars().count() + 1;
+    let channel: String = channel
+        .chars()
+        .take(SESSION_TITLE_MAX_CHARS.saturating_sub(reserved))
+        .collect::<String>()
+        .trim_end()
+        .to_string();
+    if channel.is_empty() {
+        return agent.to_string();
+    }
+    format!("{agent}{SESSION_TITLE_SEPARATOR}#{channel}")
 }
 
 /// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
@@ -619,7 +676,12 @@ pub(crate) fn normalize_agent_command_identity(command: &str) -> String {
         .next()
         .expect("rsplit always yields at least one element");
     let lower = basename.to_ascii_lowercase();
-    let stem = lower.strip_suffix(".exe").unwrap_or(&lower);
+    // Windows resolves commands through `.exe` binaries and npm's `.cmd`/`.bat`
+    // shims; all three name the same runtime identity.
+    let stem = [".exe", ".cmd", ".bat"]
+        .iter()
+        .find_map(|extension| lower.strip_suffix(extension))
+        .unwrap_or(&lower);
     stem.chars()
         .map(|character| match character {
             ' ' | '_' => '-',
@@ -634,6 +696,25 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
         | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
+    }
+}
+
+/// Per-runtime environment defaults applied when Buzz owns the agent process.
+///
+/// Mirrors [`default_agent_args`]: keyed on the normalized command identity,
+/// with the merge (in `AcpClient::spawn`) giving explicit persona env and
+/// inherited parent env precedence over these defaults.
+///
+/// Hermes: ACP hosts supply session MCP servers explicitly through
+/// `session/new`, but Hermes otherwise starts every profile-configured MCP
+/// server before it responds to `initialize` — which can exhaust the host's
+/// startup budget (see block/buzz#3355). Skip that unrelated global startup
+/// by default; an operator or persona can still opt back in by setting the
+/// variable explicitly.
+pub(crate) fn default_agent_env(command: &str) -> &'static [(&'static str, &'static str)] {
+    match normalize_agent_command_identity(command).as_str() {
+        "hermes" | "hermes-agent" | "hermes-acp" => &[("HERMES_ACP_SKIP_CONFIGURED_MCP", "1")],
+        _ => &[],
     }
 }
 
@@ -972,14 +1053,6 @@ impl Config {
 
         validate_multiple_event_handling(args.multiple_event_handling, args.dedup)?;
 
-        let session_store_path = args
-            .session_store
-            .unwrap_or_else(|| args.config.with_extension("sessions.json"));
-        let company_agent_policy_url = args
-            .company_agent_policy_url
-            .as_deref()
-            .map(validate_company_agent_policy_url)
-            .transpose()?;
         let config = Config {
             keys,
             relay_url: args.relay_url,
@@ -1008,13 +1081,16 @@ impl Config {
             channels_override: args.channels,
             no_mention_filter: args.no_mention_filter,
             config_path: args.config,
-            session_store_path,
             context_message_limit: args.context_message_limit,
             max_turns_per_session: args.max_turns_per_session,
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
             memory_enabled: args.memory && !args.no_memory,
             model,
+            session_title: args
+                .session_title
+                .as_deref()
+                .and_then(sanitize_session_title),
             permission_mode: args.permission_mode,
             respond_to: args.respond_to,
             respond_to_allowlist,
@@ -1024,7 +1100,6 @@ impl Config {
             relay_observer: args.relay_observer,
             lazy_pool: args.lazy_pool,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
-            company_agent_policy_url,
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
         };
@@ -1048,7 +1123,7 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} company_policy={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1069,34 +1144,10 @@ impl Config {
             self.memory_enabled,
             self.model.as_deref().unwrap_or("(agent default)"),
             self.permission_mode,
-            if self.company_agent_policy_url.is_some() {
-                "enabled"
-            } else {
-                "disabled"
-            },
             respond_to_detail,
             allowed_respond_to_detail,
         )
     }
-}
-
-fn validate_company_agent_policy_url(raw: &str) -> Result<String, ConfigError> {
-    let url = Url::parse(raw.trim())
-        .map_err(|_| ConfigError::ConfigFile("company agent policy URL is invalid".to_string()))?;
-    if url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.path() != "/functions/v1/company-agent-responder-policy"
-        || url.host_str().is_none()
-    {
-        return Err(ConfigError::ConfigFile(
-            "company agent policy URL must be a credential-free HTTPS function endpoint"
-                .to_string(),
-        ));
-    }
-    Ok(url.to_string())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1378,37 +1429,6 @@ mod tests {
     use crate::filter::{ChannelScope, SubscriptionRule};
     use clap::{Parser, ValueEnum};
 
-    #[test]
-    fn company_policy_endpoint_is_exact_https_function_url() {
-        let accepted = validate_company_agent_policy_url(
-            "https://example.supabase.co/functions/v1/company-agent-responder-policy",
-        )
-        .unwrap();
-        assert_eq!(
-            accepted,
-            "https://example.supabase.co/functions/v1/company-agent-responder-policy"
-        );
-        for rejected in [
-            "http://example.test/functions/v1/company-agent-responder-policy",
-            "https://user@example.test/functions/v1/company-agent-responder-policy",
-            "https://example.test/functions/v1/other",
-            "https://example.test/functions/v1/company-agent-responder-policy?tenant=a",
-        ] {
-            assert!(validate_company_agent_policy_url(rejected).is_err());
-        }
-    }
-
-    #[test]
-    fn config_summary_reports_policy_state_without_endpoint() {
-        let endpoint =
-            "https://example.test/functions/v1/company-agent-responder-policy".to_string();
-        let mut config = test_config(SubscribeMode::All);
-        config.company_agent_policy_url = Some(endpoint.clone());
-        let summary = config.summary();
-        assert!(summary.contains("company_policy=enabled"));
-        assert!(!summary.contains(&endpoint));
-    }
-
     /// Build a minimal Config for testing without CLI parsing.
     fn test_config(mode: SubscribeMode) -> Config {
         Config {
@@ -1434,13 +1454,13 @@ mod tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: PathBuf::from("./buzz-acp.toml"),
-            session_store_path: PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: true,
             model: None,
+            session_title: None,
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
@@ -1450,7 +1470,6 @@ mod tests {
             relay_observer: false,
             lazy_pool: false,
             agent_owner: None,
-            company_agent_policy_url: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }
@@ -1594,6 +1613,15 @@ mod tests {
             "claude-code"
         );
         assert_eq!(normalize_agent_command_identity("Goose.EXE"), "goose");
+        // Windows npm shims resolve to `.cmd`/`.bat` wrappers.
+        assert_eq!(
+            normalize_agent_command_identity(r"C:\Users\test\AppData\Roaming\npm\hermes-acp.cmd"),
+            "hermes-acp"
+        );
+        assert_eq!(
+            normalize_agent_command_identity(r"C:\Tools\Hermes\HERMES-AGENT.BAT"),
+            "hermes-agent"
+        );
         // Non-ASCII must not panic.
         assert_eq!(normalize_agent_command_identity("my-agënt"), "my-agënt");
         // Edge cases: empty, whitespace-only, bare separators.
@@ -1601,6 +1629,30 @@ mod tests {
         assert_eq!(normalize_agent_command_identity("   "), "");
         assert_eq!(normalize_agent_command_identity("/"), "");
         assert_eq!(normalize_agent_command_identity("///"), "");
+    }
+
+    #[test]
+    fn default_agent_env_recognizes_hermes_identities() {
+        for command in [
+            "hermes",
+            "hermes-agent",
+            "hermes-acp",
+            "/opt/hermes/bin/hermes-acp",
+            r"C:\Users\test\bin\HERMES_ACP.EXE",
+            r"C:\Users\test\AppData\Roaming\npm\hermes-acp.cmd",
+        ] {
+            assert_eq!(
+                default_agent_env(command),
+                &[("HERMES_ACP_SKIP_CONFIGURED_MCP", "1")],
+                "unexpected env defaults for {command}"
+            );
+        }
+        for command in ["goose", "codex-acp", "claude-agent-acp", "buzz-agent", ""] {
+            assert!(
+                default_agent_env(command).is_empty(),
+                "non-Hermes command must have no env defaults: {command}"
+            );
+        }
     }
 
     #[test]
@@ -2786,5 +2838,64 @@ channels = "ALL"
         const {
             assert!(MAX_TURN_DURATION_CEILING_SECS < u64::MAX - 100);
         }
+    }
+
+    #[test]
+    fn sanitize_session_title_collapses_whitespace_and_strips_control_chars() {
+        assert_eq!(
+            sanitize_session_title("  Fizz\t\tthe\n Bot\u{7}  "),
+            Some("Fizz the Bot".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_session_title_returns_none_when_nothing_printable_remains() {
+        assert_eq!(sanitize_session_title("   \n\t "), None);
+        assert_eq!(sanitize_session_title(""), None);
+        assert_eq!(sanitize_session_title("\u{1}\u{2}"), None);
+    }
+
+    #[test]
+    fn sanitize_session_title_caps_length_without_splitting_multibyte_chars() {
+        let raw = "\u{1f41d}".repeat(SESSION_TITLE_MAX_CHARS + 10);
+        let title = sanitize_session_title(&raw).expect("emoji title survives sanitizing");
+        assert_eq!(title.chars().count(), SESSION_TITLE_MAX_CHARS);
+        assert!(title.chars().all(|c| c == '\u{1f41d}'));
+    }
+
+    #[test]
+    fn sanitize_session_title_does_not_leave_a_trailing_space_after_the_cap() {
+        // The cap lands mid-word, so trimming must not leave a dangling space.
+        let raw = format!("{} tail", "a".repeat(SESSION_TITLE_MAX_CHARS - 1));
+        let title = sanitize_session_title(&raw).expect("title survives sanitizing");
+        assert_eq!(title, "a".repeat(SESSION_TITLE_MAX_CHARS - 1));
+    }
+
+    #[test]
+    fn compose_session_title_qualifies_the_agent_name_with_the_channel() {
+        assert_eq!(
+            compose_session_title("Fizz", Some("buzz-dev")),
+            "Fizz · #buzz-dev"
+        );
+    }
+
+    #[test]
+    fn compose_session_title_falls_back_to_bare_agent_name_without_a_channel() {
+        assert_eq!(compose_session_title("Fizz", None), "Fizz");
+        assert_eq!(compose_session_title("Fizz", Some("   ")), "Fizz");
+    }
+
+    #[test]
+    fn compose_session_title_truncates_the_channel_and_keeps_the_agent_name() {
+        let channel = "c".repeat(200);
+        let title = compose_session_title("Fizz", Some(&channel));
+        assert_eq!(title.chars().count(), SESSION_TITLE_MAX_CHARS);
+        assert!(title.starts_with("Fizz · #c"));
+    }
+
+    #[test]
+    fn compose_session_title_drops_the_channel_when_the_agent_name_fills_the_cap() {
+        let agent = "a".repeat(SESSION_TITLE_MAX_CHARS);
+        assert_eq!(compose_session_title(&agent, Some("buzz-dev")), agent);
     }
 }

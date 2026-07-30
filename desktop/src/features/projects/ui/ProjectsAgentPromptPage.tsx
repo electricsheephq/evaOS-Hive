@@ -157,7 +157,7 @@ function useAgentCandidates() {
         pubkey,
         name: agent.name,
         isManaged: false,
-        isActive: agent.status === "online" || agent.status === "away",
+        isActive: agent.status !== "offline",
       });
     }
 

@@ -104,17 +104,17 @@ test("clearCommunityStorage removes new and legacy state", () => {
   assert.equal(storage.length, 0);
 });
 
-test("managed community selection rolls back when the active ID cannot persist", () => {
-  const previousCommunities = '[{"id":"previous"}]';
+test("managed community selection rolls back the list when active-id write fails", () => {
   const storage = createMemoryStorage({
-    "buzz-communities": previousCommunities,
-    "buzz-active-community-id": "previous",
+    "buzz-communities": '[{"id":"old"}]',
+    "buzz-active-community-id": "old",
   });
+  const setItem = storage.setItem;
   storage.setItem = (key, value) => {
     if (key === "buzz-active-community-id") {
       throw new Error("QuotaExceededError");
     }
-    storage.values.set(key, String(value));
+    setItem(key, value);
   };
   globalThis.localStorage = storage;
   globalThis.window = { localStorage: storage };
@@ -123,16 +123,36 @@ test("managed community selection rolls back when the active ID cannot persist",
     saveCommunitySelection(
       [
         {
-          id: "managed",
+          id: "new",
           name: "Hive",
-          relayUrl: "wss://teams.example.invalid",
-          addedAt: "2026-07-26T00:00:00.000Z",
+          relayUrl: "wss://relay.example.com",
+          addedAt: "2026-07-30T00:00:00.000Z",
         },
       ],
-      "managed",
+      "new",
     ),
     false,
   );
-  assert.equal(storage.getItem("buzz-communities"), previousCommunities);
-  assert.equal(storage.getItem("buzz-active-community-id"), "previous");
+  assert.equal(storage.getItem("buzz-communities"), '[{"id":"old"}]');
+  assert.equal(storage.getItem("buzz-active-community-id"), "old");
+});
+
+test("managed community selection leaves active-id untouched when list write fails", () => {
+  const storage = createMemoryStorage({
+    "buzz-communities": '[{"id":"old"}]',
+    "buzz-active-community-id": "old",
+  });
+  const setItem = storage.setItem;
+  storage.setItem = (key, value) => {
+    if (key === "buzz-communities") {
+      throw new Error("QuotaExceededError");
+    }
+    setItem(key, value);
+  };
+  globalThis.localStorage = storage;
+  globalThis.window = { localStorage: storage };
+
+  assert.equal(saveCommunitySelection([], "new"), false);
+  assert.equal(storage.getItem("buzz-communities"), '[{"id":"old"}]');
+  assert.equal(storage.getItem("buzz-active-community-id"), "old");
 });

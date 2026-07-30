@@ -8,7 +8,6 @@ import {
 import { relayClient } from "@/shared/api/relayClient";
 import { getMyRelayMembershipLookup } from "@/shared/api/relayMembers";
 import { isRelayUnreachableError } from "@/shared/lib/relayError";
-import { desktopProductCopy } from "@/shared/product/productIdentity";
 import {
   getIdentity,
   importIdentity,
@@ -533,9 +532,10 @@ export function OnboardingFlow({
                         Re-import your key
                       </h1>
                       <p className="mt-5 text-sm leading-6 text-muted-foreground">
-                        {desktopProductCopy(
-                          "Your identity is no longer in the system keyring. Re-import your nsec to restore it — Buzz will restart to finish recovery. Or go back to start a new identity with a fresh key.",
-                        )}
+                        Your identity is no longer in the system keyring.
+                        Re-import your nsec to restore it — Buzz will restart to
+                        finish recovery. Or go back to start a new identity with
+                        a fresh key.
                       </p>
                     </>
                   ) : (
@@ -544,9 +544,9 @@ export function OnboardingFlow({
                         Use your existing key
                       </h1>
                       <p className="mt-5 text-sm leading-6 text-muted-foreground">
-                        {desktopProductCopy(
-                          "Import your Nostr private key to use that identity with Buzz. If this key already has a profile on the relay, your name and avatar are restored automatically.",
-                        )}
+                        Import your Nostr private key to use that identity with
+                        Buzz. If this key already has a profile on the relay,
+                        your name and avatar are restored automatically.
                       </p>
                     </>
                   )}

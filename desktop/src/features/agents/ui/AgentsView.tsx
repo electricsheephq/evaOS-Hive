@@ -1,6 +1,5 @@
 import * as React from "react";
-import { OctagonX } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { OctagonX, Settings2 } from "lucide-react";
 import {
   consumePendingSnapshotImport,
   subscribeSnapshotImport,
@@ -21,27 +20,24 @@ import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamsSection } from "./TeamsSection";
-import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
-import { CompanyAgentResponderPolicyDialog } from "./CompanyAgentResponderPolicyDialog";
+import {
+  AGENT_CARD_GRID_COLUMNS_CLASS,
+  UnifiedAgentsSection,
+} from "./UnifiedAgentsSection";
 import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
+import { useBakedBuildEnvQuery } from "@/features/agents/hooks";
 import {
-  useBakedBuildEnvQuery,
-  useHiveCompanyAgentsQuery,
-} from "@/features/agents/hooks";
+  excludeLocalPubkeyDuplicates,
+  filterLocalWelcomeAgents,
+  filterLocalWelcomePersonas,
+  filterLocalWelcomeTeams,
+  hasCanonicalCompanyWelcomeAgents,
+  mergeCompanyAgentsWithRelay,
+} from "@/features/agents/lib/companyAgentCatalog";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
-import { companyVmAgentsFromCatalog } from "@/features/agents/lib/companyAgentCatalog";
-import type { CompanyVmAgent } from "@/features/agents/lib/companyAgentCatalog";
-import {
-  canManageCompanyAgentPolicy,
-  companyAgentRoomOptions,
-} from "@/features/agents/lib/companyAgentResponderPolicy";
-import { useChannelsQuery } from "@/features/channels/hooks";
-import { getEvaosTeamsAuthStatus } from "@/features/evaosTeams/api";
-import { useHiveCompanyMembersQuery } from "@/features/evaosTeams/hooks";
-import { hasCanonicalCompanyWelcomeAgents } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
@@ -51,51 +47,45 @@ export function AgentsView() {
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
   const { globalConfig } = useGlobalAgentConfig();
   const { data: bakedEnv } = useBakedBuildEnvQuery({ enabled: true });
-  const companyAgentsQuery = useHiveCompanyAgentsQuery();
-  const managedAuthQuery = useQuery({
-    queryKey: ["hive-company-policy-auth"],
-    queryFn: getEvaosTeamsAuthStatus,
-    staleTime: 30_000,
-  });
-  const policyScope = managedAuthQuery.data?.entitlement?.communityId ?? null;
-  const companyMembersQuery = useHiveCompanyMembersQuery({
-    enabled: policyScope !== null,
-    scope: policyScope,
-  });
-  const channelsQuery = useChannelsQuery();
   const inheritedDefaults = getInheritedAgentDefaults(globalConfig, bakedEnv);
   const agents = useManagedAgentActions();
   const personas = usePersonaActions();
+  const suppressLocalWelcome = hasCanonicalCompanyWelcomeAgents(
+    agents.relayAgentsQuery.companyAgentsQuery.data ?? [],
+  );
+  const visibleManagedAgents = React.useMemo(
+    () => filterLocalWelcomeAgents(suppressLocalWelcome, agents.managedAgents),
+    [agents.managedAgents, suppressLocalWelcome],
+  );
+  const visiblePersonas = React.useMemo(
+    () =>
+      filterLocalWelcomePersonas(
+        suppressLocalWelcome,
+        personas.libraryPersonas,
+      ),
+    [personas.libraryPersonas, suppressLocalWelcome],
+  );
+  const companyAgents = React.useMemo(
+    () =>
+      excludeLocalPubkeyDuplicates(
+        mergeCompanyAgentsWithRelay(
+          agents.relayAgentsQuery.data ?? [],
+          agents.relayAgentsQuery.companyAgentsQuery.data ?? [],
+        ),
+        agents.managedAgents,
+      ),
+    [
+      agents.managedAgents,
+      agents.relayAgentsQuery.data,
+      agents.relayAgentsQuery.companyAgentsQuery.data,
+    ],
+  );
   const teamImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [isAiDefaultsOpen, setIsAiDefaultsOpen] = React.useState(false);
   // Exclusivity: create never sets `personaDialogState` (edit/dup/import do),
   // so the create-mode and definition-edit AgentDialog mounts never coexist.
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
-  const [policyAgent, setPolicyAgent] = React.useState<CompanyVmAgent | null>(
-    null,
-  );
-  const companyVmAgents = React.useMemo(
-    () =>
-      companyVmAgentsFromCatalog(
-        agents.relayAgentsQuery.data ?? [],
-        companyAgentsQuery.data ?? [],
-      ),
-    [agents.relayAgentsQuery.data, companyAgentsQuery.data],
-  );
-  const retireLocalWelcomePresentation = hasCanonicalCompanyWelcomeAgents(
-    companyAgentsQuery.data ?? [],
-  );
-  const policyRooms = React.useMemo(
-    () =>
-      policyAgent
-        ? companyAgentRoomOptions(channelsQuery.data ?? [], policyAgent.pubkey)
-        : [],
-    [channelsQuery.data, policyAgent],
-  );
-  const canManagePolicy = canManageCompanyAgentPolicy(
-    managedAuthQuery.data?.entitlement?.role,
-  );
 
   function openUnifiedCreate() {
     personas.prepareCreate();
@@ -121,11 +111,14 @@ export function AgentsView() {
   const runningAgentCount = agents.managedAgents.filter((agent) =>
     isManagedAgentActive(agent),
   ).length;
-  // Show the resolved effective model, not just the structured `model` field:
-  // most providers persist the model as a provider env var (e.g. DATABRICKS_MODEL)
-  // or inherit a baked build default, leaving `globalConfig.model` null.
-  const configuredGlobalModel = inheritedDefaults.model.value;
-
+  const hasSavedAgentDefaults = Boolean(
+    globalConfig.preferred_runtime?.trim() ||
+      globalConfig.provider?.trim() ||
+      globalConfig.model?.trim() ||
+      Object.values(globalConfig.env_vars).some(
+        (value) => value.trim().length > 0,
+      ),
+  );
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; personas.handleImportSnapshotFile and teamActions.handleImportTeamSnapshotFile are stable
   React.useEffect(() => {
     // Consume a snapshot import that was enqueued before navigation (e.g. from
@@ -157,18 +150,23 @@ export function AgentsView() {
   return (
     <>
       <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-7 sm:px-6 sm:py-8">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
+        <div
+          className={`mx-auto grid w-full max-w-6xl ${AGENT_CARD_GRID_COLUMNS_CLASS} justify-start gap-x-3 gap-y-8`}
+        >
           <PageHeader
+            className="col-[1/-1]"
             action={
               <div className="flex flex-wrap justify-end gap-2">
                 <Button
-                  onClick={() => setIsAiDefaultsOpen(true)}
+                  data-testid="agent-defaults-button"
                   ref={aiDefaultsTriggerRef}
+                  onClick={() => setIsAiDefaultsOpen(true)}
                   size="sm"
                   variant="outline"
                 >
-                  {configuredGlobalModel
-                    ? `Default model: ${configuredGlobalModel}`
+                  <Settings2 />
+                  {hasSavedAgentDefaults
+                    ? "Agent defaults"
                     : "Set agent defaults"}
                 </Button>
                 {runningAgentCount > 0 ? (
@@ -186,16 +184,15 @@ export function AgentsView() {
                 ) : null}
               </div>
             }
-            className="mx-auto w-full max-w-[996px]"
             description="Set up and manage your agents."
             title="Agents"
           />
-          <div className="flex flex-col gap-8">
+          <div className="col-[1/-1] flex flex-col gap-8">
             <UnifiedAgentsSection
               defaultModel={inheritedDefaults.model.value}
               actionErrorMessage={agents.actionErrorMessage}
               actionNoticeMessage={agents.actionNoticeMessage}
-              agents={agents.managedAgents}
+              agents={visibleManagedAgents}
               agentsError={
                 agents.managedAgentsQuery.error instanceof Error
                   ? agents.managedAgentsQuery.error
@@ -218,8 +215,7 @@ export function AgentsView() {
                 void agents.handleStartPersona(persona);
               }}
               // Persona props
-              canChooseCatalog={personas.catalogPersonas.length > 0}
-              personas={personas.libraryPersonas}
+              personas={visiblePersonas}
               personasError={
                 personas.personasQuery.error instanceof Error
                   ? personas.personasQuery.error
@@ -237,10 +233,8 @@ export function AgentsView() {
               }
               isPersonasLoading={personas.personasQuery.isLoading}
               isPersonasPending={personas.isPending}
-              onCreatePersona={() => {
-                openUnifiedCreate();
-              }}
-              onChooseCatalog={personas.openCatalog}
+              onCreatePersona={openUnifiedCreate}
+              onDiscoverPersonas={personas.openCatalog}
               onDuplicatePersona={personas.openDuplicate}
               onEditPersona={personas.openEdit}
               onSharePersona={personas.openShare}
@@ -251,21 +245,20 @@ export function AgentsView() {
               onImportSnapshotFile={(fileBytes, fileName) => {
                 void personas.handleImportSnapshotFile(fileBytes, fileName);
               }}
-              companyAgents={companyVmAgents}
+              companyAgents={companyAgents}
               companyAgentsError={
-                companyAgentsQuery.error instanceof Error
-                  ? companyAgentsQuery.error
+                agents.relayAgentsQuery.companyAgentsQuery.error instanceof
+                Error
+                  ? agents.relayAgentsQuery.companyAgentsQuery.error
                   : null
               }
-              isCompanyAgentsLoading={companyAgentsQuery.isLoading}
-              retireLocalWelcomePresentation={retireLocalWelcomePresentation}
-              onRefreshCompanyAgents={() => {
-                void agents.refetchRelayAgents();
-                void companyAgentsQuery.refetch();
-              }}
-              onEditCompanyAgentPolicy={
-                canManagePolicy ? (agent) => setPolicyAgent(agent) : undefined
+              isCompanyAgentsLoading={
+                agents.relayAgentsQuery.companyAgentsQuery.isLoading
               }
+              onRefreshCompanyAgents={() => {
+                void agents.relayAgentsQuery.companyAgentsQuery.refetch();
+                void agents.relayAgentsQuery.refetch();
+              }}
             />
 
             <TeamsSection
@@ -289,9 +282,11 @@ export function AgentsView() {
               onImport={() => {
                 teamImportInputRef.current?.click();
               }}
-              personas={personas.libraryPersonas}
-              retireLocalWelcomePresentation={retireLocalWelcomePresentation}
-              teams={teamActions.teams}
+              personas={visiblePersonas}
+              teams={filterLocalWelcomeTeams(
+                suppressLocalWelcome,
+                teamActions.teams,
+              )}
             />
           </div>
         </div>
@@ -302,18 +297,6 @@ export function AgentsView() {
         open={isAiDefaultsOpen}
         returnFocusRef={aiDefaultsTriggerRef}
       />
-
-      {policyAgent && canManagePolicy ? (
-        <CompanyAgentResponderPolicyDialog
-          agent={policyAgent}
-          members={companyMembersQuery.data ?? []}
-          onOpenChange={(open) => {
-            if (!open) setPolicyAgent(null);
-          }}
-          open
-          rooms={policyRooms}
-        />
-      ) : null}
 
       {isCreateDialogOpen ? (
         <AgentDialog
@@ -368,9 +351,11 @@ export function AgentsView() {
           error={
             personas.updatePersonaMutation.error instanceof Error
               ? personas.updatePersonaMutation.error
-              : personas.createPersonaMutation.error instanceof Error
-                ? personas.createPersonaMutation.error
-                : null
+              : personas.updatePersonaAndPublishMutation.error instanceof Error
+                ? personas.updatePersonaAndPublishMutation.error
+                : personas.createPersonaMutation.error instanceof Error
+                  ? personas.createPersonaMutation.error
+                  : null
           }
           initialValues={personas.personaDialogState.initialValues}
           isPending={personas.isPending}
@@ -382,8 +367,22 @@ export function AgentsView() {
               personas.setPersonaDialogState(null);
             }
           }}
-          onSubmit={personas.handleSubmit}
+          onSubmit={(input, options) =>
+            personas.handleSubmit(
+              input,
+              undefined,
+              undefined,
+              undefined,
+              options,
+            )
+          }
           open={personas.personaDialogState !== null}
+          publishCatalogUpdatesOnSave={
+            "id" in personas.personaDialogState.initialValues &&
+            personas.sharedCatalogPersonaIdSet.has(
+              personas.personaDialogState.initialValues.id,
+            )
+          }
           submitLabel={personas.personaDialogState.submitLabel}
           title={personas.personaDialogState.title}
         />
@@ -409,8 +408,20 @@ export function AgentsView() {
       ) : null}
       {personas.personaToShare ? (
         <PersonaShareDialog
+          catalogShareLevel={personas.getPersonaCatalogShareLevel(
+            personas.personaToShare.persona,
+          )}
           isPending={personas.isPending}
           linkedAgentPubkey={personas.personaToShare.linkedAgentPubkey}
+          effectiveAvatarUrl={personas.personaToShare.effectiveAvatarUrl}
+          onCatalogShareLevelChange={(shareLevel) => {
+            const shareTarget = personas.personaToShare;
+            if (!shareTarget) return;
+            void personas.setPersonaCatalogShareLevel(
+              shareTarget.persona,
+              shareLevel,
+            );
+          }}
           onExport={() => {
             const shareTarget = personas.personaToShare;
             if (!shareTarget) return;
@@ -437,6 +448,7 @@ export function AgentsView() {
               personas.handleExportSnapshot(
                 personas.personaToExportSnapshot.persona,
                 personas.personaToExportSnapshot.linkedAgentPubkey,
+                personas.personaToExportSnapshot.effectiveAvatarUrl,
                 memoryLevel,
                 format,
               );
@@ -469,8 +481,8 @@ export function AgentsView() {
       {personas.isCatalogDialogOpen ? (
         <PersonaCatalogDialog
           error={
-            personas.personasQuery.error instanceof Error
-              ? personas.personasQuery.error
+            personas.catalogQuery.error instanceof Error
+              ? personas.catalogQuery.error
               : null
           }
           feedbackErrorMessage={
@@ -483,8 +495,8 @@ export function AgentsView() {
               ? personas.personaNoticeMessage
               : null
           }
-          isLoading={personas.personasQuery.isLoading}
-          isPending={personas.setPersonaActiveMutation.isPending}
+          isLoading={personas.catalogQuery.isLoading}
+          isPending={personas.isPending}
           onClearFeedback={() => {
             personas.clearFeedback("catalog");
           }}

@@ -14,7 +14,6 @@ import {
 } from "@/shared/features/useFeatureEnabled";
 import { topChromeBackdrop } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   Sidebar,
   SidebarContent,
@@ -30,7 +29,6 @@ import {
   useSidebar,
 } from "@/shared/ui/sidebar";
 import { SidebarMenuLabel } from "@/shared/ui/sidebar-menu-label";
-import { managedSettingsDisposition } from "../managedSettingsPolicy";
 import {
   renderSettingsSection,
   settingsSections,
@@ -71,14 +69,7 @@ const settingsNavGroups: Array<{
   },
   {
     label: "App",
-    sections: [
-      "agents",
-      "compute",
-      "experimental",
-      "mobile",
-      "updates",
-      "about",
-    ],
+    sections: ["agents", "compute", "experimental", "mobile", "updates"],
   },
 ];
 
@@ -137,24 +128,12 @@ export function SettingsView({
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipLookupQuery();
   const featureState = useFeatureSnapshot();
-  const managed = desktopProductPolicy().managed;
-
-  React.useEffect(() => {
-    if (managed && managedSettingsDisposition(section) === "hidden") {
-      onSectionChange("profile");
-    }
-  }, [managed, onSectionChange, section]);
-
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
-      const managedDisposition = managed
-        ? managedSettingsDisposition(s.value)
-        : "native";
-      if (managedDisposition === "hidden") return false;
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).
-      if (s.featureGate && managedDisposition !== "restored") {
+      if (s.featureGate) {
         const feature = getFeature(s.featureGate);
         if (feature && !resolveEnabled(s.featureGate, featureState)) {
           return false;
@@ -167,7 +146,7 @@ export function SettingsView({
       }
       return true;
     });
-  }, [managed, myMembershipQuery.data, featureState]);
+  }, [myMembershipQuery.data, featureState]);
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);

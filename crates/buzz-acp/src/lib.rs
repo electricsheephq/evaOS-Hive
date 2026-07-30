@@ -9,8 +9,6 @@ mod pool;
 mod pool_lifecycle;
 mod queue;
 mod relay;
-mod responder_policy;
-mod session_store;
 mod setup_mode;
 mod usage;
 
@@ -45,229 +43,9 @@ use pool::{
 use pool_lifecycle::PoolLifecycle;
 use queue::{CancelReason, EventQueue, FlushBatch, QueuedEvent, ThreadTags};
 use relay::{HarnessRelay, RelayEventPublisher};
-use responder_policy::{PolicyAck, ResponderPolicy};
-use session_store::{SessionScope, SessionStore};
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
-
-enum PolicyHttpEvent {
-    Pulled(Result<serde_json::Value, String>),
-    Acknowledged {
-        ack: PolicyAck,
-        result: Result<(), String>,
-    },
-}
-
-fn managed_policy_effective_rooms(
-    policy: &ResponderPolicy,
-    native_non_dm_rooms: &HashSet<Uuid>,
-    static_filters: &HashMap<Uuid, config::ChannelFilter>,
-) -> HashSet<Uuid> {
-    policy
-        .selected_rooms()
-        .into_iter()
-        .filter(|room| native_non_dm_rooms.contains(room) && static_filters.contains_key(room))
-        .collect()
-}
-
-fn register_managed_policy_room_filter(
-    room: Uuid,
-    is_dm: bool,
-    filter: Option<config::ChannelFilter>,
-    static_filters: &mut HashMap<Uuid, config::ChannelFilter>,
-) -> Option<config::ChannelFilter> {
-    if is_dm {
-        return None;
-    }
-    let filter = filter?;
-    static_filters.insert(room, filter.clone());
-    Some(filter)
-}
-
-fn managed_policy_permits(
-    policy: &ResponderPolicy,
-    native_non_dm_rooms: &HashSet<Uuid>,
-    room_id: Uuid,
-    author: &str,
-    is_dm: bool,
-    now: std::time::Instant,
-) -> bool {
-    native_non_dm_rooms.contains(&room_id) && policy.permits(room_id, author, is_dm, now)
-}
-
-struct ManagedPolicySubscriptions<'a> {
-    native_non_dm_rooms: &'a HashSet<Uuid>,
-    static_filters: &'a HashMap<Uuid, config::ChannelFilter>,
-    subscribed_rooms: &'a mut HashSet<Uuid>,
-    queue: &'a mut EventQueue,
-    typing_channels: &'a mut HashMap<Uuid, ThreadTags>,
-}
-
-async fn reconcile_managed_policy_subscriptions(
-    relay: &mut HarnessRelay,
-    policy: &ResponderPolicy,
-    state: ManagedPolicySubscriptions<'_>,
-    drain_existing: bool,
-) -> bool {
-    let ManagedPolicySubscriptions {
-        native_non_dm_rooms,
-        static_filters,
-        subscribed_rooms,
-        queue,
-        typing_channels,
-    } = state;
-    if drain_existing {
-        for room in subscribed_rooms.iter().copied().collect::<Vec<_>>() {
-            queue.drain_channel(room);
-            typing_channels.remove(&room);
-        }
-    }
-
-    let desired = managed_policy_effective_rooms(policy, native_non_dm_rooms, static_filters);
-    let mut reconciled = true;
-    for room in subscribed_rooms
-        .difference(&desired)
-        .copied()
-        .collect::<Vec<_>>()
-    {
-        if let Err(error) = relay.unsubscribe_channel(room).await {
-            tracing::warn!(channel_id = %room, "managed policy unsubscribe failed: {error}");
-            reconciled = false;
-        }
-        subscribed_rooms.remove(&room);
-    }
-
-    let replay_since = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    for room in desired
-        .difference(subscribed_rooms)
-        .copied()
-        .collect::<Vec<_>>()
-    {
-        let Some(filter) = static_filters.get(&room).cloned() else {
-            continue;
-        };
-        if let Err(error) = relay
-            .subscribe_channel_from(room, filter, Some(replay_since))
-            .await
-        {
-            tracing::warn!(channel_id = %room, "managed policy subscribe failed: {error}");
-            reconciled = false;
-        } else {
-            subscribed_rooms.insert(room);
-        }
-    }
-    reconciled
-}
-
-#[cfg(test)]
-mod managed_policy_subscription_tests {
-    use super::*;
-
-    #[test]
-    fn policy_rooms_intersect_native_membership_and_static_rules() {
-        let allowed = Uuid::new_v4();
-        let foreign = Uuid::new_v4();
-        let static_only = Uuid::new_v4();
-        let mut policy = ResponderPolicy::new(Some(
-            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
-        ));
-        policy.apply_pull(
-            serde_json::json!({
-                "schema_version": "hive.company_agent_responder_policy.v1",
-                "desired_revision": 1,
-                "allowed_room_ids": [allowed.to_string(), foreign.to_string()],
-                "allowed_author_public_keys": ["a".repeat(64)],
-            }),
-            std::time::Instant::now(),
-        );
-        let native = HashSet::from([allowed, static_only]);
-        let filter = config::ChannelFilter {
-            kinds: None,
-            require_mention: true,
-        };
-        let static_filters = HashMap::from([
-            (allowed, filter.clone()),
-            (foreign, filter.clone()),
-            (static_only, filter),
-        ]);
-        assert_eq!(
-            managed_policy_effective_rooms(&policy, &native, &static_filters),
-            HashSet::from([allowed])
-        );
-    }
-
-    #[test]
-    fn joined_room_is_registered_before_a_later_policy_revision_selects_it() {
-        let room = Uuid::new_v4();
-        let author = "a".repeat(64);
-        let now = std::time::Instant::now();
-        let mut policy = ResponderPolicy::new(Some(
-            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
-        ));
-        policy.apply_pull(
-            serde_json::json!({
-                "schema_version": "hive.company_agent_responder_policy.v1",
-                "desired_revision": 1,
-                "allowed_room_ids": [],
-                "allowed_author_public_keys": [author],
-            }),
-            now,
-        );
-        let native = HashSet::from([room]);
-        let mut static_filters = HashMap::new();
-        let filter = config::ChannelFilter {
-            kinds: None,
-            require_mention: true,
-        };
-        register_managed_policy_room_filter(room, false, Some(filter), &mut static_filters);
-        assert!(managed_policy_effective_rooms(&policy, &native, &static_filters).is_empty());
-
-        policy.apply_pull(
-            serde_json::json!({
-                "schema_version": "hive.company_agent_responder_policy.v1",
-                "desired_revision": 2,
-                "allowed_room_ids": [room.to_string()],
-                "allowed_author_public_keys": ["a".repeat(64)],
-            }),
-            now,
-        );
-        assert_eq!(
-            managed_policy_effective_rooms(&policy, &native, &static_filters),
-            HashSet::from([room])
-        );
-    }
-
-    #[test]
-    fn final_gate_requires_current_native_membership() {
-        let room = Uuid::new_v4();
-        let author = "a".repeat(64);
-        let now = std::time::Instant::now();
-        let mut policy = ResponderPolicy::new(Some(
-            "https://example.test/functions/v1/company-agent-responder-policy".to_string(),
-        ));
-        policy.apply_pull(
-            serde_json::json!({
-                "schema_version": "hive.company_agent_responder_policy.v1",
-                "desired_revision": 1,
-                "allowed_room_ids": [room.to_string()],
-                "allowed_author_public_keys": [author.clone()],
-            }),
-            now,
-        );
-        let mut native = HashSet::from([room]);
-        assert!(managed_policy_permits(
-            &policy, &native, room, &author, false, now
-        ));
-        native.remove(&room);
-        assert!(!managed_policy_permits(
-            &policy, &native, room, &author, false, now
-        ));
-    }
-}
 
 /// Check if argv[1] matches a subcommand name, before any clap parsing.
 ///
@@ -1056,27 +834,12 @@ async fn publish_relay_observer_event(
 /// Maximum age (seconds) for an observer control frame to be considered fresh.
 const OBSERVER_CONTROL_FRESHNESS_SECS: i64 = 300;
 
-fn clear_mapping_for_control(session_store: &SessionStore, channel_id: Uuid, action: &str) -> bool {
-    match session_store.remove(channel_id) {
-        Ok(_) => true,
-        Err(error) => {
-            tracing::error!(
-                target: "session_store",
-                channel = %channel_id,
-                "{action} rejected because the durable mapping could not be cleared: {error}"
-            );
-            false
-        }
-    }
-}
-
 fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
     event: nostr::Event,
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
     owner_pubkey_hex: &str,
-    session_store: &SessionStore,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
     if let Err(e) = buzz_core::verify_event(&event) {
@@ -1120,7 +883,7 @@ fn handle_relay_observer_control_event(
             handle_cancel_turn_control(&payload, pool, observer);
         }
         Some("switch_model") => {
-            handle_switch_model_control(&payload, pool, observer, session_store);
+            handle_switch_model_control(&payload, pool, observer);
         }
         _ => {
             tracing::debug!(payload = %payload, "ignoring unknown observer control frame");
@@ -1178,7 +941,6 @@ fn handle_switch_model_control(
     payload: &serde_json::Value,
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
-    session_store: &SessionStore,
 ) {
     let Some(channel_id) = payload
         .get("channelId")
@@ -1205,23 +967,20 @@ fn handle_switch_model_control(
         // Busy path: deliver over the oneshot. `false` means the oneshot was
         // already consumed this turn (a prior cancel/interrupt) — the turn is
         // already ending, so the switch cannot land on it.
-        match deliver_durable_control(
+        if signal_in_flight_task(
             pool,
-            session_store,
             channel_id,
             ControlSignal::SwitchModel(model_id.to_string()),
-            "model switch",
         ) {
-            DurableControlDelivery::Sent => "sent",
-            DurableControlDelivery::NotDelivered => "turn_ending",
-            DurableControlDelivery::PersistenceError => "persistence_error",
+            "sent"
+        } else {
+            "turn_ending"
         }
     } else {
         // Idle path: validate against the cached catalog before invalidating.
-        match pool.switch_idle_agent_model(channel_id, model_id, session_store) {
+        match pool.switch_idle_agent_model(channel_id, model_id) {
             IdleSwitchResult::Switched => "switched",
             IdleSwitchResult::UnsupportedModel => "unsupported_model",
-            IdleSwitchResult::PersistenceError => "persistence_error",
             IdleSwitchResult::NoIdleAgent => "no_active_turn",
         }
     };
@@ -1381,9 +1140,8 @@ fn any_respawn_in_flight(crash_history: &[SlotCircuit]) -> bool {
 /// Result of a background respawn task.
 struct RespawnResult {
     index: usize,
-    /// Tuple: initialized client, protocol version, normalized agent name,
-    /// and ACP session-load capability.
-    result: Result<(AcpClient, u32, String, bool)>,
+    /// Tuple: (initialized client, protocol version, agent name).
+    result: Result<(AcpClient, u32, String)>,
 }
 
 /// Outcome of a non-cancelling steer attempt, forwarded from a per-attempt
@@ -1427,7 +1185,7 @@ impl RespawnGuard {
     /// Send the result and disarm the guard. Uses `try_send` (sync) so there
     /// is no await boundary between marking `sent` and actually enqueueing —
     /// cancellation cannot slip between the two.
-    fn send(mut self, result: Result<(AcpClient, u32, String, bool)>) {
+    fn send(mut self, result: Result<(AcpClient, u32, String)>) {
         // Invariant: try_send succeeds because the channel capacity equals the
         // slot count, and respawn_in_flight guarantees at most one outstanding
         // result per slot. If this ever fails, the channel sizing or the
@@ -1675,12 +1433,6 @@ async fn tokio_main() -> Result<()> {
 
     tracing::info!("discovered {} channel(s)", channel_info_map.len());
     let channel_ids: Vec<Uuid> = channel_info_map.keys().copied().collect();
-    let mut native_non_dm_rooms: HashSet<Uuid> = channel_info_map
-        .iter()
-        .filter_map(|(id, info)| {
-            (info.channel_type != "dm" && info.channel_type != "unknown").then_some(*id)
-        })
-        .collect();
 
     let rules: Vec<SubscriptionRule> = match config.subscribe_mode {
         SubscribeMode::Mentions => {
@@ -1719,23 +1471,12 @@ async fn tokio_main() -> Result<()> {
         }
     };
 
-    let mut static_channel_filters = config::resolve_channel_filters(&config, &channel_ids, &rules);
-    let mut responder_policy = ResponderPolicy::new(config.company_agent_policy_url.clone());
-    if static_channel_filters.is_empty() {
+    let channel_filters = config::resolve_channel_filters(&config, &channel_ids, &rules);
+    if channel_filters.is_empty() {
         tracing::warn!("no channel subscriptions resolved — agent will sit idle");
     }
-    if responder_policy.enabled() {
-        tracing::info!(
-            "company-agent responder policy enabled — failing closed until the first signed pull"
-        );
-    }
-    let initial_channel_filters = if responder_policy.enabled() {
-        HashMap::new()
-    } else {
-        static_channel_filters.clone()
-    };
-    let mut subscribed_channel_ids = HashSet::with_capacity(initial_channel_filters.len());
-    for (channel_id, filter) in &initial_channel_filters {
+    let mut subscribed_channel_ids = HashSet::with_capacity(channel_filters.len());
+    for (channel_id, filter) in &channel_filters {
         if let Err(e) = relay.subscribe_channel(*channel_id, filter.clone()).await {
             tracing::warn!("failed to subscribe to channel {channel_id}: {e}");
         } else {
@@ -1783,15 +1524,6 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
-    let session_store = Arc::new(SessionStore::open(
-        config.session_store_path.clone(),
-        SessionScope::new(
-            &config.relay_url,
-            &pubkey_hex,
-            &config.agent_command,
-            &config.agent_args,
-        ),
-    ));
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -1801,6 +1533,7 @@ async fn tokio_main() -> Result<()> {
         turn_liveness_interval: Duration::from_secs(config.turn_liveness_secs),
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
+        session_title: config.session_title.clone(),
         team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {
             None
@@ -1826,7 +1559,6 @@ async fn tokio_main() -> Result<()> {
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
         relay_url: config.relay_url.clone(),
-        session_store,
     });
 
     if !config.memory_enabled {
@@ -1914,19 +1646,6 @@ async fn tokio_main() -> Result<()> {
             let _ = tx.send(());
         });
     }
-
-    // A single bounded request lane keeps policy HTTP latency off the relay
-    // loop. The expiry arm below is independent, so a stalled request cannot
-    // extend an already-applied policy beyond the fail-closed window.
-    let (policy_http_tx, mut policy_http_rx) = mpsc::channel::<PolicyHttpEvent>(1);
-    let mut policy_http_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut policy_poll = responder_policy.enabled().then(|| {
-        tokio::time::interval_at(
-            tokio::time::Instant::now(),
-            responder_policy::POLICY_POLL_INTERVAL,
-        )
-    });
-    let mut policy_applied_ack_revision: Option<u64> = None;
 
     // Track the newest membership notification timestamp per channel.
     // On reconnect the relay replays events newest-first, so the first event
@@ -2065,7 +1784,7 @@ async fn tokio_main() -> Result<()> {
         while let Ok(rr) = respawn_rx.try_recv() {
             crash_history[rr.index].respawn_in_flight = false;
             match rr.result {
-                Ok((acp, protocol_version, agent_name, load_session_supported)) => {
+                Ok((acp, protocol_version, agent_name)) => {
                     let agent = OwnedAgent {
                         index: rr.index,
                         acp,
@@ -2076,7 +1795,6 @@ async fn tokio_main() -> Result<()> {
                         agent_name,
                         goose_system_prompt_supported: None,
                         protocol_version,
-                        load_session_supported,
                     };
                     pool.return_agent(agent);
                     tracing::info!(agent = rr.index, "respawn complete");
@@ -2170,14 +1888,7 @@ async fn tokio_main() -> Result<()> {
                     match control_event {
                         Some(event) => {
                             if let Some(ref owner_hex) = owner_cache.pubkey {
-                                handle_relay_observer_control_event(
-                                    &config.keys,
-                                    event,
-                                    &mut pool,
-                                    observer.as_ref(),
-                                    owner_hex,
-                                    &ctx.session_store,
-                                );
+                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex);
                             } else {
                                 tracing::warn!("observer control frame received but no owner resolved — dropping");
                             }
@@ -2186,151 +1897,6 @@ async fn tokio_main() -> Result<()> {
                             relay_observer_control_rx = None;
                             tracing::warn!("relay observer control channel closed");
                         }
-                    }
-                    None
-                }
-                _ = async {
-                    match responder_policy.expiry_deadline() {
-                        Some(deadline) => {
-                            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await
-                        }
-                        None => std::future::pending().await,
-                    }
-                }, if responder_policy.enabled() => {
-                    let _ = result_rx;
-                    if responder_policy.expire_if_stale(std::time::Instant::now()) {
-                        tracing::warn!(
-                            "company-agent responder policy expired — denying new invocations"
-                        );
-                        policy_applied_ack_revision = None;
-                        let _ = reconcile_managed_policy_subscriptions(
-                            &mut relay,
-                            &responder_policy,
-                            ManagedPolicySubscriptions {
-                                native_non_dm_rooms: &native_non_dm_rooms,
-                                static_filters: &static_channel_filters,
-                                subscribed_rooms: &mut subscribed_channel_ids,
-                                queue: &mut queue,
-                                typing_channels: &mut typing_channels,
-                            },
-                            true,
-                        )
-                        .await;
-                    }
-                    None
-                }
-                policy_event = policy_http_rx.recv(), if responder_policy.enabled() => {
-                    let _ = result_rx;
-                    policy_http_task.take();
-                    if let Some(policy_event) = policy_event {
-                        match policy_event {
-                            PolicyHttpEvent::Pulled(Ok(value)) => {
-                                let update = responder_policy
-                                    .apply_pull(value, std::time::Instant::now());
-                                let reconciled = reconcile_managed_policy_subscriptions(
-                                    &mut relay,
-                                    &responder_policy,
-                                    ManagedPolicySubscriptions {
-                                        native_non_dm_rooms: &native_non_dm_rooms,
-                                        static_filters: &static_channel_filters,
-                                        subscribed_rooms: &mut subscribed_channel_ids,
-                                        queue: &mut queue,
-                                        typing_channels: &mut typing_channels,
-                                    },
-                                    update.changed,
-                                )
-                                .await;
-                                let ack = if let Some(error_ack) = update
-                                    .ack
-                                    .filter(|ack| ack.result == "error")
-                                {
-                                    Some(error_ack)
-                                } else {
-                                    responder_policy.current_revision().and_then(|revision| {
-                                        if revision == 0 || policy_applied_ack_revision == Some(revision) {
-                                            None
-                                        } else if reconciled {
-                                            Some(PolicyAck {
-                                                revision,
-                                                result: "applied",
-                                                error_code: None,
-                                            })
-                                        } else {
-                                            Some(PolicyAck {
-                                                revision,
-                                                result: "error",
-                                                error_code: Some("subscription_reconcile_failed"),
-                                            })
-                                        }
-                                    })
-                                };
-                                if let (Some(ack), Some(endpoint)) =
-                                    (ack, responder_policy.endpoint().map(str::to_string))
-                                {
-                                    let rest = ctx.rest_client.clone();
-                                    let tx = policy_http_tx.clone();
-                                    policy_http_task = Some(tokio::spawn(async move {
-                                        let result = responder_policy::acknowledge_policy(
-                                            &rest, &endpoint, &ack,
-                                        )
-                                        .await;
-                                        let _ = tx
-                                            .send(PolicyHttpEvent::Acknowledged { ack, result })
-                                            .await;
-                                    }));
-                                }
-                            }
-                            PolicyHttpEvent::Pulled(Err(error)) => {
-                                tracing::warn!("company-agent policy pull failed: {error}");
-                            }
-                            PolicyHttpEvent::Acknowledged { ack, result } => match result {
-                                Ok(()) => {
-                                    if ack.result == "applied" {
-                                        policy_applied_ack_revision = Some(ack.revision);
-                                        tracing::info!(
-                                            revision = ack.revision,
-                                            "company-agent responder policy acknowledged"
-                                        );
-                                    } else {
-                                        tracing::warn!(
-                                            revision = ack.revision,
-                                            error_code = ack.error_code.unwrap_or("unknown"),
-                                            "company-agent responder policy rejection acknowledged"
-                                        );
-                                    }
-                                }
-                                Err(error) => {
-                                    if ack.result == "applied" && error.contains("409") {
-                                        // A lost successful ACK and a superseded ACK both
-                                        // return 409. Mark this local attempt complete; the
-                                        // next signed pull immediately exposes any newer
-                                        // server revision and reopens the ACK path.
-                                        policy_applied_ack_revision = Some(ack.revision);
-                                    }
-                                    tracing::warn!(
-                                        revision = ack.revision,
-                                        "company-agent policy acknowledgement failed: {error}"
-                                    );
-                                }
-                            },
-                        }
-                    }
-                    None
-                }
-                _ = async {
-                    match policy_poll.as_mut() {
-                        Some(interval) => interval.tick().await,
-                        None => std::future::pending().await,
-                    }
-                }, if responder_policy.enabled() && policy_http_task.is_none() => {
-                    let _ = result_rx;
-                    if let Some(endpoint) = responder_policy.endpoint().map(str::to_string) {
-                        let rest = ctx.rest_client.clone();
-                        let tx = policy_http_tx.clone();
-                        policy_http_task = Some(tokio::spawn(async move {
-                            let result = responder_policy::pull_policy(&rest, &endpoint).await;
-                            let _ = tx.send(PolicyHttpEvent::Pulled(result)).await;
-                        }));
                     }
                     None
                 }
@@ -2398,36 +1964,8 @@ async fn tokio_main() -> Result<()> {
                                     // stripped for a legitimately re-added channel.
                                     removed_channels.remove(&ch);
 
-                                    let is_dm =
-                                        is_dm_channel(ch, &ctx.channel_info).await;
-                                    if !is_dm {
-                                        native_non_dm_rooms.insert(ch);
-                                    }
-
                                     if subscribed_channel_ids.contains(&ch) {
                                         tracing::debug!(channel_id = %ch, "membership notification: channel already subscribed");
-                                    } else if responder_policy.enabled() {
-                                        let filter = register_managed_policy_room_filter(
-                                            ch,
-                                            is_dm,
-                                            config::resolve_dynamic_channel_filter(&config, ch, &rules),
-                                            &mut static_channel_filters,
-                                        );
-                                        if responder_policy.selects_room(
-                                            ch,
-                                            std::time::Instant::now(),
-                                        ) {
-                                            if let Some(filter) = filter {
-                                                tracing::info!(channel_id = %ch, "managed policy: subscribing to newly joined room");
-                                                if let Err(e) = relay.subscribe_channel_from(ch, filter, Some(ts)).await {
-                                                    tracing::warn!("failed to subscribe to managed room {ch}: {e}");
-                                                } else {
-                                                    subscribed_channel_ids.insert(ch);
-                                                }
-                                            }
-                                        } else {
-                                            tracing::debug!(channel_id = %ch, is_dm, "managed policy: joined room is not selected");
-                                        }
                                     } else if let Some(filter) = config::resolve_dynamic_channel_filter(&config, ch, &rules) {
                                         tracing::info!(channel_id = %ch, "membership notification: subscribing to new channel");
                                         if let Err(e) = relay.subscribe_channel_from(ch, filter, Some(ts)).await {
@@ -2439,7 +1977,6 @@ async fn tokio_main() -> Result<()> {
                                         tracing::debug!(channel_id = %ch, "membership notification: no matching rules — skipping");
                                     }
                                 } else {
-                                    native_non_dm_rooms.remove(&ch);
                                     subscribed_channel_ids.remove(&ch);
                                     tracing::info!(channel_id = %ch, "membership notification: unsubscribing from channel");
                                     if let Err(e) = relay.unsubscribe_channel(ch).await {
@@ -2455,13 +1992,6 @@ async fn tokio_main() -> Result<()> {
                                     } else {
                                         0
                                     };
-                                    if let Err(error) = ctx.session_store.remove(ch) {
-                                        tracing::warn!(
-                                            target: "session_store",
-                                            channel = %ch,
-                                            "failed to remove mapping after channel removal: {error}"
-                                        );
-                                    }
                                     // Track removed channels so checked-out agents get
                                     // their sessions stripped when they return to the pool.
                                     removed_channels.insert(ch);
@@ -2577,40 +2107,17 @@ async fn tokio_main() -> Result<()> {
                             if is_rotate {
                                 if let Some(owner) = owner_cache.get() {
                                     if buzz_event.event.pubkey.to_hex() == *owner {
-                                        let turn_in_flight = pool
-                                            .task_map()
-                                            .values()
-                                            .any(|m| m.channel_id == Some(buzz_event.channel_id));
-                                        if turn_in_flight {
-                                            match deliver_durable_control(
-                                                &mut pool,
-                                                &ctx.session_store,
-                                                buzz_event.channel_id,
-                                                ControlSignal::Rotate,
-                                                "!rotate",
-                                            ) {
-                                                DurableControlDelivery::Sent => {
-                                                    tracing::info!(
-                                                        channel_id = %buzz_event.channel_id,
-                                                        "!rotate received — cancelling in-flight turn and rotating session"
-                                                    );
-                                                }
-                                                DurableControlDelivery::NotDelivered => {
-                                                    tracing::info!(
-                                                        channel_id = %buzz_event.channel_id,
-                                                        "!rotate received while the in-flight turn was already ending"
-                                                    );
-                                                }
-                                                DurableControlDelivery::PersistenceError => {}
-                                            }
+                                        let fired = signal_in_flight_task(
+                                            &mut pool,
+                                            buzz_event.channel_id,
+                                            ControlSignal::Rotate,
+                                        );
+                                        if fired {
+                                            tracing::info!(
+                                                channel_id = %buzz_event.channel_id,
+                                                "!rotate received — cancelling in-flight turn and rotating session"
+                                            );
                                         } else {
-                                            if !clear_mapping_for_control(
-                                                &ctx.session_store,
-                                                buzz_event.channel_id,
-                                                "!rotate",
-                                            ) {
-                                                continue;
-                                            }
                                             let invalidated = pool.invalidate_channel_sessions(buzz_event.channel_id);
                                             tracing::info!(
                                                 channel_id = %buzz_event.channel_id,
@@ -2642,31 +2149,20 @@ async fn tokio_main() -> Result<()> {
                                 // exercised by non-owner authors inside DMs.
                                 let is_dm =
                                     is_dm_channel(buzz_event.channel_id, &ctx.channel_info).await;
-                                let allowed = if responder_policy.enabled() {
-                                    managed_policy_permits(
-                                        &responder_policy,
-                                        &native_non_dm_rooms,
-                                        buzz_event.channel_id,
-                                        &author,
-                                        is_dm,
-                                        std::time::Instant::now(),
-                                    )
-                                } else {
-                                    author_allowed(
-                                        &config.respond_to,
-                                        &config.respond_to_allowlist,
-                                        &author,
-                                        is_dm,
-                                        &owner_cache,
-                                        &ctx.rest_client,
-                                    )
-                                    .await
-                                };
+                                let allowed = author_allowed(
+                                    &config.respond_to,
+                                    &config.respond_to_allowlist,
+                                    &author,
+                                    is_dm,
+                                    &owner_cache,
+                                    &ctx.rest_client,
+                                )
+                                .await;
                                 if !allowed {
                                     tracing::debug!(
                                         channel_id = %buzz_event.channel_id,
                                         author = %buzz_event.event.pubkey.to_hex(),
-                                        mode = if responder_policy.enabled() { "company-policy" } else { "static" },
+                                        mode = %config.respond_to,
                                         is_dm,
                                         "inbound author gate — dropping event"
                                     );
@@ -2730,18 +2226,18 @@ async fn tokio_main() -> Result<()> {
                                     owner_cache.get(),
                                 );
                                 if let Some(signal) = signal {
-                                    // Try-and-tolerate fork: when the mode
-                                    // wants a Steer, attempt the non-cancelling
-                                    // path first for any agent. On accept,
+                                    // Non-cancelling fork: when the mode
+                                    // wants a Steer, attempt the
+                                    // non-cancelling path first. On accept,
                                     // withhold the queued event and spawn an
                                     // ack watcher; the main loop's
                                     // `PoolEvent::SteerAck` arm decides
                                     // success/release/fallback. On reject
-                                    // (including `-32601 method_not_found`
-                                    // from agents that don't implement the
-                                    // extension), fall through to the universal
-                                    // cancel+merge `Steer` signal so the event
-                                    // still reaches the agent.
+                                    // (including agents that advertise no
+                                    // steer transport at all), fall through
+                                    // to the universal cancel+merge `Steer`
+                                    // signal so the event still reaches the
+                                    // agent.
                                     let native_attempted = matches!(signal, ControlSignal::Steer)
                                         && try_native_steer(
                                             &mut pool,
@@ -2858,10 +2354,6 @@ async fn tokio_main() -> Result<()> {
                 if let PromptSource::Channel(ch) = &result.source {
                     typing_channels.remove(ch);
                 }
-                // A checked-out task may have created and persisted a session
-                // after its channel was removed. Delete again at the return
-                // boundary so that late write cannot survive restart/re-add.
-                remove_returned_agent_mappings(&removed_channels, &ctx.session_store);
                 if handle_prompt_result(
                     &mut pool,
                     &mut queue,
@@ -2925,13 +2417,25 @@ async fn tokio_main() -> Result<()> {
                 event_id,
                 ack,
             })) => {
-                // Goose-native steer attempt resolved. Locked semantics
-                // (Eva + Max + Perci, unanimous on Option X):
+                // Mid-turn steer attempt resolved (either transport:
+                // `_goose/unstable/session/steer` or `_session/steering`).
+                // Locked semantics (Eva + Max + Perci, unanimous on Option X):
                 //
                 //   Success
                 //     The agent received the steer via the non-cancelling
                 //     path. Drop the withheld event so normal dispatch
                 //     never redelivers it.
+                //
+                //     Also covers `_session/steering`'s `startedNewTurn`
+                //     outcome: the message was delivered, but into a fresh
+                //     turn because the one being steered had already
+                //     finished. Delivery is what this arm keys on, so the
+                //     event is still dropped. The read loop deliberately
+                //     does NOT renew its hard deadline in that case (the
+                //     awaited turn is settled), while
+                //     `extend_in_flight_deadline` below still applies —
+                //     the agent really is running more work, so the
+                //     channel's in-flight budget should reflect it.
                 //
                 //   Err(_) where the write never landed (Transport /
                 //   ExpectedRunIdMissing):
@@ -2939,6 +2443,16 @@ async fn tokio_main() -> Result<()> {
                 //     attempted on the wire". Release withheld back to the
                 //     queue front AND issue the cancel+merge fallback so
                 //     the message still reaches the agent.
+                //
+                //   Err(OutcomeRejected { .. })
+                //     A `_session/steering` request returned a JSON-RPC
+                //     success whose `outcome` was not `injected` or
+                //     `startedNewTurn` (codex's `failed`, an unknown value,
+                //     or a bare `{}` with no `outcome` at all). The steer
+                //     did not land, so this is treated exactly like a write
+                //     that never happened: release withheld AND fire the
+                //     cancel+merge fallback. Handled by the catch-all
+                //     `Err(_)` arm below.
                 //
                 //   Err(AgentError { code: -32601, .. })
                 //     The agent returned method_not_found — it does not
@@ -2996,9 +2510,9 @@ async fn tokio_main() -> Result<()> {
                     Ok(pool::SteerAck::Err(pool::SteerError::AgentError { .. })) => {
                         (true, false, false)
                     }
-                    // Transport / ExpectedRunIdMissing: write never landed.
-                    // Release and fire the cancel+merge fallback so the
-                    // message still reaches the agent.
+                    // Transport / ExpectedRunIdMissing / OutcomeRejected: the
+                    // steer did not land. Release and fire the cancel+merge
+                    // fallback so the message still reaches the agent.
                     Ok(pool::SteerAck::Err(_)) => (true, false, true),
                     Ok(pool::SteerAck::PromptCompletedNeutral) => (true, false, false),
                     Err(_recv_err) => (true, false, false),
@@ -3083,10 +2597,6 @@ async fn tokio_main() -> Result<()> {
             }
             None => {} // relay/heartbeat/shutdown branches handled inline above
         }
-    }
-
-    if let Some(task) = policy_http_task.take() {
-        task.abort();
     }
 
     // Drain wake tasks gracefully rather than aborting: an in-flight
@@ -3176,7 +2686,7 @@ async fn tokio_main() -> Result<()> {
     // Drain any respawn results that completed before the abort. Explicitly
     // shut down returned agents instead of relying on AcpClient::Drop.
     while let Ok(rr) = respawn_rx.try_recv() {
-        if let Ok((mut acp, _, _, _)) = rr.result {
+        if let Ok((mut acp, _, _)) = rr.result {
             acp.shutdown().await;
             tracing::debug!(agent = rr.index, "reaped respawned agent on shutdown");
         }
@@ -3279,65 +2789,12 @@ fn signal_in_flight_task(
 
     if let Some(meta) = entry {
         if let Some(tx) = meta.control_tx.take() {
-            return match tx.send(mode) {
-                Ok(()) => {
-                    tracing::info!(
-                        channel = %channel_id,
-                        "control signal sent to in-flight task"
-                    );
-                    true
-                }
-                Err(mode) => {
-                    tracing::debug!(
-                        channel = %channel_id,
-                        ?mode,
-                        "in-flight task control receiver was already closed"
-                    );
-                    false
-                }
-            };
+            tracing::info!(channel = %channel_id, ?mode, "control signal sent to in-flight task");
+            let _ = tx.send(mode);
+            return true;
         }
     }
     false
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DurableControlDelivery {
-    Sent,
-    NotDelivered,
-    PersistenceError,
-}
-
-/// Clear the durable session mapping before delivering a reset-like control.
-///
-/// If the task-map entry is stale and the oneshot receiver has already closed,
-/// restore the prior mapping so a failed delivery cannot silently lose restart
-/// continuity.
-fn deliver_durable_control(
-    pool: &mut AgentPool,
-    session_store: &SessionStore,
-    channel_id: Uuid,
-    mode: ControlSignal,
-    action: &str,
-) -> DurableControlDelivery {
-    let previous_session_id = session_store.get(channel_id);
-    if !clear_mapping_for_control(session_store, channel_id, action) {
-        return DurableControlDelivery::PersistenceError;
-    }
-    if signal_in_flight_task(pool, channel_id, mode) {
-        return DurableControlDelivery::Sent;
-    }
-    if let Some(session_id) = previous_session_id {
-        if let Err(error) = session_store.record(channel_id, session_id) {
-            tracing::error!(
-                target: "session_store",
-                channel = %channel_id,
-                "{action} was not delivered and the prior durable mapping could not be restored: {error}"
-            );
-            return DurableControlDelivery::PersistenceError;
-        }
-    }
-    DurableControlDelivery::NotDelivered
 }
 
 /// Attempt the non-cancelling (ACP) steer for a freshly-queued event.
@@ -3489,15 +2946,15 @@ fn dispatch_pending(
         let ctx_clone = Arc::clone(ctx);
         let agent_index = agent.index;
 
-        // Goose-native non-cancelling steer seam: snapshot capability before
-        // the agent moves into `run_prompt_task`, and install the per-turn
-        // steer receiver on the read loop so the main loop's mode-gate fork
+        // Mid-turn non-cancelling steer seam: install the per-turn steer
+        // receiver on the read loop so the main loop's mode-gate fork
         // (see the `if accepted && queue.is_channel_in_flight(...)` block
         // in the relay event branch of the main `select!` loop) can drive
         // it via the matching sender stored in `TaskMeta.steer_tx`.
-        // Install the steer channel for every prompt task — the supervisor
-        // uses try-and-tolerate: it attempts the steer for any agent and
-        // treats `-32601 method_not_found` as "fall back to cancel+merge".
+        // Installed for every prompt task: the read loop picks the steer
+        // transport at write time from `active_run_id` and the agent's
+        // advertised `_session/steering` capability, and acks
+        // `ExpectedRunIdMissing` (→ cancel+merge) when it has neither.
         let (tx, rx) = tokio::sync::mpsc::channel::<pool::SteerRequest>(1);
         agent.acp.install_steer_rx(rx);
         let steer_tx = Some(tx);
@@ -3591,18 +3048,6 @@ fn spawn_failure_notice(
         tokio::spawn(async move {
             pool::post_failure_notice(&rest, channel_id, &thread_tags, &content).await;
         });
-    }
-}
-
-fn remove_returned_agent_mappings(removed_channels: &HashSet<Uuid>, session_store: &SessionStore) {
-    for channel_id in removed_channels {
-        if let Err(error) = session_store.remove(*channel_id) {
-            tracing::error!(
-                target: "session_store",
-                channel = %channel_id,
-                "failed to remove late ACP session mapping for removed channel: {error}"
-            );
-        }
     }
 }
 
@@ -4270,14 +3715,6 @@ fn normalized_agent_name(init_result: &serde_json::Value) -> String {
         .to_ascii_lowercase()
 }
 
-fn supports_session_load(init_result: &serde_json::Value) -> bool {
-    init_result
-        .get("agentCapabilities")
-        .and_then(|capabilities| capabilities.get("loadSession"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
 async fn shutdown_agent_slots(slots: &mut [Option<OwnedAgent>]) {
     for slot in slots {
         if let Some(mut agent) = slot.take() {
@@ -4366,7 +3803,8 @@ async fn initialize_agent_pool(
                                 .and_then(|info| info.get("name"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown"),
-                            "agent initialized — non-cancelling steer enabled (try-and-tolerate)"
+                            steering_supported = acp.steering_supported(),
+                            "agent initialized"
                         );
                         acp.observe(
                             "agent_initialized",
@@ -4376,7 +3814,6 @@ async fn initialize_agent_pool(
                             }),
                         );
                         let agent_name = normalized_agent_name(&init_result);
-                        let load_session_supported = supports_session_load(&init_result);
                         agent_slots.push(Some(OwnedAgent {
                             index: i,
                             acp,
@@ -4387,7 +3824,6 @@ async fn initialize_agent_pool(
                             agent_name,
                             goose_system_prompt_supported: None,
                             protocol_version,
-                            load_session_supported,
                         }));
                     }
                     Ok(Err(e)) => {
@@ -4438,7 +3874,7 @@ async fn spawn_and_init(
     has_generated_codex_config: bool,
     agent_index: usize,
     observer: Option<observer::ObserverHandle>,
-) -> Result<(AcpClient, u32, String, bool)> {
+) -> Result<(AcpClient, u32, String)> {
     let mut acp = AcpClient::spawn(command, args, extra_env, has_generated_codex_config)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
@@ -4456,8 +3892,7 @@ async fn spawn_and_init(
                 }),
             );
             let agent_name = normalized_agent_name(&init_result);
-            let load_session_supported = supports_session_load(&init_result);
-            Ok((acp, protocol_version, agent_name, load_session_supported))
+            Ok((acp, protocol_version, agent_name))
         }
         Err(e) => {
             // Explicitly shut down the spawned child to prevent zombie/leak.
@@ -4613,7 +4048,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     // so shutdown() runs on all paths (success, error, timeout).
     let protocol_result = tokio::time::timeout(MODELS_TIMEOUT, async {
         let init = client.initialize().await?;
-        let session = client.session_new_full(&cwd, vec![], None).await?;
+        let session = client.session_new_full(&cwd, vec![], None, None).await?;
         Ok::<_, acp::AcpError>((init, session))
     })
     .await;
@@ -4762,6 +4197,18 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     env.push(EnvVar {
                         name: "BUZZ_AUTH_TAG".into(),
                         value: auth_tag,
+                    });
+                }
+            }
+            // Forward the agent's display name so dev-mcp can use it as the git
+            // author name instead of the raw npub. Read from the process env
+            // rather than Config: this is a pass-through of a contract owned
+            // upstream, and absent simply means dev-mcp falls back to the npub.
+            if let Ok(display_name) = std::env::var("BUZZ_ACP_DISPLAY_NAME") {
+                if !display_name.is_empty() {
+                    env.push(EnvVar {
+                        name: "BUZZ_ACP_DISPLAY_NAME".into(),
+                        value: display_name,
                     });
                 }
             }
@@ -4927,50 +4374,6 @@ mod owner_control_command_tests {
             channel_id,
             ControlSignal::Rotate
         ));
-    }
-
-    #[tokio::test]
-    async fn failed_rotate_or_model_delivery_restores_durable_mapping() {
-        for mode in [
-            ControlSignal::Rotate,
-            ControlSignal::SwitchModel("test-model".into()),
-        ] {
-            let path = std::env::temp_dir().join(format!(
-                "buzz-acp-closed-control-test-{}.json",
-                Uuid::new_v4()
-            ));
-            let store = SessionStore::open(
-                path,
-                SessionScope::new("wss://relay.example", "aabb", "hermes", &["acp".into()]),
-            );
-            let channel_id = Uuid::new_v4();
-            store
-                .record(channel_id, "persisted-session".into())
-                .unwrap();
-
-            let mut pool = AgentPool::from_slots(vec![]);
-            let (control_tx, control_rx) = tokio::sync::oneshot::channel();
-            drop(control_rx);
-            let abort_handle = pool.join_set.spawn(async {});
-            pool.task_map_mut().insert(
-                abort_handle.id(),
-                pool::TaskMeta {
-                    agent_index: 0,
-                    channel_id: Some(channel_id),
-                    turn_id: "closed-control-turn".to_string(),
-                    recoverable_batch: None,
-                    control_tx: Some(control_tx),
-                    steer_tx: None,
-                },
-            );
-
-            assert_eq!(
-                deliver_durable_control(&mut pool, &store, channel_id, mode, "test control"),
-                DurableControlDelivery::NotDelivered
-            );
-            assert_eq!(store.get(channel_id).as_deref(), Some("persisted-session"));
-            store.cleanup_test_files();
-        }
     }
 }
 
@@ -5598,13 +5001,13 @@ mod build_mcp_servers_tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
-            session_store_path: std::path::PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: false,
             model: None,
+            session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: std::collections::HashSet::new(),
@@ -5614,7 +5017,6 @@ mod build_mcp_servers_tests {
             relay_observer: false,
             lazy_pool: false,
             agent_owner: None,
-            company_agent_policy_url: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }
@@ -5667,6 +5069,60 @@ mod build_mcp_servers_tests {
         let server = &servers[0];
         let has_auth_tag = server.env.iter().any(|e| e.name == "BUZZ_AUTH_TAG");
         assert!(!has_auth_tag, "empty BUZZ_AUTH_TAG should not be forwarded");
+    }
+
+    #[test]
+    fn test_display_name_set_is_forwarded_to_mcp_server() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("BUZZ_ACP_DISPLAY_NAME", "Duncan");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("BUZZ_ACP_DISPLAY_NAME");
+
+        let entry = servers[0]
+            .env
+            .iter()
+            .find(|e| e.name == "BUZZ_ACP_DISPLAY_NAME");
+        assert_eq!(
+            entry.map(|e| e.value.as_str()),
+            Some("Duncan"),
+            "a set display name should reach the MCP server verbatim"
+        );
+    }
+
+    #[test]
+    fn test_display_name_unset_omits_the_key_entirely() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("BUZZ_ACP_DISPLAY_NAME");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+
+        // Absent, not empty-valued: dev-mcp distinguishes the two and only
+        // falls back to the npub when the key is missing or blank.
+        assert!(
+            !servers[0]
+                .env
+                .iter()
+                .any(|e| e.name == "BUZZ_ACP_DISPLAY_NAME"),
+            "unset display name should not add the key"
+        );
+    }
+
+    #[test]
+    fn test_display_name_empty_omits_the_key_entirely() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("BUZZ_ACP_DISPLAY_NAME", "");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("BUZZ_ACP_DISPLAY_NAME");
+
+        assert!(
+            !servers[0]
+                .env
+                .iter()
+                .any(|e| e.name == "BUZZ_ACP_DISPLAY_NAME"),
+            "empty display name should not be forwarded"
+        );
     }
 
     #[test]
@@ -5766,13 +5222,13 @@ mod error_outcome_emission_tests {
             channels_override: None,
             no_mention_filter: false,
             config_path: std::path::PathBuf::from("./buzz-acp.toml"),
-            session_store_path: std::path::PathBuf::from("./buzz-acp.sessions.json"),
             context_message_limit: 12,
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: false,
             model: None,
+            session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
@@ -5782,7 +5238,6 @@ mod error_outcome_emission_tests {
             relay_observer: false,
             lazy_pool: false,
             agent_owner: None,
-            company_agent_policy_url: None,
             no_base_prompt: false,
             base_prompt_content: None,
         }
@@ -5804,60 +5259,6 @@ mod error_outcome_emission_tests {
         );
     }
 
-    #[test]
-    fn detects_session_load_capability_from_initialize_result() {
-        assert!(supports_session_load(&serde_json::json!({
-            "agentCapabilities": { "loadSession": true }
-        })));
-        assert!(!supports_session_load(&serde_json::json!({
-            "agentCapabilities": { "loadSession": false }
-        })));
-        assert!(!supports_session_load(&serde_json::json!({})));
-    }
-
-    fn test_session_store_at(path: std::path::PathBuf) -> SessionStore {
-        SessionStore::open(
-            path,
-            SessionScope::new("wss://relay.example", "aabb", "hermes", &["acp".into()]),
-        )
-    }
-
-    #[test]
-    fn returned_agent_cleanup_removes_late_membership_race_mapping() {
-        let path = std::env::temp_dir().join(format!(
-            "buzz-acp-returned-agent-test-{}.json",
-            Uuid::new_v4()
-        ));
-        let store = test_session_store_at(path);
-        let removed_channel = Uuid::new_v4();
-        store
-            .record(removed_channel, "late-session".into())
-            .unwrap();
-        let removed = HashSet::from([removed_channel]);
-
-        remove_returned_agent_mappings(&removed, &store);
-
-        assert_eq!(store.get(removed_channel), None);
-        store.cleanup_test_files();
-    }
-
-    #[test]
-    fn control_mapping_clear_fails_closed_on_store_error() {
-        let path =
-            std::env::temp_dir().join(format!("buzz-acp-control-store-error-{}", Uuid::new_v4()));
-        std::fs::create_dir(&path).unwrap();
-        let store = test_session_store_at(path.clone());
-
-        assert!(!clear_mapping_for_control(
-            &store,
-            Uuid::new_v4(),
-            "!rotate"
-        ));
-
-        store.cleanup_test_files();
-        let _ = std::fs::remove_dir(path);
-    }
-
     /// Spawn a real but inert agent subprocess (`cat`) so the error paths have
     /// an `OwnedAgent` to move into respawn or return to the pool. The error
     /// branches never talk to the subprocess.
@@ -5876,7 +5277,6 @@ mod error_outcome_emission_tests {
             // Error branches under test never read this; 1 is the legacy
             // non-systemPrompt path, the simplest valid value.
             protocol_version: 1,
-            load_session_supported: false,
         }
     }
 

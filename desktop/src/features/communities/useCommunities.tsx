@@ -132,7 +132,7 @@ export type UseCommunitiesReturn = {
   switchCommunity: (id: string) => void;
   /** Force the active community to re-init (e.g. after a deep-link reconnect). */
   reconnectCommunity: () => void;
-  /** Upsert and select the server-entitled community in managed Hive builds. */
+  /** Atomically install and select the server-entitled native community. */
   reconcileManagedCommunity: (entitlement: EvaosTeamsEntitlement) => boolean;
   updateCommunity: (
     id: string,

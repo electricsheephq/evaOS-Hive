@@ -101,9 +101,7 @@ export function isManagedCommunityStateReady(
   activeId: string | null,
   entitlement: EvaosTeamsEntitlement,
 ): boolean {
-  if (activeId !== entitlement.communityId) {
-    return false;
-  }
+  if (activeId !== entitlement.communityId) return false;
   const publicKey = entitlement.publicKey?.trim();
   if (!publicKey) return false;
   const community = communities.find(

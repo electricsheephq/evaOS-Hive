@@ -15,7 +15,6 @@ import {
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import { shouldRunLocalWelcomeAgent } from "@/features/onboarding/localWelcomeTeamPolicy";
 import type {
   AgentPersona,
   Channel,
@@ -24,7 +23,6 @@ import type {
 } from "@/shared/api/types";
 import { removeChannelMember } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   deleteManagedAgentWithRules,
   isManagedAgentActive,
@@ -165,11 +163,6 @@ export function useManagedAgentActions() {
     try {
       const agent = managedAgents.find((c) => c.pubkey === pubkey);
       if (!agent) return;
-      if (!shouldRunLocalWelcomeAgent(desktopProductPolicy().managed, agent)) {
-        throw new Error(
-          "Hive uses the canonical company VM agent for this starter persona.",
-        );
-      }
       await startManagedAgentWithRules({
         agent,
         startManagedAgent: startMutation.mutateAsync,
@@ -199,15 +192,6 @@ export function useManagedAgentActions() {
     setPersonaStartPending(persona.id, true);
     clearFeedback();
     try {
-      if (
-        !shouldRunLocalWelcomeAgent(desktopProductPolicy().managed, {
-          personaId: persona.id,
-        })
-      ) {
-        throw new Error(
-          "Hive uses the canonical company VM agent for this starter persona.",
-        );
-      }
       const runtimes = await availableRuntimesForStart(availableRuntimesQuery);
       const { runtime, warnings } = resolveStartRuntimeForDefinition(
         persona,

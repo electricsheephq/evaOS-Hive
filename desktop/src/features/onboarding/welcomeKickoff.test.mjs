@@ -15,11 +15,6 @@ import {
   waitForWelcomeTeammatesOnline,
   welcomeTeammateNeedsRestart,
 } from "./welcomeKickoff.ts";
-import {
-  installDesktopProductPolicy,
-  NATIVE_PRODUCT_POLICY,
-  resetDesktopProductPolicyForTests,
-} from "../../shared/product/productIdentity.ts";
 
 function agent(name, personaId, pubkey) {
   return {
@@ -57,24 +52,6 @@ test("opener uses current agent names and requests bounded simultaneous intros",
   assert.doesNotMatch(opener, /@@/);
   assert.match(opener, /sentence or two/);
   assert.match(opener, /Don't start any work yet/);
-});
-
-test("opener keeps native Buzz copy and productizes managed Hive copy", (context) => {
-  context.after(resetDesktopProductPolicyForTests);
-  assert.match(
-    buildWelcomeKickoffOpener(fizz, [honey, bumble]),
-    /Welcome to Buzz/,
-  );
-
-  installDesktopProductPolicy({
-    ...NATIVE_PRODUCT_POLICY,
-    managed: true,
-    productName: "Hive",
-  });
-
-  const opener = buildWelcomeKickoffOpener(fizz, [honey, bumble]);
-  assert.match(opener, /Welcome to Hive/);
-  assert.doesNotMatch(opener, /\bBuzz\b/);
 });
 
 test("teammates are not ready until every harness publishes online presence", () => {

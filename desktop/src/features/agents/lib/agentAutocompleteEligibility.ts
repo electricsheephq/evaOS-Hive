@@ -55,10 +55,8 @@ export function getMentionableAgentPubkeys({
 }
 
 /**
- * A verified company catalog identity is addressable in a direct message even
- * before its relay profile advertises invocation policy. This does not make
- * the agent mentionable or invocable: room and author policy remain enforced
- * by the relay and buzz-acp when a message reaches the agent.
+ * Verified company identities are directly addressable without treating their
+ * catalog metadata as invocation policy.
  */
 export function getDirectMessageAgentPubkeys({
   companyAgentPubkeys,
@@ -95,32 +93,17 @@ export function isAgentIdentityInManagedList(
   );
 }
 
-/**
- * Native channel membership may add either a locally managed agent or a
- * same-company VM agent verified by the Electric catalog. Relay profile
- * capabilities are intentionally not sufficient: they are self-declared and
- * cannot establish tenant authority.
- */
-export function getChannelAddableAgentPubkeys({
-  companyAgentPubkeys,
-  managedAgentPubkeys,
-}: {
-  companyAgentPubkeys: Iterable<string>;
-  managedAgentPubkeys: Iterable<string>;
-}) {
-  return new Set(
-    [...managedAgentPubkeys, ...companyAgentPubkeys].map((pubkey) =>
-      normalizePubkey(pubkey),
-    ),
+export function isAgentIdentityAddable(
+  candidate: { isAgent?: boolean; pubkey: string },
+  managedAgentPubkeys: ReadonlySet<string>,
+  companyAgentPubkeys: ReadonlySet<string>,
+) {
+  return (
+    isAgentIdentityInManagedList(candidate, managedAgentPubkeys) ||
+    companyAgentPubkeys.has(normalizePubkey(candidate.pubkey))
   );
 }
 
-/**
- * Allows verified agent identities already admitted to the current channel
- * into mention eligibility without granting this client ownership of their
- * runtime. NIP-29 membership events may omit the explicit "bot" role; in that
- * case the signed NIP-OA profile still truthfully supplies `isAgent`.
- */
 export function isAgentIdentityMentionable(
   candidate: {
     isAgent?: boolean;
@@ -132,7 +115,7 @@ export function isAgentIdentityMentionable(
 ) {
   return (
     isAgentIdentityInManagedList(candidate, managedAgentPubkeys) ||
-    (candidate.isMember === true && candidate.isAgent === true)
+    (candidate.isMember === true && candidate.role === "bot")
   );
 }
 
@@ -141,24 +124,39 @@ export function shouldHideAgentFromMentions({
   isMember,
   pubkey,
   mentionableAgentPubkeys,
+  directoryAgentPubkeys,
+  companyAgentPubkeys = new Set(),
 }: {
   isAgent: boolean;
   isMember: boolean;
   pubkey: string;
   mentionableAgentPubkeys: ReadonlySet<string>;
+  directoryAgentPubkeys: ReadonlySet<string>;
+  companyAgentPubkeys?: ReadonlySet<string>;
 }) {
   if (!isAgent) return false;
   const normalized = normalizePubkey(pubkey);
   // Invocable => always show.
   if (mentionableAgentPubkeys.has(normalized)) return false;
-  // A bot already admitted to this room must remain selectable even when its
-  // relay profile is stale or has not yet projected the current author. The
-  // room membership check above limits this exception to native channel bot
-  // members; buzz-acp still enforces the authoritative room and author
-  // allowlists when the structured mention reaches the VM.
-  if (isMember) return false;
+  // A tenant-verified provider that is already a native bot member of this
+  // channel remains selectable even when its relay invocation metadata is
+  // stale. Catalog-only identities are never admitted by this branch because
+  // the caller must also prove current-channel membership.
+  if (isMember && companyAgentPubkeys.has(normalized)) return false;
   // Non-member, non-invocable => hide (preserves prior behavior).
-  return true;
+  if (!isMember) return true;
+  // Member (Option B): hide only when we have an explicit not-invocable
+  // signal — a relay directory (kind:10100) entry that excludes us.
+  // Unknown invocability (not in directory) => show.
+  //
+  // NOTE: this assumes `directoryAgentPubkeys` and `mentionableAgentPubkeys`
+  // share the same source query (`relayAgentsQuery.data`), so directory
+  // presence without membership in `mentionableAgentPubkeys` is a real
+  // explicit-exclusion signal. If a future change sources the directory set
+  // from a different query, an agent that's directory-present but whose
+  // mentionability is still loading could be hidden prematurely — keep the
+  // two sets derived from the same query.
+  return directoryAgentPubkeys.has(normalized);
 }
 
 type AgentAutocompleteCandidate = {

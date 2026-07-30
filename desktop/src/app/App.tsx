@@ -20,7 +20,6 @@ import { deriveShellRoute } from "@/app/AppShell.helpers";
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { useReloadShortcut } from "@/app/useReloadShortcut";
 import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkeys";
-import { EvaosTeamsAuthGate } from "@/features/evaosTeams/EvaosTeamsAuthGate";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
 import {
@@ -34,6 +33,7 @@ import { CommunityOnboardingFlow } from "@/features/onboarding/ui/CommunityOnboa
 import {
   MachineOnboardingFlow,
   type MachineOnboardingPage,
+  type PostOnboardingNavigation,
 } from "@/features/onboarding/ui/MachineOnboardingFlow";
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { PendingInviteGate } from "@/features/onboarding/ui/PendingInviteGate";
@@ -66,6 +66,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 import { ProductMark } from "@/shared/product/ProductMark";
 import { desktopProductPolicy } from "@/shared/product/productIdentity";
+import { EvaosTeamsAuthGate } from "@/features/evaosTeams/EvaosTeamsAuthGate";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
 import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
 import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
@@ -610,6 +611,8 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
   });
   const [machineInitialPage, setMachineInitialPage] =
     useState<MachineOnboardingPage>();
+  const [postOnboardingNav, setPostOnboardingNav] =
+    useState<PostOnboardingNavigation | null>(null);
 
   const reopenMachineConfig = useCallback(() => {
     setMachineInitialPage("config");
@@ -623,6 +626,27 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
     },
     [machine.complete],
   );
+
+  const navigateAfterOnboarding = useCallback(
+    (nav: PostOnboardingNavigation) => {
+      setPostOnboardingNav(nav);
+    },
+    [],
+  );
+
+  // Execute the pending navigation once the RouterProvider is mounted (i.e.
+  // machine.stage transitions to "ready").  We wait for the ready stage rather
+  // than using setTimeout(0) so the router is guaranteed to exist before we call
+  // router.navigate().
+  useEffect(() => {
+    if (machine.stage === "ready" && postOnboardingNav) {
+      void router.navigate({
+        to: postOnboardingNav.to,
+        search: postOnboardingNav.search ?? {},
+      });
+      setPostOnboardingNav(null);
+    }
+  }, [machine.stage, postOnboardingNav]);
 
   const openAddCommunity = useCallback(
     (payload: AddCommunityDeepLinkPayload & { requestId: string }) =>
@@ -682,6 +706,7 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
         continueWithIdentity={machine.continueWithIdentity}
         identityLost={machine.identityLost}
         initialPage={machineInitialPage}
+        navigateAfterComplete={navigateAfterOnboarding}
         queryClient={machine.queryClient}
       />
       {shouldAcknowledgeDeepLink ? <PendingInviteGate /> : null}
@@ -689,7 +714,9 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
   );
 }
 
-function NativeBuzzApp() {
+export function App() {
+  useReloadShortcut();
+  useInitialRenderReady();
   const [sharedIdentity, setSharedIdentity] = useState<boolean | null>(null);
   const [queryClient] = useState(createBuzzQueryClient);
 
@@ -706,17 +733,13 @@ function NativeBuzzApp() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <MachineBootstrap sharedIdentity={sharedIdentity} />
+      {desktopProductPolicy().managed ? (
+        <EvaosTeamsAuthGate>
+          <MachineBootstrap sharedIdentity={sharedIdentity} />
+        </EvaosTeamsAuthGate>
+      ) : (
+        <MachineBootstrap sharedIdentity={sharedIdentity} />
+      )}
     </QueryClientProvider>
-  );
-}
-
-export function App() {
-  useReloadShortcut();
-  useInitialRenderReady();
-  return (
-    <EvaosTeamsAuthGate>
-      <NativeBuzzApp />
-    </EvaosTeamsAuthGate>
   );
 }

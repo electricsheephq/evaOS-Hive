@@ -292,9 +292,9 @@ test("existing Welcome starter needs no update when runtime already matches", ()
 test("welcome team starter definitions and role identities are stable", () => {
   assert.equal(WELCOME_TEAM_ID, "builtin-team:welcome");
   assert.deepEqual(WELCOME_TEAM_STARTERS, [
-    { name: "TARS", personaId: "builtin:fizz", role: "lead" },
-    { name: "Samantha", personaId: "builtin:honey", role: "teammate" },
-    { name: "HAL 9000", personaId: "builtin:bumble", role: "teammate" },
+    { name: "Fizz", personaId: "builtin:fizz", role: "lead" },
+    { name: "Honey", personaId: "builtin:honey", role: "teammate" },
+    { name: "Bumble", personaId: "builtin:bumble", role: "teammate" },
   ]);
 });
 

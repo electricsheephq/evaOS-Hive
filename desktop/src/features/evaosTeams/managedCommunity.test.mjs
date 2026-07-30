@@ -33,7 +33,7 @@ test("managed relay conversion accepts only a credential-free HTTPS origin", () 
   }
 });
 
-test("first managed entitlement creates and selects one native community", () => {
+test("fresh entitlement creates and selects one native community without token", () => {
   const state = resolveManagedCommunityState(
     [],
     ENTITLEMENT,
@@ -49,7 +49,7 @@ test("first managed entitlement creates and selects one native community", () =>
     },
   ]);
   assert.equal(state.activeId, ENTITLEMENT.communityId);
-  assert.deepEqual(state.retiredCommunities, []);
+  assert.equal(state.communities[0].token, undefined);
   assert.equal(
     isManagedCommunityStateReady(
       state.communities,
@@ -60,7 +60,7 @@ test("first managed entitlement creates and selects one native community", () =>
   );
 });
 
-test("same company keeps local name and repo configuration", () => {
+test("authoritative update preserves local name and repo config but removes token", () => {
   const existing = {
     id: ENTITLEMENT.communityId,
     name: "Electric Sheep",
@@ -84,7 +84,7 @@ test("same company keeps local name and repo configuration", () => {
   assert.deepEqual(state.retiredCommunities, [existing]);
 });
 
-test("different memberships sharing one relay never reuse local community identity", () => {
+test("same-relay conflicting membership is retired and its caches are clearable", () => {
   const previous = {
     id: "20000000-0000-4000-8000-000000000004",
     name: "Previous company",
@@ -92,93 +92,34 @@ test("different memberships sharing one relay never reuse local community identi
     pubkey: "b".repeat(64),
     addedAt: "2026-07-25T00:00:00.000Z",
   };
-  const state = resolveManagedCommunityState(
-    [previous],
-    ENTITLEMENT,
-    "2026-07-26T00:00:00.000Z",
-  );
-  assert.deepEqual(state.communities, [
-    {
-      id: ENTITLEMENT.communityId,
-      name: "Hive",
-      relayUrl: "wss://teams.example.invalid",
-      pubkey: ENTITLEMENT.publicKey,
-      addedAt: "2026-07-26T00:00:00.000Z",
-    },
-  ]);
+  const state = resolveManagedCommunityState([previous], ENTITLEMENT);
+  assert.equal(state.communities.length, 1);
+  assert.equal(state.communities[0].id, ENTITLEMENT.communityId);
   assert.deepEqual(state.retiredCommunities, [previous]);
-  const clearedScopes = [];
+  const cleared = [];
   forEachRetiredManagedCommunity(state.retiredCommunities, (community) => {
-    clearedScopes.push({
-      id: community.id,
-      relayUrl: community.relayUrl,
-    });
+    cleared.push([community.id, community.relayUrl]);
   });
-  assert.deepEqual(clearedScopes, [
-    {
-      id: previous.id,
-      relayUrl: previous.relayUrl,
-    },
-  ]);
-  assert.equal(
-    isManagedCommunityStateReady(state.communities, previous.id, ENTITLEMENT),
-    false,
-  );
+  assert.deepEqual(cleared, [[previous.id, previous.relayUrl]]);
 });
 
-test("unrelated communities on other relays remain available", () => {
+test("unrelated relays are preserved", () => {
   const unrelated = {
     id: "30000000-0000-4000-8000-000000000005",
-    name: "Unrelated community",
+    name: "Unrelated",
     relayUrl: "wss://other.example.invalid",
     pubkey: "c".repeat(64),
     addedAt: "2026-07-25T00:00:00.000Z",
   };
   const state = resolveManagedCommunityState([unrelated], ENTITLEMENT);
-  assert.equal(state.communities.length, 2);
-  assert.equal(state.communities[0].id, unrelated.id);
-  assert.equal(state.communities[1].id, ENTITLEMENT.communityId);
+  assert.deepEqual(
+    state.communities.map(({ id }) => id),
+    [unrelated.id, ENTITLEMENT.communityId],
+  );
   assert.deepEqual(state.retiredCommunities, []);
 });
 
-test("persisted same-relay membership conflict forces one cleanup reconciliation", () => {
-  const previous = {
-    id: "20000000-0000-4000-8000-000000000004",
-    name: "Previous company",
-    relayUrl: "wss://teams.example.invalid",
-    pubkey: "b".repeat(64),
-    addedAt: "2026-07-25T00:00:00.000Z",
-  };
-  const entitled = {
-    id: ENTITLEMENT.communityId,
-    name: "Hive",
-    relayUrl: "wss://teams.example.invalid",
-    pubkey: ENTITLEMENT.publicKey,
-    addedAt: "2026-07-26T00:00:00.000Z",
-  };
-  assert.equal(
-    isManagedCommunityStateReady(
-      [previous, entitled],
-      ENTITLEMENT.communityId,
-      ENTITLEMENT,
-    ),
-    false,
-  );
-
-  const state = resolveManagedCommunityState([previous, entitled], ENTITLEMENT);
-  assert.deepEqual(state.communities, [entitled]);
-  assert.deepEqual(state.retiredCommunities, [previous]);
-  assert.equal(
-    isManagedCommunityStateReady(
-      state.communities,
-      state.activeId,
-      ENTITLEMENT,
-    ),
-    true,
-  );
-});
-
-test("persisted active selection must match the entitlement", () => {
+test("readiness requires selected exact id relay pubkey and no conflicting row", () => {
   const state = resolveManagedCommunityState([], ENTITLEMENT);
   assert.equal(
     isManagedCommunityStateReady(state.communities, null, ENTITLEMENT),
@@ -186,8 +127,15 @@ test("persisted active selection must match the entitlement", () => {
   );
   assert.equal(
     isManagedCommunityStateReady(
-      state.communities,
-      "20000000-0000-4000-8000-000000000004",
+      [
+        ...state.communities,
+        {
+          ...state.communities[0],
+          id: "20000000-0000-4000-8000-000000000004",
+          pubkey: "b".repeat(64),
+        },
+      ],
+      state.activeId,
       ENTITLEMENT,
     ),
     false,

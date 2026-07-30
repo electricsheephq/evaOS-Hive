@@ -26,7 +26,6 @@ import { Spinner } from "@/shared/ui/spinner";
 import { Textarea } from "@/shared/ui/textarea";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
 import { SignOutSection } from "./SignOutSection";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
 
 type ProfileSettingsCardProps = {
@@ -570,7 +569,7 @@ export function ProfileSettingsCard({
       <div>
         <SettingsSectionHeader
           title="Profile"
-          description={`Update how your name, avatar, and bio appear across ${desktopProductPolicy().productName}.`}
+          description="Update how your name, avatar, and bio appear across Buzz."
         />
 
         <div className="space-y-3">

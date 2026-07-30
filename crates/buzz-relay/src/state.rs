@@ -54,10 +54,6 @@ struct ConnEntry {
     backpressure_count: Arc<AtomicU8>,
     subscriptions: ConnectionSubscriptions,
     authenticated_pubkey: Arc<std::sync::RwLock<Option<Vec<u8>>>>,
-    /// Relay-member key that authorizes this connection. This is the
-    /// authenticated key for direct members and the verified owner key for
-    /// NIP-OA virtual agents.
-    membership_pubkey: Arc<std::sync::RwLock<Option<Vec<u8>>>>,
     grace_limit: u8,
 }
 
@@ -182,33 +178,6 @@ where
     (closed, failures)
 }
 
-async fn revalidate_membership_principals<Check, CheckFuture>(
-    manager: &ConnectionManager,
-    mut check_member: Check,
-) -> (usize, Vec<(CommunityId, Vec<u8>, buzz_db::DbError)>)
-where
-    Check: FnMut(CommunityId, Vec<u8>) -> CheckFuture,
-    CheckFuture: Future<Output = Result<bool, buzz_db::DbError>>,
-{
-    let mut closed = 0;
-    let mut failures = Vec::new();
-    for (community_id, membership_pubkey) in manager.live_membership_principals() {
-        match check_member(community_id, membership_pubkey.clone()).await {
-            Ok(false) => {
-                closed += manager.disconnect_membership_principal(
-                    community_id,
-                    &membership_pubkey,
-                    "",
-                    "blocked: relay membership removed",
-                );
-            }
-            Ok(true) => {}
-            Err(error) => failures.push((community_id, membership_pubkey, error)),
-        }
-    }
-    (closed, failures)
-}
-
 /// Tracks active Nostr WebSocket connections and provides message routing by connection ID.
 pub struct ConnectionManager {
     connections: DashMap<Uuid, ConnEntry>,
@@ -256,7 +225,6 @@ impl ConnectionManager {
                 backpressure_count,
                 subscriptions,
                 authenticated_pubkey: Arc::new(std::sync::RwLock::new(None)),
-                membership_pubkey: Arc::new(std::sync::RwLock::new(None)),
                 grace_limit,
             },
         );
@@ -277,80 +245,11 @@ impl ConnectionManager {
 
     /// Record the authenticated pubkey for a connection after NIP-42 succeeds.
     pub fn set_authenticated_pubkey(&self, conn_id: Uuid, pubkey_bytes: Vec<u8>) {
-        self.set_authenticated_membership(conn_id, pubkey_bytes.clone(), pubkey_bytes);
-    }
-
-    /// Record the authenticated key and the relay-member principal that
-    /// authorizes it. For NIP-OA agents these keys intentionally differ.
-    pub fn set_authenticated_membership(
-        &self,
-        conn_id: Uuid,
-        pubkey_bytes: Vec<u8>,
-        membership_pubkey_bytes: Vec<u8>,
-    ) {
         if let Some(entry) = self.connections.get(&conn_id) {
             if let Ok(mut slot) = entry.authenticated_pubkey.write() {
                 *slot = Some(pubkey_bytes);
             }
-            if let Ok(mut slot) = entry.membership_pubkey.write() {
-                *slot = Some(membership_pubkey_bytes);
-            }
         }
-    }
-
-    /// Return the distinct live `(community, relay-member principal)` pairs.
-    pub fn live_membership_principals(&self) -> HashSet<(CommunityId, Vec<u8>)> {
-        self.connections
-            .iter()
-            .filter_map(|entry| {
-                entry
-                    .membership_pubkey
-                    .read()
-                    .ok()?
-                    .clone()
-                    .map(|pubkey| (entry.community_id, pubkey))
-            })
-            .collect()
-    }
-
-    /// Disconnect every connection whose authorization derives from the given
-    /// relay-member principal in one community.
-    pub fn disconnect_membership_principal(
-        &self,
-        community: CommunityId,
-        membership_pubkey: &[u8],
-        event_id: &str,
-        reason: &str,
-    ) -> usize {
-        let frame = crate::protocol::RelayMessage::ok(event_id, false, reason);
-        let conn_ids: Vec<Uuid> = self
-            .connections
-            .iter()
-            .filter_map(|entry| {
-                let matches = entry.community_id == community
-                    && entry
-                        .membership_pubkey
-                        .read()
-                        .ok()
-                        .and_then(|stored| {
-                            stored
-                                .as_ref()
-                                .map(|stored| stored.as_slice() == membership_pubkey)
-                        })
-                        .unwrap_or(false);
-                matches.then_some(*entry.key())
-            })
-            .collect();
-
-        for conn_id in &conn_ids {
-            if let Some(entry) = self.connections.get(conn_id) {
-                let _ = entry
-                    .ctrl_tx
-                    .try_send(WsMessage::Text(frame.clone().into()));
-                entry.cancel.cancel();
-            }
-        }
-        conn_ids.len()
     }
 
     /// Return live connection IDs authenticated as `pubkey_bytes` in one community.
@@ -1186,31 +1085,6 @@ impl AppState {
         closed
     }
 
-    /// Revalidate the durable relay-member principals behind live sockets.
-    ///
-    /// Redis disconnect delivery is best-effort. This bounded local scan is
-    /// the durable backstop that closes idle sessions even when a pod missed
-    /// the removal command.
-    pub async fn revalidate_live_memberships(&self) -> usize {
-        if !self.config.require_relay_membership {
-            return 0;
-        }
-
-        let (closed, failures) =
-            revalidate_membership_principals(&self.conn_manager, |community_id, pubkey| {
-                let db = self.db.clone();
-                async move {
-                    let membership_hex = hex::encode(pubkey);
-                    db.is_relay_member(community_id, &membership_hex).await
-                }
-            })
-            .await;
-        for (community_id, _, error) in failures {
-            tracing::warn!(%community_id, %error, "relay membership revalidation failed; retaining its sockets until next tick");
-        }
-        closed
-    }
-
     /// Get accessible channel IDs with a 10-second cache. Falls back to DB on miss.
     pub async fn get_accessible_channel_ids_cached(
         &self,
@@ -1428,106 +1302,6 @@ mod tests {
             0,
             "successful send should reset counter"
         );
-    }
-
-    #[test]
-    fn membership_principal_disconnect_covers_delegated_agents_and_preserves_tenant_fence() {
-        let mgr = ConnectionManager::new();
-        let community_a = CommunityId::from_uuid(Uuid::from_u128(0xa));
-        let community_b = CommunityId::from_uuid(Uuid::from_u128(0xb));
-        let owner = vec![1u8; 32];
-        let agent = vec![2u8; 32];
-        let other = vec![3u8; 32];
-
-        let register = |community, authenticated, principal| {
-            let conn_id = Uuid::new_v4();
-            let (tx, _rx) = mpsc::channel(8);
-            let (ctrl_tx, _ctrl_rx) = mpsc::channel(8);
-            let cancel = CancellationToken::new();
-            mgr.register(
-                conn_id,
-                tx,
-                ctrl_tx,
-                cancel.clone(),
-                community,
-                Arc::new(AtomicU8::new(0)),
-                Arc::new(Mutex::new(HashMap::new())),
-                3,
-            );
-            mgr.set_authenticated_membership(conn_id, authenticated, principal);
-            cancel
-        };
-
-        let owner_a = register(community_a, owner.clone(), owner.clone());
-        let agent_a = register(community_a, agent, owner.clone());
-        let other_a = register(community_a, other, vec![3u8; 32]);
-        let owner_b = register(community_b, owner.clone(), owner.clone());
-
-        assert_eq!(
-            mgr.disconnect_membership_principal(
-                community_a,
-                &owner,
-                "",
-                "blocked: relay membership removed"
-            ),
-            2
-        );
-        assert!(owner_a.is_cancelled());
-        assert!(agent_a.is_cancelled());
-        assert!(!other_a.is_cancelled());
-        assert!(!owner_b.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn durable_membership_revalidation_closes_missed_disconnects() {
-        let mgr = ConnectionManager::new();
-        let community = CommunityId::from_uuid(Uuid::from_u128(0xa));
-        let removed = vec![1u8; 32];
-        let retained = vec![2u8; 32];
-        let failed = vec![3u8; 32];
-
-        let register = |authenticated, principal| {
-            let conn_id = Uuid::new_v4();
-            let (tx, _rx) = mpsc::channel(8);
-            let (ctrl_tx, _ctrl_rx) = mpsc::channel(8);
-            let cancel = CancellationToken::new();
-            mgr.register(
-                conn_id,
-                tx,
-                ctrl_tx,
-                cancel.clone(),
-                community,
-                Arc::new(AtomicU8::new(0)),
-                Arc::new(Mutex::new(HashMap::new())),
-                3,
-            );
-            mgr.set_authenticated_membership(conn_id, authenticated, principal);
-            cancel
-        };
-
-        let removed_cancel = register(vec![11u8; 32], removed.clone());
-        let retained_cancel = register(retained.clone(), retained.clone());
-        let failed_cancel = register(failed.clone(), failed.clone());
-
-        let (closed, failures) = revalidate_membership_principals(&mgr, |_, principal| {
-            let removed = removed.clone();
-            let failed = failed.clone();
-            async move {
-                if principal == failed {
-                    Err(buzz_db::DbError::InvalidData("injected failure".into()))
-                } else {
-                    Ok(principal != removed)
-                }
-            }
-        })
-        .await;
-
-        assert_eq!(closed, 1);
-        assert!(removed_cancel.is_cancelled());
-        assert!(!retained_cancel.is_cancelled());
-        assert!(!failed_cancel.is_cancelled());
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0].1, failed);
     }
 
     #[test]

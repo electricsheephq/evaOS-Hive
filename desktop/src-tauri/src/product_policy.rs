@@ -67,7 +67,7 @@ mod tests {
         assert_eq!(policy.managed, cfg!(feature = "evaos-teams-managed"));
         if policy.managed {
             assert_eq!(policy.product_name, "Hive");
-            assert_eq!(policy.deep_link_scheme, "evaos-teams");
+            assert_eq!(policy.deep_link_scheme, "buzz");
             assert!(!policy.upstream_hosted_services_enabled);
         } else {
             assert_eq!(policy.product_name, "Buzz");

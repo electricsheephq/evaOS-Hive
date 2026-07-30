@@ -42,6 +42,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_ENDPOINT");
     println!("cargo:rerun-if-env-changed=HIVE_UPDATER_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=HIVE_SUPABASE_PUBLISHABLE_KEY");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_PROVIDER");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_MODEL");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AGENT_ENV");

@@ -2,7 +2,6 @@
 import * as React from "react";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
-
 import type { Community } from "@/features/communities/types";
 import { AddCommunityDialog } from "@/features/communities/ui/AddCommunityDialog";
 import type { AddCommunityPrefillRequest } from "@/features/communities/addCommunityPrefill";
@@ -564,7 +563,9 @@ export function AppSidebar({
       variant="sidebar"
     >
       <div
-        className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+        className={`relative flex min-h-0 flex-1 flex-col overflow-hidden ${
+          communities.length > 1 ? "md:-ml-[11px] md:w-[calc(100%+11px)]" : ""
+        }`}
         data-sidebar-background
         data-testid="app-sidebar-scroll-anchor"
       >

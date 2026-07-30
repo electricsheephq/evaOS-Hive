@@ -16,14 +16,12 @@ import {
   rememberPendingWelcomeChannel,
 } from "@/features/onboarding/welcome";
 import { forceFreshOnboarding } from "@/features/onboarding/devFreshOnboarding";
-import { shouldUseLocalWelcomeTeam } from "@/features/onboarding/localWelcomeTeamPolicy";
 import { ensureWelcomeCanvas } from "@/features/onboarding/welcomeCanvas";
 import { ensureWelcomeTeam } from "@/features/onboarding/welcomeGuide";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel } from "@/shared/api/types";
-import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   createChannel,
   deleteChannel,
@@ -124,16 +122,12 @@ export async function initializeStarterChannels(
         ...channels.filter((channel) => !ensuredIds.has(channel.id)),
       ];
     });
-    if (shouldUseLocalWelcomeTeam(desktopProductPolicy().managed)) {
-      void seedWelcomeExperience(
-        queryClient,
-        welcomeChannel.id,
-        pubkey,
-        communityScope,
-      );
-    } else {
-      markWelcomeChannelEnsured(pubkey, communityScope);
-    }
+    void seedWelcomeExperience(
+      queryClient,
+      welcomeChannel.id,
+      pubkey,
+      communityScope,
+    );
     await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
     if (focus) {
       // Refreshing can briefly replace the optimistic cache with an older relay

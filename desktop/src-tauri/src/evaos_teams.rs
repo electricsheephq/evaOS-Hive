@@ -1,91 +1,54 @@
-//! Electric-only evaOS Teams authentication.
+//! Electric-only managed admission for Hive.
 //!
-//! This module is intentionally separate from Buzz's native identity path.
-//! Managed builds use an opaque Electric Desktop session plus a Nostr key held
-//! under a distinct OS-keyring service. Neither value is serialized to the
-//! renderer, migrated from native Buzz, or accepted from environment input.
+//! This adapter deliberately reuses Buzz's resolved native identity and native
+//! workspace/runtime paths. Electric stores only an opaque desktop session; it
+//! never receives or persists the native private key.
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
-use axum::{routing::get, Router};
-use buzz_core_pkg::{
-    kind::KIND_PAIRING,
-    pairing::{qr::decode_qr, session::PairingSession, types::PayloadType},
+use axum::{
+    extract::{Query, State as AxumState},
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Router,
 };
-use futures_util::{SinkExt, StreamExt};
-use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp, ToBech32};
+use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::State;
 use tauri_plugin_opener::OpenerExt;
-use tokio::{
-    net::TcpListener,
-    sync::{mpsc, oneshot},
-};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tokio_util::sync::CancellationToken;
+use tokio::{net::TcpListener, sync::oneshot};
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::{
-    app_state::AppState,
-    commands::pairing::{event_to_relay_json, handle_nip42_auth, parse_relay_event},
-    secret_store::SecretStore,
-};
+use crate::{app_state::AppState, secret_store::SecretStore};
 #[cfg(test)]
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, normalize_device_code, DeviceCodeProof};
 
-mod company_agent_policy;
 mod company_directory;
 mod device_code;
-mod identity_rotation;
-mod login;
 
-pub(crate) use company_agent_policy::{
-    get_hive_company_agent_policy, set_hive_company_agent_policy,
-};
-use company_directory::{
-    sanitize_company_agents, sanitize_company_members, CollaborationProjection, HiveCompanyAgent,
-    HiveCompanyMember,
-};
-#[cfg(test)]
-use company_directory::{RawHiveCompanyAgent, RawHiveCompanyMember};
-use identity_rotation::pending_identity_rotation_key;
-pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
-#[cfg(test)]
-use identity_rotation::{
-    signed_identity_rotation_challenge, staged_identity_rotation_entries,
-    validate_rotated_entitlement, IdentityRotationChallenge, IdentityRotationChallengeResponse,
-    IDENTITY_ROTATION_SCHEMA,
-};
-#[cfg(test)]
-use login::callback_device_code;
-use login::{login_callback, register_pending_login, submit_pending_login_code, LoginCallback};
+pub(crate) use company_directory::list_hive_company_agents;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
-// Supabase publishable keys are intentionally public client identifiers. This
-// value grants no service-role access; authorization still comes exclusively
-// from the opaque Desktop session returned after browser authentication.
-const SUPABASE_PUBLISHABLE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmUiLCJyZWYiOiJyaGZvamVsa2d0d2N4bnJmaHRsaiIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzczMjQzNTc2LCJleHAiOjIwODg4MTk1NzZ9.X8mJHaYIolCmx6j_473GGb05OyFTy43Hq-BEelZRjAE";
+// The publishable client identifier is injected only into managed builds. It
+// is intentionally absent from source control and is not an authorization
+// credential; authorization still comes only from the opaque desktop session.
+const SUPABASE_PUBLISHABLE_KEY: Option<&str> = option_env!("HIVE_SUPABASE_PUBLISHABLE_KEY");
 const KEYRING_SERVICE: &str = "evaos-teams-desktop";
-// Kept only to migrate the single-identity layout shipped by the first managed
-// candidate. New keys are scoped by the server-selected membership UUID.
-const IDENTITY_KEY: &str = "identity";
-const IDENTITY_KEY_PREFIX: &str = "identity:";
-const ACTIVE_MEMBERSHIP_KEY: &str = "active_membership_id";
 const SESSION_KEY: &str = "electric_desktop_session";
 const LOGOUT_PENDING_KEY: &str = "logout_pending";
 const KEY_BINDING_KIND: u16 = 27_235;
 const KEY_BINDING_SCHEMA: &str = "evaos.buzz_key_binding.v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const IDENTITY_RECOVERY_TIMEOUT: Duration = Duration::from_secs(130);
 
 fn managed_store() -> &'static SecretStore {
     static STORE: OnceLock<SecretStore> = OnceLock::new();
@@ -107,7 +70,7 @@ fn verify_managed_store_writable() -> Result<(), String> {
     Ok(())
 }
 
-/// Public, renderer-safe entitlement projection.
+/// Renderer-safe projection of a server-selected managed entitlement.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub(crate) struct EvaosTeamsEntitlement {
@@ -120,8 +83,8 @@ pub(crate) struct EvaosTeamsEntitlement {
     refresh_after_seconds: u64,
 }
 
-/// Public authentication state. It deliberately contains no Desktop token,
-/// device code, private key, challenge nonce, email, or account selector.
+/// Public authentication state. Session, verifier, challenge, and private key
+/// material are deliberately absent.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EvaosTeamsAuthStatus {
@@ -146,57 +109,13 @@ impl EvaosTeamsAuthStatus {
         }
     }
 
-    fn signed_out() -> Self {
+    fn managed(phase: &'static str, message: Option<String>) -> Self {
         Self {
             managed: true,
-            phase: "signed_out",
+            phase,
             authenticated: false,
-            keychain_available: true,
-            message: None,
-            entitlement: None,
-        }
-    }
-
-    fn locked(message: String) -> Self {
-        Self {
-            managed: true,
-            phase: "keychain_locked",
-            authenticated: false,
-            keychain_available: false,
-            message: Some(message),
-            entitlement: None,
-        }
-    }
-
-    fn reauth(message: String) -> Self {
-        Self {
-            managed: true,
-            phase: "reauth_required",
-            authenticated: false,
-            keychain_available: true,
-            message: Some(message),
-            entitlement: None,
-        }
-    }
-
-    fn identity_recovery_required(message: String) -> Self {
-        Self {
-            managed: true,
-            phase: "identity_recovery_required",
-            authenticated: false,
-            keychain_available: true,
-            message: Some(message),
-            entitlement: None,
-        }
-    }
-
-    fn logout_pending(message: String) -> Self {
-        Self {
-            managed: true,
-            phase: "logout_pending",
-            authenticated: false,
-            keychain_available: true,
-            message: Some(message),
+            keychain_available: phase != "keychain_locked",
+            message,
             entitlement: None,
         }
     }
@@ -211,96 +130,24 @@ impl EvaosTeamsAuthStatus {
             entitlement: Some(entitlement),
         }
     }
+
+    fn identity_restore_required(message: impl Into<String>) -> Self {
+        Self::managed("identity_restore_required", Some(message.into()))
+    }
 }
 
 #[derive(Default)]
 struct ManagedRuntime {
     initialized: bool,
     session: Option<Zeroizing<String>>,
-    keys: Option<Keys>,
-    membership_id: Option<String>,
     logout_pending: bool,
 }
 
-#[derive(Clone)]
-struct PendingIdentityRecovery {
-    session: Zeroizing<String>,
-    membership_id: String,
-    public_key: String,
-}
-
-struct IdentityRecoveryPairing {
-    session: tokio::sync::Mutex<Option<IdentityRecoverySessionHandle>>,
-    cancel: Mutex<Option<CancellationToken>>,
-    outbound_tx: Mutex<Option<mpsc::Sender<String>>>,
-    generation: Mutex<u64>,
-}
-
-#[derive(Clone)]
-struct IdentityRecoverySessionHandle {
-    session: Arc<tokio::sync::Mutex<Option<PairingSession>>>,
-}
-
-impl Default for IdentityRecoveryPairing {
-    fn default() -> Self {
-        Self {
-            session: tokio::sync::Mutex::new(None),
-            cancel: Mutex::new(None),
-            outbound_tx: Mutex::new(None),
-            generation: Mutex::new(0),
-        }
-    }
-}
-
-impl IdentityRecoveryPairing {
-    fn clear(&self) {
-        *self
-            .cancel
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
-        *self
-            .outbound_tx
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
-    }
-
-    fn next_generation(&self) -> u64 {
-        let mut generation = self
-            .generation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        *generation = generation.saturating_add(1);
-        *generation
-    }
-
-    fn current_generation(&self) -> u64 {
-        *self
-            .generation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-    }
-
-    fn cancel_current(&self) {
-        if let Some(cancel) = self
-            .cancel
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-        {
-            cancel.cancel();
-        }
-        self.clear();
-    }
-}
-
-/// Backend-only managed credential state.
+/// Backend-only managed session state.
 #[derive(Default)]
 pub(crate) struct EvaosTeamsState {
     runtime: Mutex<ManagedRuntime>,
     operation: tokio::sync::Mutex<()>,
-    pending_login: Mutex<Option<std::sync::Arc<LoginCallback>>>,
-    pending_identity_recovery: Mutex<Option<PendingIdentityRecovery>>,
-    identity_recovery_pairing: IdentityRecoveryPairing,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -350,12 +197,6 @@ struct IdentityBindingResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct CollaborationResponse {
-    status: String,
-    collaboration: CollaborationProjection,
-}
-
-#[derive(Debug, Deserialize)]
 struct LogoutResponse {
     status: String,
 }
@@ -364,16 +205,6 @@ struct LogoutResponse {
 struct ClaimResponse {
     desktop_session: String,
     desktop_session_expires_at: String,
-}
-
-#[derive(Serialize, Clone)]
-struct IdentityRecoverySasPayload {
-    sas: String,
-}
-
-#[derive(Serialize, Clone)]
-struct IdentityRecoveryErrorPayload {
-    message: String,
 }
 
 #[derive(Debug)]
@@ -405,16 +236,22 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
     bearer: Option<&str>,
     body: serde_json::Value,
 ) -> Result<T, ApiFailure> {
+    let publishable_key = SUPABASE_PUBLISHABLE_KEY
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| ApiFailure {
+            status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            code: "missing_build_configuration".to_string(),
+        })?;
     let url = functions_url(function).map_err(|code| ApiFailure {
         status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
         code,
     })?;
     let mut request = client
         .post(url)
-        .header("apikey", SUPABASE_PUBLISHABLE_KEY)
+        .header("apikey", publishable_key)
         .header(
             "x-client-info",
-            concat!("hive-desktop/", env!("CARGO_PKG_VERSION")),
+            format!("hive-desktop/{}", env!("CARGO_PKG_VERSION")),
         )
         .timeout(REQUEST_TIMEOUT)
         .json(&body);
@@ -429,8 +266,6 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
     if !status.is_success() {
         return Err(ApiFailure {
             status,
-            // A remote error body is untrusted and may echo a device code,
-            // signed challenge, or bearer token. Only return a local category.
             code: "request_failed".to_string(),
         });
     }
@@ -448,7 +283,8 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
 }
 
 fn relay_websocket_url(relay_host: &str) -> Result<String, String> {
-    let mut url = Url::parse(relay_host).map_err(|_| "invalid managed relay URL".to_string())?;
+    let mut url = Url::parse(relay_host)
+        .map_err(|_| "managed entitlement has an invalid relay origin".to_string())?;
     if url.scheme() != "https"
         || url.username() != ""
         || url.password().is_some()
@@ -464,13 +300,22 @@ fn relay_websocket_url(relay_host: &str) -> Result<String, String> {
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
+fn valid_public_key(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn validate_entitlement(
     entitlement: &EvaosTeamsEntitlement,
     expected_public_key: &str,
 ) -> Result<String, String> {
     uuid::Uuid::parse_str(&entitlement.community_id)
         .map_err(|_| "managed entitlement has an invalid community".to_string())?;
-    if entitlement.public_key.as_deref() != Some(expected_public_key) {
+    if !valid_public_key(expected_public_key)
+        || entitlement.public_key.as_deref() != Some(expected_public_key)
+    {
         return Err("managed entitlement belongs to a different identity".to_string());
     }
     if entitlement.role.trim().is_empty()
@@ -489,11 +334,14 @@ fn validate_entitlement(
 
 fn bind_verified_entitlement(
     mut entitlement: EvaosTeamsEntitlement,
-    expected_relay: &str,
+    challenge: &ChallengeResponse,
     public_key: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
-    if entitlement.relay_host != expected_relay || entitlement.public_key.is_some() {
-        return Err("Managed key verification changed the server-selected scope".to_string());
+    if entitlement.relay_host != challenge.relay_host
+        || entitlement.community_id != challenge.challenge.community_id
+        || entitlement.public_key.is_some()
+    {
+        return Err("managed key verification changed the server-selected scope".to_string());
     }
     entitlement.public_key = Some(public_key.to_string());
     validate_entitlement(&entitlement, public_key)?;
@@ -503,10 +351,12 @@ fn bind_verified_entitlement(
 fn validate_challenge(
     response: &ChallengeResponse,
     expected_public_key: &str,
+    expected_membership_id: &str,
 ) -> Result<(), String> {
     if response.status != "challenge_issued"
         || response.challenge.schema_version != KEY_BINDING_SCHEMA
         || response.challenge.public_key != expected_public_key
+        || response.challenge.membership_id != expected_membership_id
         || response.event_template.kind != KEY_BINDING_KIND
     {
         return Err("managed key challenge does not match this device".to_string());
@@ -556,8 +406,13 @@ fn validate_challenge(
 fn signed_challenge(
     response: &ChallengeResponse,
     keys: &Keys,
+    expected_membership_id: &str,
 ) -> Result<serde_json::Value, String> {
-    validate_challenge(response, &keys.public_key().to_hex())?;
+    validate_challenge(
+        response,
+        &keys.public_key().to_hex(),
+        expected_membership_id,
+    )?;
     let tags = response
         .event_template
         .tags
@@ -577,6 +432,25 @@ fn signed_challenge(
         .map_err(|error| format!("could not encode managed key challenge: {error}"))
 }
 
+fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Result<(), String> {
+    uuid::Uuid::parse_str(&binding.membership_id)
+        .map_err(|_| "Electric Sheep returned an invalid membership".to_string())?;
+    let canonical = binding
+        .public_key
+        .as_deref()
+        .filter(|value| valid_public_key(value))
+        .ok_or_else(|| {
+            "Electric Sheep has no canonical Hive identity for this membership".to_string()
+        })?;
+    if canonical != keys.public_key().to_hex() {
+        return Err(
+            "This device's native Buzz identity does not match the canonical Hive identity"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn disable_managed_access(app_state: &AppState) {
     app_state
         .evaos_teams_authorized
@@ -586,96 +460,34 @@ fn disable_managed_access(app_state: &AppState) {
     }
 }
 
-fn encode_managed_identity(keys: &Keys) -> Result<String, String> {
-    keys.secret_key()
-        .to_bech32()
-        .map_err(|error| format!("could not encode managed identity: {error}"))
-}
-
-#[cfg(test)]
-fn identity_only_entries(keys: &Keys) -> Result<HashMap<String, String>, String> {
-    Ok(HashMap::from([(
-        IDENTITY_KEY.to_string(),
-        encode_managed_identity(keys)?,
-    )]))
-}
-
-fn membership_identity_key(membership_id: &str) -> Result<String, String> {
-    uuid::Uuid::parse_str(membership_id)
-        .map_err(|_| "managed membership identity is invalid".to_string())?;
-    Ok(format!("{IDENTITY_KEY_PREFIX}{membership_id}"))
-}
-
-fn parse_stored_identity(value: &str) -> Result<Keys, String> {
-    Keys::parse(value.trim()).map_err(|_| "managed Keychain identity is invalid".to_string())
-}
-
-enum LoginKeySelection {
-    Ready(Keys),
-    RecoveryRequired { public_key: String },
-}
-
-fn select_login_keys(
-    stored: &HashMap<String, String>,
-    binding: &IdentityBinding,
-) -> Result<LoginKeySelection, String> {
-    let scoped_key = membership_identity_key(&binding.membership_id)?;
-    let scoped = stored
-        .get(&scoped_key)
-        .map(|value| parse_stored_identity(value))
-        .transpose()?;
-
-    match binding.public_key.as_deref() {
-        Some(public_key) => {
-            if public_key.len() != 64
-                || !public_key
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
-                return Err("server returned an invalid managed public identity".to_string());
-            }
-            if let Some(keys) = scoped {
-                if keys.public_key().to_hex() == public_key {
-                    return Ok(LoginKeySelection::Ready(keys));
-                }
-            }
-            if let Some(value) = stored.get(&pending_identity_rotation_key(&binding.membership_id)?)
-            {
-                let staged = parse_stored_identity(value)?;
-                if staged.public_key().to_hex() == public_key {
-                    return Ok(LoginKeySelection::Ready(staged));
-                }
-            }
-            if let Some(value) = stored.get(IDENTITY_KEY) {
-                let legacy = parse_stored_identity(value)?;
-                if legacy.public_key().to_hex() == public_key {
-                    return Ok(LoginKeySelection::Ready(legacy));
-                }
-            }
-            Ok(LoginKeySelection::RecoveryRequired {
-                public_key: public_key.to_string(),
-            })
-        }
-        None => Ok(LoginKeySelection::Ready(
-            scoped.unwrap_or_else(Keys::generate),
-        )),
-    }
+fn install_entitlement(
+    app_state: &AppState,
+    keys: &Keys,
+    entitlement: &EvaosTeamsEntitlement,
+) -> Result<(), String> {
+    let relay = validate_entitlement(entitlement, &keys.public_key().to_hex())?;
+    disable_managed_access(app_state);
+    *app_state
+        .relay_url_override
+        .lock()
+        .map_err(|error| error.to_string())? = Some(relay);
+    app_state
+        .managed_agent_restore_pending
+        .store(true, std::sync::atomic::Ordering::Release);
+    app_state
+        .evaos_teams_authorized
+        .store(true, std::sync::atomic::Ordering::Release);
+    Ok(())
 }
 
 fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
-    let Some(stored) = stored else {
-        return Ok(ManagedRuntime {
-            initialized: true,
-            ..ManagedRuntime::default()
-        });
-    };
-    if stored.is_empty() {
-        return Ok(ManagedRuntime {
-            initialized: true,
-            ..ManagedRuntime::default()
-        });
+    let stored = stored.unwrap_or_default();
+    if stored
+        .keys()
+        .any(|key| key != SESSION_KEY && key != LOGOUT_PENDING_KEY)
+    {
+        return Err("managed Keychain contains unsupported credential material".to_string());
     }
-
     let session = stored
         .get(SESSION_KEY)
         .filter(|value| !value.trim().is_empty())
@@ -687,101 +499,11 @@ fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<Manag
     if logout_pending && session.is_none() {
         return Err("managed logout marker has no Desktop session".to_string());
     }
-    let membership_id = stored.get(ACTIVE_MEMBERSHIP_KEY).cloned();
-    let identity = if let Some(membership_id) = membership_id.as_deref() {
-        stored.get(&membership_identity_key(membership_id)?)
-    } else {
-        stored.get(IDENTITY_KEY)
-    };
-    let keys = identity
-        .map(|value| parse_stored_identity(value))
-        .transpose()?;
-    if session.is_some() && keys.is_none() {
-        return Err("managed Keychain identity is missing".to_string());
-    }
-
     Ok(ManagedRuntime {
         initialized: true,
         session,
-        keys,
-        membership_id,
         logout_pending,
     })
-}
-
-fn install_entitlement(
-    app_state: &AppState,
-    keys: &Keys,
-    entitlement: &EvaosTeamsEntitlement,
-) -> Result<(), String> {
-    let relay = validate_entitlement(entitlement, &keys.public_key().to_hex())?;
-    disable_managed_access(app_state);
-    *app_state.keys.lock().map_err(|error| error.to_string())? = keys.clone();
-    *app_state
-        .relay_url_override
-        .lock()
-        .map_err(|error| error.to_string())? = Some(relay);
-    app_state
-        .evaos_teams_authorized
-        .store(true, std::sync::atomic::Ordering::Release);
-    app_state
-        .managed_agent_restore_pending
-        .store(true, std::sync::atomic::Ordering::Release);
-    start_authenticated_native_runtime(app_state, keys);
-    Ok(())
-}
-
-fn start_authenticated_native_runtime(app_state: &AppState, keys: &Keys) {
-    if app_state
-        .evaos_teams_native_runtime_started
-        .compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::AcqRel,
-            std::sync::atomic::Ordering::Acquire,
-        )
-        .is_err()
-    {
-        return;
-    }
-    let app = app_state
-        .app_handle
-        .lock()
-        .ok()
-        .and_then(|handle| handle.clone());
-    let Some(app) = app else {
-        app_state
-            .evaos_teams_native_runtime_started
-            .store(false, std::sync::atomic::Ordering::Release);
-        return;
-    };
-
-    crate::event_sync::spawn_event_sync(app.clone(), keys.clone());
-    tauri::async_runtime::spawn(async move {
-        use std::time::Duration;
-
-        let Ok(db_path) = crate::managed_agents::managed_agents_base_dir(&app)
-            .map(|directory| directory.join("retention.db"))
-        else {
-            eprintln!("buzz-desktop: managed event-flush cannot resolve retention db path");
-            return;
-        };
-        loop {
-            let state = app.state::<AppState>();
-            if state
-                .evaos_teams_authorized
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                if let Err(error) =
-                    crate::managed_agents::persona_events::flush_pending_events(&db_path, &state)
-                        .await
-                {
-                    eprintln!("buzz-desktop: managed event-flush: {error}");
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
-    });
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -795,20 +517,14 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
 }
 
 #[cfg(feature = "evaos-teams-managed")]
-async fn current_credentials(
-    state: &EvaosTeamsState,
-) -> Result<(Zeroizing<String>, Keys, bool), String> {
+fn current_session(state: &EvaosTeamsState) -> Result<(Zeroizing<String>, bool), String> {
     initialize_runtime(state)?;
     let runtime = state.runtime.lock().map_err(|error| error.to_string())?;
     let session = runtime
         .session
         .clone()
         .ok_or_else(|| "Sign in to Hive first".to_string())?;
-    let keys = runtime
-        .keys
-        .clone()
-        .ok_or_else(|| "Managed identity is unavailable".to_string())?;
-    Ok((session, keys, runtime.logout_pending))
+    Ok((session, runtime.logout_pending))
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -831,15 +547,16 @@ async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiF
 }
 
 #[cfg(feature = "evaos-teams-managed")]
-fn persist_signed_out_identities() -> Result<(), String> {
-    let mut replacement = managed_store().load_all_readonly()?.unwrap_or_default();
-    replacement.remove(SESSION_KEY);
-    replacement.remove(LOGOUT_PENDING_KEY);
-    replacement.remove(ACTIVE_MEMBERSHIP_KEY);
+fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
+    let replacement = HashMap::new();
     managed_store().replace_all(&replacement)?;
     if managed_store().load_all_readonly()? != Some(replacement) {
-        return Err("managed identity read-back verification failed".to_string());
+        return Err("managed session read-back verification failed".to_string());
     }
+    *state.runtime.lock().map_err(|error| error.to_string())? = ManagedRuntime {
+        initialized: true,
+        ..ManagedRuntime::default()
+    };
     Ok(())
 }
 
@@ -853,22 +570,15 @@ async fn retry_pending_logout(
     disable_managed_access(app_state);
     if let Err(error) = remote_logout(client, session).await {
         if !error.means_session_is_absent() {
-            return EvaosTeamsAuthStatus::logout_pending(format!(
-                "Remote logout is still pending: {error}"
-            ));
+            return EvaosTeamsAuthStatus::managed(
+                "logout_pending",
+                Some(format!("Remote logout is still pending: {error}")),
+            );
         }
     }
-    match persist_signed_out_identities() {
-        Ok(()) => {
-            if let Ok(mut runtime) = state.runtime.lock() {
-                *runtime = ManagedRuntime {
-                    initialized: true,
-                    ..ManagedRuntime::default()
-                };
-            }
-            EvaosTeamsAuthStatus::signed_out()
-        }
-        Err(error) => EvaosTeamsAuthStatus::locked(error),
+    match persist_signed_out(state) {
+        Ok(()) => EvaosTeamsAuthStatus::managed("signed_out", None),
+        Err(error) => EvaosTeamsAuthStatus::managed("keychain_locked", Some(error)),
     }
 }
 
@@ -877,28 +587,18 @@ async fn begin_managed_logout(
     state: &EvaosTeamsState,
     app_state: &AppState,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let (session, keys, _) = current_credentials(state).await?;
+    let (session, _) = current_session(state)?;
     disable_managed_access(app_state);
-    let mut pending = managed_store().load_all_readonly()?.unwrap_or_default();
-    let membership_id = state
-        .runtime
-        .lock()
-        .ok()
-        .and_then(|runtime| runtime.membership_id.clone());
-    if let Some(membership_id) = membership_id {
-        pending.insert(
-            membership_identity_key(&membership_id)?,
-            encode_managed_identity(&keys)?,
-        );
-        pending.insert(ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id);
-    } else {
-        pending.insert(IDENTITY_KEY.to_string(), encode_managed_identity(&keys)?);
-    }
-    pending.insert(SESSION_KEY.to_string(), session.to_string());
-    pending.insert(LOGOUT_PENDING_KEY.to_string(), "1".to_string());
+    let pending = HashMap::from([
+        (SESSION_KEY.to_string(), session.to_string()),
+        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
+    ]);
     managed_store()
         .replace_all(&pending)
         .map_err(|_| "Could not record durable managed logout".to_string())?;
+    if managed_store().load_all_readonly()? != Some(pending) {
+        return Err("Could not verify durable managed logout".to_string());
+    }
     if let Ok(mut runtime) = state.runtime.lock() {
         runtime.logout_pending = true;
     }
@@ -928,420 +628,94 @@ async fn get_remote_entitlement(
 }
 
 #[cfg(feature = "evaos-teams-managed")]
-fn persist_managed_credentials(
+async fn get_identity_binding(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<IdentityBinding, String> {
+    let response: IdentityBindingResponse = post_json(
+        client,
+        "evaos-teams-access",
+        Some(token),
+        serde_json::json!({ "action": "get_identity_binding" }),
+    )
+    .await
+    .map_err(|error| format!("Managed identity selection was not available: {error}"))?;
+    if response.status != "active" {
+        return Err("Managed identity selection is not active".to_string());
+    }
+    uuid::Uuid::parse_str(&response.binding.membership_id)
+        .map_err(|_| "Managed identity selection returned an invalid membership".to_string())?;
+    Ok(response.binding)
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+async fn bind_identity(
+    client: &reqwest::Client,
+    token: &str,
+    keys: &Keys,
+    expected_membership_id: &str,
+) -> Result<EvaosTeamsEntitlement, String> {
+    let public_key = keys.public_key().to_hex();
+    let challenge: ChallengeResponse = post_json(
+        client,
+        "evaos-teams-access",
+        Some(token),
+        serde_json::json!({
+            "action": "issue_key_challenge",
+            "public_key": public_key,
+            "device_metadata": {
+                "label": "Hive",
+                "app_version": env!("CARGO_PKG_VERSION"),
+                "platform": std::env::consts::OS,
+            },
+        }),
+    )
+    .await
+    .map_err(|error| format!("Managed key challenge was not available: {error}"))?;
+    let signed_event = signed_challenge(&challenge, keys, expected_membership_id)?;
+    let verified: EntitlementResponse = post_json(
+        client,
+        "evaos-teams-access",
+        Some(token),
+        serde_json::json!({
+            "action": "verify_key_challenge",
+            "signed_event": signed_event,
+        }),
+    )
+    .await
+    .map_err(|error| format!("Managed key challenge was rejected: {error}"))?;
+    if verified.status != "active" {
+        return Err("Managed key verification did not activate access".to_string());
+    }
+    bind_verified_entitlement(verified.entitlement, &challenge, &public_key)
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+fn persist_active_session(
     state: &EvaosTeamsState,
     app_state: &AppState,
     session: String,
-    keys: Keys,
-    membership_id: String,
+    keys: &Keys,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
-    let store = managed_store();
-    let stored = store.load_all_readonly()?.unwrap_or_default();
-    let encoded_identity = encode_managed_identity(&keys)?;
-    let legacy_to_remove = stored
-        .get(IDENTITY_KEY)
-        .map(|value| parse_stored_identity(value).map(|legacy| (value.clone(), legacy)))
-        .transpose()?
-        .filter(|(_, legacy)| legacy.public_key() == keys.public_key())
-        .map(|(value, _)| value);
-    let scoped_identity_key = membership_identity_key(&membership_id)?;
-    let pending_rotation_key = pending_identity_rotation_key(&membership_id)?;
-    let removals = vec![LOGOUT_PENDING_KEY.to_string()];
-    let upserts = HashMap::from([
-        (scoped_identity_key.clone(), encoded_identity.clone()),
-        (ACTIVE_MEMBERSHIP_KEY.to_string(), membership_id.clone()),
-        (SESSION_KEY.to_string(), session.clone()),
-    ]);
-    let mut conditional_removals = vec![(pending_rotation_key.as_str(), encoded_identity.as_str())];
-    if let Some(value) = legacy_to_remove.as_deref() {
-        conditional_removals.push((IDENTITY_KEY, value));
-    }
-    store
-        .update_entries(&removals, &upserts, &conditional_removals)
+    let replacement = HashMap::from([(SESSION_KEY.to_string(), session.clone())]);
+    managed_store()
+        .replace_all(&replacement)
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
-    let persisted = store.load_all_readonly()?.unwrap_or_default();
-    let required_entries_match = upserts
-        .iter()
-        .all(|(key, value)| persisted.get(key) == Some(value));
-    let legacy_removed = legacy_to_remove
-        .as_ref()
-        .is_none_or(|value| persisted.get(IDENTITY_KEY) != Some(value));
-    let pending_rotation_preserved_or_promoted = persisted
-        .get(&pending_rotation_key)
-        .is_none_or(|value| value != &encoded_identity);
-    if !required_entries_match
-        || !pending_rotation_preserved_or_promoted
-        || persisted.contains_key(LOGOUT_PENDING_KEY)
-        || !legacy_removed
-    {
+    if managed_store().load_all_readonly()? != Some(replacement) {
         return Err("Managed Keychain read-back verification failed".to_string());
     }
-    install_entitlement(app_state, &keys, &entitlement)?;
-    {
-        let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
-        *runtime = ManagedRuntime {
-            initialized: true,
-            session: Some(Zeroizing::new(session)),
-            keys: Some(keys),
-            membership_id: Some(membership_id),
-            logout_pending: false,
-        };
-    }
+    install_entitlement(app_state, keys, &entitlement)?;
+    *state.runtime.lock().map_err(|error| error.to_string())? = ManagedRuntime {
+        initialized: true,
+        session: Some(Zeroizing::new(session)),
+        logout_pending: false,
+    };
     Ok(EvaosTeamsAuthStatus::active(entitlement))
 }
 
-#[cfg(feature = "evaos-teams-managed")]
-fn identity_recovery_message(public_key: &str) -> String {
-    let suffix = public_key
-        .get(public_key.len().saturating_sub(8)..)
-        .unwrap_or(public_key);
-    format!(
-        "Electric Sheep verified this account, but this device does not yet hold the Hive identity key ending in {suffix}. Recover that exact identity from an already authorized device."
-    )
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-fn set_pending_identity_recovery(
-    state: &EvaosTeamsState,
-    session: String,
-    binding: IdentityBinding,
-    public_key: String,
-) -> Result<EvaosTeamsAuthStatus, String> {
-    if binding.public_key.as_deref() != Some(public_key.as_str()) {
-        return Err("Managed identity recovery binding changed".to_string());
-    }
-    let mut pending = state
-        .pending_identity_recovery
-        .lock()
-        .map_err(|error| error.to_string())?;
-    *pending = Some(PendingIdentityRecovery {
-        session: Zeroizing::new(session),
-        membership_id: binding.membership_id,
-        public_key: public_key.clone(),
-    });
-    Ok(EvaosTeamsAuthStatus::identity_recovery_required(
-        identity_recovery_message(&public_key),
-    ))
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-fn pending_identity_recovery_status(state: &EvaosTeamsState) -> Option<EvaosTeamsAuthStatus> {
-    let pending = state.pending_identity_recovery.lock().ok()?;
-    let pending = pending.as_ref()?;
-    if pending.session.trim().is_empty() || membership_identity_key(&pending.membership_id).is_err()
-    {
-        return None;
-    }
-    Some(EvaosTeamsAuthStatus::identity_recovery_required(
-        identity_recovery_message(&pending.public_key),
-    ))
-}
-
-fn validate_managed_public_key(public_key: &str) -> Result<(), String> {
-    if public_key.len() == 64
-        && public_key
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        Ok(())
-    } else {
-        Err("server returned an invalid managed public identity".to_string())
-    }
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-fn recovery_payload_keys(
-    payload_type: PayloadType,
-    payload: Zeroizing<String>,
-    expected_public_key: &str,
-) -> Result<Keys, String> {
-    validate_managed_public_key(expected_public_key)?;
-    let keys = match payload_type {
-        PayloadType::Nsec => parse_stored_identity(payload.trim())?,
-        PayloadType::Custom => {
-            let value: serde_json::Value = serde_json::from_str(payload.as_str())
-                .map_err(|_| "managed identity recovery payload is invalid".to_string())?;
-            if let Some(payload_public_key) = value.get("pubkey").and_then(|value| value.as_str()) {
-                if payload_public_key != expected_public_key {
-                    return Err(
-                        "managed identity recovery payload belongs to a different identity"
-                            .to_string(),
-                    );
-                }
-            }
-            let nsec = value
-                .get("nsec")
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| {
-                    "managed identity recovery payload is missing identity".to_string()
-                })?;
-            parse_stored_identity(nsec)?
-        }
-        _ => return Err("managed identity recovery payload type is unsupported".to_string()),
-    };
-    if keys.public_key().to_hex() != expected_public_key {
-        return Err("recovered Hive identity does not match this membership".to_string());
-    }
-    Ok(keys)
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-fn clear_identity_recovery_pairing(state: &EvaosTeamsState) {
-    state.identity_recovery_pairing.cancel_current();
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn abort_identity_recovery_pairing(
-    state: &EvaosTeamsState,
-    reason: buzz_core_pkg::pairing::types::AbortReason,
-) -> Result<(), String> {
-    let abort_json = {
-        let handle = state.identity_recovery_pairing.session.lock().await.clone();
-        if let Some(handle) = handle {
-            let mut guard = handle.session.lock().await;
-            if let Some(session) = guard.as_mut() {
-                session
-                    .abort(reason)
-                    .ok()
-                    .flatten()
-                    .map(|event| event_to_relay_json(&event))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    };
-    if let Some(json) = abort_json {
-        let tx = state
-            .identity_recovery_pairing
-            .outbound_tx
-            .lock()
-            .map_err(|error| error.to_string())?
-            .clone();
-        if let Some(tx) = tx {
-            let _ = tx.send(json).await;
-        }
-    }
-    clear_identity_recovery_pairing(state);
-    *state.identity_recovery_pairing.session.lock().await = None;
-    Ok(())
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn revoke_pending_identity_recovery_session(
-    state: &EvaosTeamsState,
-    app_state: &AppState,
-) -> Result<(), String> {
-    let pending = state
-        .pending_identity_recovery
-        .lock()
-        .map_err(|error| error.to_string())?
-        .clone();
-    let Some(pending) = pending else {
-        return Ok(());
-    };
-    match remote_logout(&app_state.http_client, pending.session.as_str()).await {
-        Ok(()) => {
-            *state
-                .pending_identity_recovery
-                .lock()
-                .map_err(|error| error.to_string())? = None;
-            Ok(())
-        }
-        Err(error) if error.means_session_is_absent() => {
-            *state
-                .pending_identity_recovery
-                .lock()
-                .map_err(|error| error.to_string())? = None;
-            Ok(())
-        }
-        Err(error) => Err(format!("Remote logout is still pending: {error}")),
-    }
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn complete_pending_identity_recovery(
-    app: &AppHandle,
-    payload_type: PayloadType,
-    payload: Zeroizing<String>,
-) -> Result<(), String> {
-    let state = app.state::<EvaosTeamsState>();
-    let app_state = app.state::<AppState>();
-    let _operation = state.operation.lock().await;
-    let pending = state
-        .pending_identity_recovery
-        .lock()
-        .map_err(|error| error.to_string())?
-        .clone()
-        .ok_or_else(|| "No pending Hive identity recovery".to_string())?;
-    let keys = recovery_payload_keys(payload_type, payload, &pending.public_key)?;
-    let entitlement = bind_identity(
-        &app_state.http_client,
-        pending.session.as_str(),
-        &keys,
-        &pending.membership_id,
-    )
-    .await?;
-    let result = persist_managed_credentials(
-        &state,
-        &app_state,
-        pending.session.to_string(),
-        keys,
-        pending.membership_id.clone(),
-        entitlement,
-    );
-    if let Err(error) = result {
-        let rollback = remote_logout(&app_state.http_client, pending.session.as_str()).await;
-        if let Err(logout_error) = rollback {
-            if !logout_error.means_session_is_absent() {
-                return Err(format!(
-                    "{error}; remote logout is still pending: {logout_error}"
-                ));
-            }
-        }
-        return Err(error);
-    }
-    *state
-        .pending_identity_recovery
-        .lock()
-        .map_err(|error| error.to_string())? = None;
-    Ok(())
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn identity_recovery_ws_task(
-    relay_url: String,
-    offer_json: String,
-    app: AppHandle,
-    cancel: CancellationToken,
-    mut outbound_rx: mpsc::Receiver<String>,
-    generation: u64,
-    pairing_session: Arc<tokio::sync::Mutex<Option<PairingSession>>>,
-) {
-    if let Err(error) = identity_recovery_ws_task_inner(
-        &relay_url,
-        &offer_json,
-        &app,
-        &cancel,
-        &mut outbound_rx,
-        &pairing_session,
-    )
-    .await
-    {
-        let _ = app.emit(
-            "evaos-teams-identity-recovery-error",
-            IdentityRecoveryErrorPayload { message: error },
-        );
-    }
-    let state = app.state::<EvaosTeamsState>();
-    if state.identity_recovery_pairing.current_generation() == generation {
-        *state.identity_recovery_pairing.session.lock().await = None;
-        state.identity_recovery_pairing.clear();
-    }
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn identity_recovery_ws_task_inner(
-    relay_url: &str,
-    offer_json: &str,
-    app: &AppHandle,
-    cancel: &CancellationToken,
-    outbound_rx: &mut mpsc::Receiver<String>,
-    pairing_session: &Arc<tokio::sync::Mutex<Option<PairingSession>>>,
-) -> Result<(), String> {
-    let (ws, _) = connect_async(relay_url)
-        .await
-        .map_err(|error| format!("Hive identity recovery relay connection failed: {error}"))?;
-    let (mut write, mut read) = ws.split();
-    handle_nip42_auth(&mut read, &mut write, pairing_session, relay_url).await?;
-    let our_pk = {
-        let guard = pairing_session.lock().await;
-        guard
-            .as_ref()
-            .ok_or("Hive identity recovery session stopped")?
-            .pubkey()
-            .to_hex()
-    };
-    let sub_msg = serde_json::json!([
-        "REQ", "managed-identity-recovery",
-        { "kinds": [KIND_PAIRING], "#p": [our_pk] }
-    ]);
-    write
-        .send(Message::Text(sub_msg.to_string().into()))
-        .await
-        .map_err(|error| format!("Hive identity recovery subscribe failed: {error}"))?;
-    write
-        .send(Message::Text(offer_json.to_string().into()))
-        .await
-        .map_err(|error| format!("Hive identity recovery offer failed: {error}"))?;
-    let hard_timeout = tokio::time::sleep(IDENTITY_RECOVERY_TIMEOUT);
-    tokio::pin!(hard_timeout);
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            _ = &mut hard_timeout => {
-                return Err("Hive identity recovery timed out".to_string());
-            }
-            Some(json_msg) = outbound_rx.recv() => {
-                write
-                    .send(Message::Text(json_msg.into()))
-                    .await
-                    .map_err(|error| format!("Hive identity recovery publish failed: {error}"))?;
-            }
-            msg = read.next() => {
-                let Some(msg) = msg else {
-                    return Err("Hive identity recovery relay closed".to_string());
-                };
-                let Message::Text(text) = msg
-                    .map_err(|error| format!("Hive identity recovery read failed: {error}"))?
-                    else { continue };
-                let Some(event) = parse_relay_event(text.as_str(), "managed-identity-recovery") else {
-                    continue;
-                };
-                let mut guard = pairing_session.lock().await;
-                let Some(session) = guard.as_mut() else { break };
-                if let Ok(reason) = session.handle_abort(&event) {
-                    return Err(format!("Hive identity recovery aborted: {reason:?}"));
-                }
-                if let Ok(sas) = session.handle_sas_confirm(&event) {
-                    let _ = app.emit(
-                        "evaos-teams-identity-recovery-sas",
-                        IdentityRecoverySasPayload { sas },
-                    );
-                    continue;
-                }
-                let payload = match session.handle_payload(&event) {
-                    Ok(payload) => payload,
-                    Err(_) => continue,
-                };
-                drop(guard);
-                complete_pending_identity_recovery(app, payload.0, payload.1).await?;
-                let complete_json = {
-                    let mut guard = pairing_session.lock().await;
-                    let session = guard
-                        .as_mut()
-                        .ok_or("Hive identity recovery session stopped")?;
-                    event_to_relay_json(
-                        &session
-                            .send_complete()
-                            .map_err(|error| format!("Hive identity recovery completion failed: {error}"))?,
-                    )
-                };
-                write
-                    .send(Message::Text(complete_json.into()))
-                    .await
-                    .map_err(|error| format!("Hive identity recovery completion publish failed: {error}"))?;
-                let _ = app.emit("evaos-teams-identity-recovery-complete", serde_json::json!({}));
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Return current managed-auth status and perform a bounded entitlement refresh.
+/// Return current managed-auth status and perform one bounded entitlement
+/// refresh. Unmanaged builds retain the native bypass.
 #[tauri::command]
 pub(crate) async fn get_evaos_teams_auth_status(
     state: State<'_, EvaosTeamsState>,
@@ -1358,18 +732,16 @@ pub(crate) async fn get_evaos_teams_auth_status(
         let _operation = state.operation.lock().await;
         if let Err(error) = initialize_runtime(&state) {
             disable_managed_access(&app_state);
-            return Ok(EvaosTeamsAuthStatus::locked(error));
+            return Ok(EvaosTeamsAuthStatus::managed(
+                "keychain_locked",
+                Some(error),
+            ));
         }
-        if let Some(status) = pending_identity_recovery_status(&state) {
-            disable_managed_access(&app_state);
-            return Ok(status);
-        }
-        let credentials = current_credentials(&state).await;
-        let (session, keys, logout_pending) = match credentials {
+        let (session, logout_pending) = match current_session(&state) {
             Ok(value) => value,
             Err(_) => {
                 disable_managed_access(&app_state);
-                return Ok(EvaosTeamsAuthStatus::signed_out());
+                return Ok(EvaosTeamsAuthStatus::managed("signed_out", None));
             }
         };
         if logout_pending {
@@ -1377,250 +749,92 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 retry_pending_logout(&app_state.http_client, &state, &app_state, &session).await,
             );
         }
-        let response = get_remote_entitlement(&app_state.http_client, &session).await;
-        match response {
-            Ok(entitlement) => {
-                if let Err(error) = install_entitlement(&app_state, &keys, &entitlement) {
-                    disable_managed_access(&app_state);
-                    return Ok(EvaosTeamsAuthStatus::reauth(error));
-                }
-                Ok(EvaosTeamsAuthStatus::active(entitlement))
-            }
+        let keys = match app_state.native_identity_for_managed_verification() {
+            Ok(keys) => keys,
             Err(error) => {
                 disable_managed_access(&app_state);
-                Ok(EvaosTeamsAuthStatus::reauth(format!(
-                    "Managed access could not be refreshed: {error}"
-                )))
+                return Ok(EvaosTeamsAuthStatus::identity_restore_required(error));
             }
-        }
-    }
-}
-
-/// Return only the company-scoped public agent catalog. Room, seat, and
-/// control-plane data never crosses the Tauri boundary. The separate human
-/// directory command exposes only active public keys and display names.
-#[tauri::command]
-pub(crate) async fn list_hive_company_agents(
-    state: State<'_, EvaosTeamsState>,
-    app_state: State<'_, AppState>,
-) -> Result<Vec<HiveCompanyAgent>, String> {
-    #[cfg(not(feature = "evaos-teams-managed"))]
-    {
-        let _ = (&state, &app_state);
-        Ok(Vec::new())
-    }
-
-    #[cfg(feature = "evaos-teams-managed")]
-    {
-        if !app_state
-            .evaos_teams_authorized
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Err("Hive access is not active".to_string());
-        }
-        let (session, _, logout_pending) = current_credentials(&state).await?;
-        if logout_pending {
-            return Err("Hive sign-out is still pending".to_string());
-        }
-        let response: CollaborationResponse = post_json(
-            &app_state.http_client,
-            "evaos-teams-access",
-            Some(&session),
-            serde_json::json!({ "action": "get_collaboration_state" }),
-        )
-        .await
-        .map_err(|error| format!("Company agent catalog is unavailable: {error}"))?;
-        if response.status != "active" {
-            return Err("Company agent catalog is inactive".to_string());
-        }
-        Ok(sanitize_company_agents(response.collaboration.agents))
-    }
-}
-
-/// Return the active company's public human directory. Durable public keys,
-/// display names, and opaque membership selectors cross the Tauri boundary;
-/// email, seats, rooms, Desktop sessions, and private identity data stay
-/// server-side. Native Buzz remains responsible for collaboration signing.
-#[tauri::command]
-pub(crate) async fn list_hive_company_members(
-    state: State<'_, EvaosTeamsState>,
-    app_state: State<'_, AppState>,
-) -> Result<Vec<HiveCompanyMember>, String> {
-    #[cfg(not(feature = "evaos-teams-managed"))]
-    {
-        let _ = (&state, &app_state);
-        Ok(Vec::new())
-    }
-
-    #[cfg(feature = "evaos-teams-managed")]
-    {
-        if !app_state
-            .evaos_teams_authorized
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Err("Hive access is not active".to_string());
-        }
-        let (session, _, logout_pending) = current_credentials(&state).await?;
-        if logout_pending {
-            return Err("Hive sign-out is still pending".to_string());
-        }
-        let response: CollaborationResponse = post_json(
-            &app_state.http_client,
-            "evaos-teams-access",
-            Some(&session),
-            serde_json::json!({ "action": "get_collaboration_state" }),
-        )
-        .await
-        .map_err(|error| format!("Company member directory is unavailable: {error}"))?;
-        if response.status != "active" {
-            return Err("Company member directory is inactive".to_string());
-        }
-        Ok(sanitize_company_members(response.collaboration.members))
-    }
-}
-
-/// Deliver a server-issued backup code to the current in-memory login attempt.
-/// The code is still claimed with that attempt's app-held verifier; neither the
-/// verifier nor the resulting Desktop session crosses the Tauri boundary.
-#[tauri::command]
-pub(crate) fn submit_evaos_teams_login_code(
-    state: State<'_, EvaosTeamsState>,
-    device_code: String,
-) -> Result<(), String> {
-    #[cfg(not(feature = "evaos-teams-managed"))]
-    {
-        let _ = (&state, &device_code);
-        Err("Hive managed login is not enabled in this build".to_string())
-    }
-
-    #[cfg(feature = "evaos-teams-managed")]
-    {
-        submit_pending_login_code(&state, &device_code)
-    }
-}
-
-#[tauri::command]
-pub(crate) async fn start_evaos_teams_identity_recovery(
-    app: AppHandle,
-    state: State<'_, EvaosTeamsState>,
-    pairing_code: String,
-) -> Result<(), String> {
-    #[cfg(not(feature = "evaos-teams-managed"))]
-    {
-        let _ = (&app, &state, &pairing_code);
-        Err("Hive managed login is not enabled in this build".to_string())
-    }
-
-    #[cfg(feature = "evaos-teams-managed")]
-    {
-        let _operation = state.operation.lock().await;
-        {
-            let pending = state
-                .pending_identity_recovery
-                .lock()
-                .map_err(|error| error.to_string())?;
-            let pending = pending.as_ref().ok_or_else(|| {
-                "Sign in with Electric Sheep before identity recovery".to_string()
-            })?;
-            validate_managed_public_key(&pending.public_key)?;
-            membership_identity_key(&pending.membership_id)?;
-            if pending.session.trim().is_empty() {
-                return Err("Hive identity recovery session is unavailable".to_string());
+        };
+        let binding = match get_identity_binding(&app_state.http_client, &session).await {
+            Ok(binding) => binding,
+            Err(error) => {
+                disable_managed_access(&app_state);
+                return Ok(EvaosTeamsAuthStatus::managed(
+                    "reauth_required",
+                    Some(error),
+                ));
             }
-        }
-        clear_identity_recovery_pairing(&state);
-        let qr = decode_qr(pairing_code.trim())
-            .map_err(|error| format!("Hive identity recovery pairing code is invalid: {error}"))?;
-        let relay_url = qr
-            .relays
-            .first()
-            .cloned()
-            .ok_or_else(|| "Hive identity recovery pairing code has no relay".to_string())?;
-        let (session, offer) = PairingSession::new_target(&qr)
-            .map_err(|error| format!("Hive identity recovery could not start: {error}"))?;
-        let generation = state.identity_recovery_pairing.next_generation();
-        let pairing_session = Arc::new(tokio::sync::Mutex::new(Some(session)));
-        {
-            let mut guard = state.identity_recovery_pairing.session.lock().await;
-            *guard = Some(IdentityRecoverySessionHandle {
-                session: pairing_session.clone(),
-            });
-        }
-        let (outbound_tx, outbound_rx) = mpsc::channel::<String>(16);
-        let cancel = CancellationToken::new();
-        *state
-            .identity_recovery_pairing
-            .outbound_tx
-            .lock()
-            .map_err(|error| error.to_string())? = Some(outbound_tx);
-        *state
-            .identity_recovery_pairing
-            .cancel
-            .lock()
-            .map_err(|error| error.to_string())? = Some(cancel.clone());
-        tauri::async_runtime::spawn(identity_recovery_ws_task(
-            relay_url,
-            event_to_relay_json(&offer),
-            app,
-            cancel,
-            outbound_rx,
-            generation,
-            pairing_session,
-        ));
-        Ok(())
-    }
-}
-
-#[tauri::command]
-pub(crate) async fn confirm_evaos_teams_identity_recovery_sas(
-    state: State<'_, EvaosTeamsState>,
-) -> Result<(), String> {
-    #[cfg(not(feature = "evaos-teams-managed"))]
-    {
-        let _ = &state;
-        Err("Hive managed login is not enabled in this build".to_string())
-    }
-
-    #[cfg(feature = "evaos-teams-managed")]
-    {
-        let handle = state.identity_recovery_pairing.session.lock().await.clone();
-        let handle =
-            handle.ok_or_else(|| "No active Hive identity recovery session".to_string())?;
-        let mut guard = handle.session.lock().await;
-        let session = guard
-            .as_mut()
-            .ok_or_else(|| "Hive identity recovery session stopped".to_string())?;
-        session
-            .confirm_target_sas()
-            .map_err(|error| format!("Hive identity recovery SAS was rejected: {error}"))?;
-        Ok(())
-    }
-}
-
-#[tauri::command]
-pub(crate) async fn cancel_evaos_teams_identity_recovery(
-    state: State<'_, EvaosTeamsState>,
-    app_state: State<'_, AppState>,
-) -> Result<EvaosTeamsAuthStatus, String> {
-    #[cfg(not(feature = "evaos-teams-managed"))]
-    {
-        let _ = (&state, &app_state);
-        Err("Hive managed login is not enabled in this build".to_string())
-    }
-
-    #[cfg(feature = "evaos-teams-managed")]
-    {
-        let _ = abort_identity_recovery_pairing(
-            &state,
-            buzz_core_pkg::pairing::types::AbortReason::UserDenied,
-        )
-        .await;
-        if let Err(error) = revoke_pending_identity_recovery_session(&state, &app_state).await {
+        };
+        if let Err(error) = verify_existing_native_identity(&binding, &keys) {
             disable_managed_access(&app_state);
-            return Ok(EvaosTeamsAuthStatus::logout_pending(error));
+            return Ok(EvaosTeamsAuthStatus::identity_restore_required(error));
         }
-        disable_managed_access(&app_state);
-        Ok(EvaosTeamsAuthStatus::signed_out())
+        match get_remote_entitlement(&app_state.http_client, &session).await {
+            Ok(entitlement) => match install_entitlement(&app_state, &keys, &entitlement) {
+                Ok(()) => Ok(EvaosTeamsAuthStatus::active(entitlement)),
+                Err(error) => {
+                    disable_managed_access(&app_state);
+                    Ok(EvaosTeamsAuthStatus::managed(
+                        "reauth_required",
+                        Some(error),
+                    ))
+                }
+            },
+            Err(error) => {
+                disable_managed_access(&app_state);
+                Ok(EvaosTeamsAuthStatus::managed(
+                    "reauth_required",
+                    Some(format!("Managed access could not be refreshed: {error}")),
+                ))
+            }
+        }
+    }
+}
+
+struct LoginCallback {
+    expected_state: String,
+    sender: Mutex<Option<oneshot::Sender<Result<String, String>>>>,
+}
+
+fn callback_device_code(
+    query: &HashMap<String, String>,
+    expected_state: &str,
+) -> Result<String, String> {
+    if query.get("desktop_auth_state").map(String::as_str) != Some(expected_state) {
+        return Err("Authentication callback did not match this login attempt".to_string());
+    }
+    if let Some(received_code) = query.get("device_code") {
+        let normalized = normalize_device_code(received_code);
+        if (8..=40).contains(&normalized.len()) {
+            return Ok(normalized);
+        }
+    }
+    Err("Authentication callback did not match this login attempt".to_string())
+}
+
+async fn login_callback(
+    Query(query): Query<HashMap<String, String>>,
+    AxumState(state): AxumState<std::sync::Arc<LoginCallback>>,
+) -> Response {
+    match callback_device_code(&query, &state.expected_state) {
+        Ok(code) => {
+            if let Ok(mut sender) = state.sender.lock() {
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(Ok(code));
+                }
+            }
+            (
+                StatusCode::OK,
+                Html("<!doctype html><title>Hive</title><p>Sign-in received. Return to Hive.</p>"),
+            )
+                .into_response()
+        }
+        Err(_) => (
+            StatusCode::BAD_REQUEST,
+            Html("<!doctype html><title>Hive</title><p>This sign-in callback is not valid.</p>"),
+        )
+            .into_response(),
     }
 }
 
@@ -1653,76 +867,8 @@ async fn claim_device_code(
     Ok(response)
 }
 
-#[cfg(feature = "evaos-teams-managed")]
-async fn bind_identity(
-    client: &reqwest::Client,
-    token: &str,
-    keys: &Keys,
-    expected_membership_id: &str,
-) -> Result<EvaosTeamsEntitlement, String> {
-    let public_key = keys.public_key().to_hex();
-    let challenge: ChallengeResponse = post_json(
-        client,
-        "evaos-teams-access",
-        Some(token),
-        serde_json::json!({
-            "action": "issue_key_challenge",
-            "public_key": public_key,
-            "device_metadata": {
-                "label": "Hive",
-                "app_version": env!("CARGO_PKG_VERSION"),
-                "platform": std::env::consts::OS,
-            },
-        }),
-    )
-    .await
-    .map_err(|error| format!("Managed key challenge was not available: {error}"))?;
-    if challenge.challenge.membership_id != expected_membership_id {
-        return Err("Managed key challenge changed the selected membership".to_string());
-    }
-    let signed_event = signed_challenge(&challenge, keys)?;
-    let verified: EntitlementResponse = post_json(
-        client,
-        "evaos-teams-access",
-        Some(token),
-        serde_json::json!({
-            "action": "verify_key_challenge",
-            "signed_event": signed_event,
-        }),
-    )
-    .await
-    .map_err(|error| format!("Managed key challenge was rejected: {error}"))?;
-    if verified.status != "active" {
-        return Err("Managed key verification did not activate access".to_string());
-    }
-    // The verification response intentionally omits public_key; the key is
-    // already bound by the exact signed challenge above. Install the locally
-    // derived public key so every later entitlement validation stays strict.
-    bind_verified_entitlement(verified.entitlement, &challenge.relay_host, &public_key)
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-async fn get_identity_binding(
-    client: &reqwest::Client,
-    token: &str,
-) -> Result<IdentityBinding, String> {
-    let response: IdentityBindingResponse = post_json(
-        client,
-        "evaos-teams-access",
-        Some(token),
-        serde_json::json!({ "action": "get_identity_binding" }),
-    )
-    .await
-    .map_err(|error| format!("Managed identity selection was not available: {error}"))?;
-    if response.status != "active" {
-        return Err("Managed identity selection is not active".to_string());
-    }
-    membership_identity_key(&response.binding.membership_id)?;
-    Ok(response.binding)
-}
-
-/// Start an account-selecting browser login and complete device-code claim and
-/// server key binding entirely in Rust.
+/// Start proof-bound browser OAuth, verify the already-resolved native identity,
+/// and install only the server-selected entitlement.
 #[tauri::command]
 pub(crate) async fn start_evaos_teams_login(
     app: tauri::AppHandle,
@@ -1738,48 +884,10 @@ pub(crate) async fn start_evaos_teams_login(
     #[cfg(feature = "evaos-teams-managed")]
     {
         let _operation = state.operation.lock().await;
-        let _ = abort_identity_recovery_pairing(
-            &state,
-            buzz_core_pkg::pairing::types::AbortReason::UserDenied,
-        )
-        .await;
-        // Prove Keychain reachability before opening the browser. Managed mode
-        // never falls back to a plaintext identity or Desktop token.
         verify_managed_store_writable()?;
-
         initialize_runtime(&state)?;
-        revoke_pending_identity_recovery_session(&state, &app_state).await?;
-        if let Ok((session, keys, logout_pending)) = current_credentials(&state).await {
-            if logout_pending {
-                let outcome = begin_managed_logout(&state, &app_state).await?;
-                if outcome.phase != "signed_out" {
-                    return Ok(outcome);
-                }
-            } else {
-                match get_remote_entitlement(&app_state.http_client, &session).await {
-                    Ok(entitlement)
-                        if validate_entitlement(&entitlement, &keys.public_key().to_hex())
-                            .is_ok() =>
-                    {
-                        // An explicit account switch starts with a confirmed,
-                        // atomic logout. If browser sign-in is later canceled,
-                        // the previous account remains safely revoked.
-                        let outcome = begin_managed_logout(&state, &app_state).await?;
-                        if outcome.phase != "signed_out" {
-                            return Ok(outcome);
-                        }
-                    }
-                    _ => {
-                        // A stale token cannot safely authorize work, but it does
-                        // not own the durable identity. The server-selected
-                        // membership below chooses its own Keychain key.
-                        let _ = keys;
-                    }
-                }
-            }
-        }
-
         disable_managed_access(&app_state);
+
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|error| format!("could not start local sign-in callback: {error}"))?;
@@ -1796,7 +904,6 @@ pub(crate) async fn start_evaos_teams_login(
             expected_state: auth_state,
             sender: Mutex::new(Some(sender)),
         });
-        let pending_login = register_pending_login(&state, callback_state.clone())?;
         let router = Router::new()
             .route("/auth/callback", get(login_callback))
             .with_state(callback_state);
@@ -1824,37 +931,30 @@ pub(crate) async fn start_evaos_teams_login(
             }
         };
         server.abort();
-        drop(pending_login);
 
         let claim =
             claim_device_code(&app_state.http_client, &code, &device_code_proof.verifier).await?;
-        let binding = get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
-        let stored = managed_store().load_all_readonly()?.unwrap_or_default();
-        let candidate_keys = match select_login_keys(&stored, &binding)? {
-            LoginKeySelection::Ready(keys) => keys,
-            LoginKeySelection::RecoveryRequired { public_key } => {
-                return set_pending_identity_recovery(
-                    &state,
-                    claim.desktop_session,
-                    binding,
-                    public_key,
-                );
-            }
+        let keys = match app_state.native_identity_for_managed_verification() {
+            Ok(keys) => keys,
+            Err(error) => return Ok(EvaosTeamsAuthStatus::identity_restore_required(error)),
         };
+        let binding = get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
+        if let Err(error) = verify_existing_native_identity(&binding, &keys) {
+            return Ok(EvaosTeamsAuthStatus::identity_restore_required(error));
+        }
         let entitlement = bind_identity(
             &app_state.http_client,
             &claim.desktop_session,
-            &candidate_keys,
+            &keys,
             &binding.membership_id,
         )
         .await?;
         let rollback_session = claim.desktop_session.clone();
-        let result = persist_managed_credentials(
+        let result = persist_active_session(
             &state,
             &app_state,
             claim.desktop_session,
-            candidate_keys,
-            binding.membership_id,
+            &keys,
             entitlement,
         );
         if result.is_err() {
@@ -1864,9 +964,8 @@ pub(crate) async fn start_evaos_teams_login(
     }
 }
 
-/// Revoke only the current server session grant. The durable Hive identity and
-/// its private key remain in Keychain so offline messages keep their recipient
-/// and the next login can prove possession without rotating identity.
+/// Revoke only the opaque Electric device session. The native Buzz identity
+/// remains untouched so offline messages keep their durable recipient.
 #[tauri::command]
 pub(crate) async fn logout_evaos_teams(
     state: State<'_, EvaosTeamsState>,

@@ -87,7 +87,7 @@ test.describe("welcome and channel agent entry points", () => {
     await page.getByTestId("welcome-create-agent-in-chat").click();
     await expect(dialog).not.toBeVisible();
     await expect(page.getByTestId("message-timeline")).toContainText(
-      "TARS, help me create a new agent.",
+      "Fizz, help me create a new agent.",
     );
   });
 

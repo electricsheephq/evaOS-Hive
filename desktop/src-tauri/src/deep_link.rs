@@ -291,14 +291,7 @@ fn parse_nostr_bind_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, Str
     })
 }
 
-pub(crate) fn is_supported_deep_link_url(url_str: &str) -> bool {
-    Url::parse(url_str).is_ok_and(|url| {
-        url.scheme() == "buzz"
-            || (cfg!(feature = "evaos-teams-managed") && url.scheme() == "evaos-teams")
-    })
-}
-
-/// Handle an incoming Buzz or Hive deep link URL.
+/// Handle an incoming `buzz://` deep link URL.
 ///
 /// Currently supports:
 /// - `buzz://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
@@ -311,7 +304,7 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
     };
 
-    if !is_supported_deep_link_url(url_str) {
+    if url.scheme() != "buzz" {
         eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
         return;
     }
@@ -407,25 +400,13 @@ mod tests {
     use url::Url;
 
     use super::{
-        is_supported_deep_link_url, managed_deep_link_allowed, parse_add_community_deep_link,
-        parse_join_deep_link, parse_message_deep_link, parse_nostr_bind_deep_link,
-        PendingCommunityDeepLink, PendingCommunityDeepLinks,
+        managed_deep_link_allowed, parse_add_community_deep_link, parse_join_deep_link,
+        parse_message_deep_link, parse_nostr_bind_deep_link, PendingCommunityDeepLink,
+        PendingCommunityDeepLinks,
     };
 
     #[test]
-    fn deep_link_scheme_tracks_the_packaged_product() {
-        assert!(is_supported_deep_link_url("buzz://message?channel=a&id=b"));
-        assert_eq!(
-            is_supported_deep_link_url("evaos-teams://message?channel=a&id=b"),
-            cfg!(feature = "evaos-teams-managed")
-        );
-        assert!(!is_supported_deep_link_url(
-            "https://message?channel=a&id=b"
-        ));
-    }
-
-    #[test]
-    fn managed_deep_links_allow_messages_but_not_authority_changes() {
+    fn managed_deep_links_allow_navigation_but_reject_authority_changes() {
         assert!(managed_deep_link_allowed(Some("message")));
         for action in ["connect", "join", "add-community", "nostr-bind"] {
             assert!(!managed_deep_link_allowed(Some(action)), "{action}");

@@ -32,11 +32,13 @@ mod secret_store;
 mod shutdown;
 mod templates;
 mod util;
+#[cfg(target_os = "linux")]
+pub mod webkit_rendering;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use builderlab::*;
 use commands::*;
 use deep_link::{
-    acknowledge_pending_community_deep_link, handle_deep_link_url, is_supported_deep_link_url,
+    acknowledge_pending_community_deep_link, handle_deep_link_url,
     take_pending_community_deep_link, PendingCommunityDeepLinks,
 };
 use evaos_teams::*;
@@ -81,34 +83,6 @@ fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
     }
     if let Err(error) = window.set_focus() {
         eprintln!("buzz-desktop: failed to focus main window: {error}");
-    }
-}
-
-fn reveal_main_webview_window(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        eprintln!("buzz-desktop: failed to find main window for reveal");
-        return;
-    };
-    if let Err(error) = window.unminimize() {
-        eprintln!("buzz-desktop: failed to unminimize main window: {error}");
-    }
-    if let Err(error) = window.show() {
-        eprintln!("buzz-desktop: failed to show main window: {error}");
-        return;
-    }
-    if let Err(error) = window.set_focus() {
-        eprintln!("buzz-desktop: failed to focus main window: {error}");
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn reveal_main_webview_window_if_hidden(app: &tauri::AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    match window.is_visible() {
-        Ok(true) => {}
-        Ok(false) | Err(_) => reveal_main_webview_window(app),
     }
 }
 
@@ -199,10 +173,12 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Focus the existing window when a duplicate instance launches.
-            reveal_main_webview_window(app);
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
             // Forward any deep link URLs from the duplicate launch.
             for arg in &argv {
-                if is_supported_deep_link_url(arg) {
+                if arg.starts_with("buzz://") {
                     handle_deep_link_url(app, arg);
                 }
             }
@@ -390,10 +366,6 @@ pub fn run() {
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
-            let state = app_handle.state::<AppState>();
-            if let Ok(mut guard) = state.app_handle.lock() {
-                *guard = Some(app_handle.clone());
-            }
 
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
             // Must run before migrations and identity resolution so the wipe
@@ -436,11 +408,9 @@ pub fn run() {
             // that will be lost on restart, as that silently breaks channel
             // memberships, DMs, and relay identity.
             let state = app_handle.state::<AppState>();
-            if !cfg!(feature = "evaos-teams-managed") {
-                if let Err(e) = resolve_persisted_identity(&app_handle, &state) {
-                    eprintln!("buzz-desktop: fatal: identity resolution failed: {e}");
-                    std::process::exit(1);
-                }
+            if let Err(e) = resolve_persisted_identity(&app_handle, &state) {
+                eprintln!("buzz-desktop: fatal: identity resolution failed: {e}");
+                std::process::exit(1);
             }
 
             // When the identity is in recovery mode (lost = keyring empty after
@@ -454,22 +424,7 @@ pub fn run() {
             let keyring_locked = state
                 .keyring_locked
                 .load(std::sync::atomic::Ordering::Acquire);
-            // Managed builds continue native local initialization but defer all
-            // owner-keyed work until OAuth plus signed-key verification installs
-            // a current entitlement. This preserves Buzz surfaces without ever
-            // publishing under the ephemeral boot placeholder.
-            let recovery_mode =
-                cfg!(feature = "evaos-teams-managed") || identity_lost || keyring_locked;
-
-            // Snapshot owner keys after identity resolution; the best-effort
-            // event reconcile itself runs off the synchronous setup path below.
-            let owner_keys = match state.keys.lock() {
-                Ok(k) => k.clone(),
-                Err(e) => {
-                    eprintln!("buzz-desktop: fatal: owner keys lock poisoned: {e}");
-                    std::process::exit(1);
-                }
-            };
+            let recovery_mode = identity_lost || keyring_locked;
 
             // Backfill the pinned persona snapshot for any pre-existing agent
             // that predates the record-authoritative-spawn cutover (persona_id
@@ -479,6 +434,21 @@ pub fn run() {
             // block launch, but a missing persona is logged loudly inside.
             if let Err(e) = backfill_persona_snapshots(&app_handle) {
                 eprintln!("buzz-desktop: persona-snapshot backfill failed: {e}");
+            }
+
+            // Warm the loaded-harness registry BEFORE restore so cold-launch
+            // agent spawns can resolve custom/preset runtime ids without
+            // waiting for the frontend's discover_acp_providers call.  This is
+            // a pure directory scan — no PATH probing, no async work.
+            {
+                let custom_dir = app_handle
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|d| d.join("custom_harnesses"));
+                managed_agents::custom_harnesses::warm_harness_registry_from_dir(
+                    custom_dir.as_deref(),
+                );
             }
 
             // Store the AppHandle so huddle commands can emit `huddle-state-changed`
@@ -575,15 +545,6 @@ pub fn run() {
 
             try_regenerate_nest(&app_handle);
 
-            // Sync team-dir edits and reconcile persona/team/agent events after
-            // setup can continue. It is best-effort retention backfill, unlike
-            // identity resolution above, so JSON/SQLite/signing work must not
-            // hold the boot path hostage. Skipped in recovery mode — the owner
-            // key is ephemeral.
-            if !recovery_mode {
-                event_sync::spawn_event_sync(app_handle.clone(), owner_keys);
-            }
-
             if let Some(mgr) = huddle::models::global_model_manager() {
                 mgr.start_stt_download(state.http_client.clone());
                 mgr.start_tts_download(state.http_client.clone());
@@ -609,19 +570,10 @@ pub fn run() {
             // has no relay override to the localhost fallback. Preserve the
             // boot-time repos and identity recovery safety gates by only marking
             // restoration pending when both allow it.
-            if restore_agents && !recovery_mode {
+            if restore_agents && !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
                 state
                     .managed_agent_restore_pending
                     .store(true, Ordering::Release);
-            }
-
-            #[cfg(target_os = "macos")]
-            {
-                let reveal_handle = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-                    reveal_main_webview_window_if_hidden(&reveal_handle);
-                });
             }
 
             // Periodic sweep: reap orphaned agents from dead instances every 60s.
@@ -675,19 +627,22 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     use std::time::Duration;
                     use tauri::Manager;
-                    let Ok(db_path) = managed_agents::managed_agents_base_dir(&flush_handle)
-                        .map(|d| d.join("retention.db"))
-                    else {
-                        eprintln!("buzz-desktop: event-flush: cannot resolve retention db path");
-                        return;
-                    };
                     loop {
                         let state = flush_handle.state::<AppState>();
-                        if let Err(e) =
-                            managed_agents::persona_events::flush_pending_events(&db_path, &state)
+                        let managed_authorized = !cfg!(feature = "evaos-teams-managed")
+                            || state
+                                .evaos_teams_authorized
+                                .load(std::sync::atomic::Ordering::Acquire);
+                        if managed_authorized {
+                            if let Err(e) =
+                                managed_agents::persona_events::flush_active_pending_events(
+                                    &flush_handle,
+                                    &state,
+                                )
                                 .await
-                        {
-                            eprintln!("buzz-desktop: event-flush: {e}");
+                            {
+                                eprintln!("buzz-desktop: event-flush: {e}");
+                            }
                         }
                         tokio::time::sleep(Duration::from_secs(30)).await;
                     }
@@ -705,16 +660,8 @@ pub fn run() {
             clear_builderlab_auth,
             get_evaos_teams_auth_status,
             start_evaos_teams_login,
-            submit_evaos_teams_login_code,
-            start_evaos_teams_identity_recovery,
-            confirm_evaos_teams_identity_recovery_sas,
-            cancel_evaos_teams_identity_recovery,
-            replace_lost_evaos_teams_identity,
             logout_evaos_teams,
             list_hive_company_agents,
-            list_hive_company_members,
-            get_hive_company_agent_policy,
-            set_hive_company_agent_policy,
             get_desktop_product_policy,
             get_builderlab_nostr_identity,
             bind_builderlab_nostr_identity,
@@ -769,6 +716,8 @@ pub fn run() {
             discover_acp_providers,
             discover_git_bash_prerequisite,
             install_acp_runtime,
+            save_custom_harness,
+            delete_custom_harness,
             connect_acp_runtime,
             discover_managed_agent_prereqs,
             sign_event,
@@ -874,8 +823,10 @@ pub fn run() {
             list_personas,
             create_persona,
             update_persona,
+            update_persona_and_publish,
             delete_persona,
             set_persona_active,
+            set_persona_shared,
             reconcile_inbound_persona_event,
             list_channel_templates,
             create_channel_template,
@@ -943,6 +894,7 @@ pub fn run() {
             validate_repos_dir,
             get_active_workspace,
             fetch_workspace_icon,
+            fetch_join_policy,
             set_prevent_sleep_active,
             get_agent_memory,
             relay_reconnect_hook,
@@ -995,10 +947,6 @@ pub fn run() {
             // deliberately skipping those native global destructors.
             #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
             hard_exit_after_mesh_shutdown();
-        }
-        #[cfg(target_os = "macos")]
-        RunEvent::Reopen { .. } => {
-            reveal_main_webview_window(app_handle);
         }
         _ => {}
     });

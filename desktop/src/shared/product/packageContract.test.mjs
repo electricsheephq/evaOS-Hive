@@ -14,13 +14,16 @@ const buildScript = readFileSync(`${root}scripts/build-hive.mjs`, "utf8");
 
 test("Hive package identity and selected assets are coherent", () => {
   assert.equal(contract.productName, "Hive");
-  assert.equal(contract.version, "0.4.26-es.2");
+  assert.equal(contract.version, "0.5.1-es.1");
+  assert.equal(contract.artifactName, "Hive-0.5.1-es.1-arm64.dmg");
   assert.equal(config.productName, contract.productName);
   assert.equal(config.version, contract.version);
   assert.equal(config.identifier, contract.bundleIdentifier);
   assert.equal(config.mainBinaryName, "Hive");
+  assert.deepEqual(config.plugins["deep-link"].desktop.schemes, ["buzz"]);
   assert.ok(buildScript.includes("evaos-teams-managed"));
   assert.ok(buildScript.includes("tauri.hive.conf.json"));
+  assert.match(buildScript, /HIVE_SUPABASE_PUBLISHABLE_KEY/);
   for (const path of [
     `${root}src-tauri/hive/icon.icns`,
     `${root}src-tauri/hive/icon.png`,
@@ -39,4 +42,6 @@ test("Hive updater contract names only the signed fork channel", () => {
   );
   assert.deepEqual(config.plugins.updater.endpoints, []);
   assert.equal(config.bundle.createUpdaterArtifacts, false);
+  assert.match(buildScript, /HIVE_UPDATER_PUBLIC_KEY/);
+  assert.match(buildScript, /BUZZ_UPDATER_PUBLIC_KEY.*must not be set/s);
 });

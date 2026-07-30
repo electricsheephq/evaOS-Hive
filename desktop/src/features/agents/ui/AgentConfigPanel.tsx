@@ -16,7 +16,6 @@ import {
 import { useAgentConfigSurface } from "../hooks";
 import { cn } from "@/shared/lib/cn";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
-import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { Spinner } from "@/shared/ui/spinner";
 import { McpServersSection } from "./McpServersSection";
 import type {
@@ -116,7 +115,7 @@ function provenanceSentence(
 ): string {
   switch (origin) {
     case "buzzExplicit":
-      return desktopProductCopy("Set in Buzz");
+      return "Set in Buzz";
     case "personaDefault":
       return "Inherited from template";
     case "runtimeOverride":

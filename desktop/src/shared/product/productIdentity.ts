@@ -5,7 +5,7 @@ export type DesktopProductPolicy = {
   productName: string;
   version: string;
   bundleIdentifier: string;
-  deepLinkScheme: "buzz" | "evaos-teams";
+  deepLinkScheme: "buzz";
   artifactName: string;
   updateChannel: string;
   updaterEnabled: boolean;
@@ -16,7 +16,7 @@ export type DesktopProductPolicy = {
 export const NATIVE_PRODUCT_POLICY: DesktopProductPolicy = Object.freeze({
   managed: false,
   productName: "Buzz",
-  version: "0.4.26",
+  version: "0.5.1",
   bundleIdentifier: "xyz.block.buzz.app",
   deepLinkScheme: "buzz",
   artifactName: "",
@@ -35,7 +35,7 @@ export function installDesktopProductPolicy(
     !policy.productName ||
     !policy.version ||
     !policy.bundleIdentifier ||
-    !["buzz", "evaos-teams"].includes(policy.deepLinkScheme)
+    policy.deepLinkScheme !== "buzz"
   ) {
     throw new Error("Desktop product policy is incomplete");
   }
@@ -54,46 +54,6 @@ export async function loadDesktopProductPolicy(): Promise<void> {
 
 export function desktopProductPolicy(): DesktopProductPolicy {
   return activeProductPolicy;
-}
-
-/**
- * Replace the upstream application name in explicitly selected user-facing
- * copy. Callers must not use this for protocol names, binary names, runtime
- * IDs, storage paths, or legal attribution.
- */
-export function desktopProductCopy(copy: string): string {
-  const policy = desktopProductPolicy();
-  return policy.managed ? copy.replace(/\bBuzz\b/g, policy.productName) : copy;
-}
-
-type RuntimePresentation = {
-  id: string;
-  label: string;
-  installHint: string;
-  loginHint: string | null;
-};
-
-/**
- * Productize runtime presentation at the UI boundary while preserving native
- * runtime IDs, commands, arguments, labels, and capabilities. Only the
- * built-in desktop agent label changes; selected user-facing hints may mention
- * the desktop product and therefore use the active product name.
- */
-export function desktopRuntimePresentation<T extends RuntimePresentation>(
-  runtime: T,
-): T {
-  const policy = desktopProductPolicy();
-  if (!policy.managed) return runtime;
-  return {
-    ...runtime,
-    label:
-      runtime.id === "buzz-agent"
-        ? `${policy.productName} Agent`
-        : runtime.label,
-    installHint: desktopProductCopy(runtime.installHint),
-    loginHint:
-      runtime.loginHint === null ? null : desktopProductCopy(runtime.loginHint),
-  };
 }
 
 export function resetDesktopProductPolicyForTests(): void {

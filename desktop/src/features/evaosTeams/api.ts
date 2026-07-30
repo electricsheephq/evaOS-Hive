@@ -17,8 +17,8 @@ export type EvaosTeamsAuthStatus = {
     | "signed_out"
     | "active"
     | "keychain_locked"
-    | "identity_recovery_required"
     | "reauth_required"
+    | "identity_restore_required"
     | "logout_pending";
   authenticated: boolean;
   keychainAvailable: boolean;
@@ -34,30 +34,6 @@ export type HiveCompanyAgent = {
   runtime: string;
 };
 
-export type HiveCompanyMember = {
-  membershipId: string;
-  publicKey: string;
-  displayName: string;
-};
-
-export type HiveCompanyAgentPolicy = {
-  agentInstanceId: string;
-  desiredRevision: number;
-  appliedRevision: number;
-  allowedRoomIds: string[];
-  allowedAuthorMembershipIds: string[];
-  status: "pending" | "applied" | "error";
-  appliedAt: string | null;
-  lastErrorCode: string | null;
-};
-
-export type SetHiveCompanyAgentPolicyInput = {
-  agentInstanceId: string;
-  expectedRevision: number;
-  allowedRoomIds: string[];
-  allowedAuthorMembershipIds: string[];
-};
-
 export function getEvaosTeamsAuthStatus() {
   return invoke<EvaosTeamsAuthStatus>("get_evaos_teams_auth_status");
 }
@@ -66,50 +42,12 @@ export function startEvaosTeamsLogin() {
   return invoke<EvaosTeamsAuthStatus>("start_evaos_teams_login");
 }
 
-export function submitEvaosTeamsLoginCode(deviceCode: string) {
-  return invoke<void>("submit_evaos_teams_login_code", { deviceCode });
-}
-
-export function startEvaosTeamsIdentityRecovery(pairingCode: string) {
-  return invoke<void>("start_evaos_teams_identity_recovery", { pairingCode });
-}
-
-export function confirmEvaosTeamsIdentityRecoverySas() {
-  return invoke<void>("confirm_evaos_teams_identity_recovery_sas");
-}
-
-export function cancelEvaosTeamsIdentityRecovery() {
-  return invoke<EvaosTeamsAuthStatus>("cancel_evaos_teams_identity_recovery");
-}
-
-export function replaceLostEvaosTeamsIdentity() {
-  return invoke<EvaosTeamsAuthStatus>("replace_lost_evaos_teams_identity");
-}
-
 export function logoutEvaosTeams() {
   return invoke<EvaosTeamsAuthStatus>("logout_evaos_teams");
 }
 
 export function listHiveCompanyAgents() {
   return invoke<HiveCompanyAgent[]>("list_hive_company_agents");
-}
-
-export function listHiveCompanyMembers() {
-  return invoke<HiveCompanyMember[]>("list_hive_company_members");
-}
-
-export function getHiveCompanyAgentPolicy(agentInstanceId: string) {
-  return invoke<HiveCompanyAgentPolicy>("get_hive_company_agent_policy", {
-    agentInstanceId,
-  });
-}
-
-export function setHiveCompanyAgentPolicy(
-  input: SetHiveCompanyAgentPolicyInput,
-) {
-  return invoke<HiveCompanyAgentPolicy>("set_hive_company_agent_policy", {
-    input,
-  });
 }
 
 export function evaosTeamsRefreshDelay(status: EvaosTeamsAuthStatus) {
@@ -124,7 +62,14 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
         title: "Unlock macOS Keychain",
         body:
           status.message ??
-          "Hive cannot read its managed identity. Unlock Keychain and try again.",
+          "Hive cannot read its Electric Sheep session. Unlock Keychain and try again.",
+      };
+    case "identity_restore_required":
+      return {
+        title: "Restore your Hive identity",
+        body:
+          status.message ??
+          "This device does not hold the canonical Hive identity for your membership.",
       };
     case "logout_pending":
       return {
@@ -140,13 +85,6 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
           status.message ??
           "Your managed access could not be refreshed. Hive remains disconnected.",
       };
-    case "identity_recovery_required":
-      return {
-        title: "Recover this Hive identity",
-        body:
-          status.message ??
-          "Electric Sheep verified this account. Recover the existing Hive identity from an already authorized device to continue.",
-      };
     case "active":
       return {
         title: "Access ready",
@@ -158,4 +96,15 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
         body: "Use your Electric Sheep account to connect this device.",
       };
   }
+}
+
+export function evaosTeamsGateBypassed(
+  productManaged: boolean,
+  status: EvaosTeamsAuthStatus | null,
+): boolean {
+  return !productManaged || status?.managed === false;
+}
+
+export function evaosTeamsLogoutClosesGate(status: EvaosTeamsAuthStatus) {
+  return status.managed && status.phase !== "active";
 }

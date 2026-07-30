@@ -13,10 +13,6 @@ import {
   takePendingWelcomeChannelForDirectEntry,
   WELCOME_SURFACE_READY_EVENT,
 } from "@/features/onboarding/welcome";
-import {
-  STARTER_PERSONA_NAMES,
-  starterPersonaAvatar,
-} from "@/features/onboarding/starterPersonaPresentation";
 import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { registerAvatarWhenReady } from "@/features/profile/avatarProfileSync";
 import { profileQueryKey } from "@/features/profile/hooks";
@@ -31,7 +27,6 @@ import { listPersonas } from "@/shared/api/tauriPersonas";
 import { relayClient } from "@/shared/api/relayClient";
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
-import { desktopProductCopy } from "@/shared/product/productIdentity";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/shared/ui/dialog";
@@ -53,6 +48,12 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
     error.message.includes("invalid: you are not a relay member")
   );
 }
+
+const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
+  Fizz: "/onboarding/starter-team/fizz.png",
+  Honey: "/onboarding/starter-team/honey.png",
+  Bumble: "/onboarding/starter-team/bumble.png",
+};
 
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
@@ -183,7 +184,7 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          STARTER_PERSONA_NAMES.flatMap((name) => {
+          ["Fizz", "Honey", "Bumble"].flatMap((name) => {
             const persona = personas.find(
               (candidate) => candidate.displayName === name,
             );
@@ -618,17 +619,15 @@ export function CommunityOnboardingFlow({
             <>
               <h1 className="text-title font-normal">Meet your starter team</h1>
               <p className="mx-auto mt-3 max-w-[400px] text-sm leading-6 text-foreground/80">
-                {desktopProductCopy(
-                  "Buzz lets you bring multiple agents into the same workspace. Your team will help you get started using Buzz.",
-                )}
+                Buzz lets you bring multiple agents into the same workspace.
+                Your team will help you get started using Buzz.
               </p>
               <div className="flex w-full flex-1 items-center justify-center py-10">
                 {starterPersonas.length > 0 ? (
                   <div className="flex flex-wrap justify-center gap-8">
                     {starterPersonas.map((persona) => {
-                      const animationUrl = starterPersonaAvatar(
-                        persona.displayName,
-                      );
+                      const animationUrl =
+                        STARTER_PERSONA_ANIMATIONS[persona.displayName];
                       return (
                         <div
                           className="flex w-40 flex-col items-center gap-3"
@@ -679,7 +678,7 @@ export function CommunityOnboardingFlow({
                   ) : starterChannelFailureCount >= 2 ? (
                     "Skip for now"
                   ) : (
-                    desktopProductCopy("Take me to Buzz")
+                    "Take me to Buzz"
                   )}
                 </Button>
                 <Button

@@ -1,27 +1,24 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use crate::managed_agents::{
     buzz_managed_command_path, buzz_managed_node_bin_dir, buzz_managed_npm_bin_dir,
     AcpAvailabilityStatus, AcpRuntimeCatalogEntry, AuthStatus, CommandAvailabilityInfo,
+    HarnessSource,
 };
 
-mod probes;
 mod runtime_metadata;
 
-#[cfg(test)]
-use probes::run_probe;
-use probes::{auth_status_without_probe, availability_after_readiness_probe, probe_auth_status};
-pub(crate) use runtime_metadata::{KnownAcpRuntime, RuntimeAuthProbe};
+pub(crate) use runtime_metadata::KnownAcpRuntime;
 
 const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
 const BUZZ_AGENT_AVATAR_URL: &str =
     "https://raw.githubusercontent.com/block/buzz/refs/heads/main/crates/buzz-agent/buzz-agent.png";
-const HERMES_AVATAR_URL: &str =
-    "https://raw.githubusercontent.com/NousResearch/hermes-agent/refs/heads/main/apps/desktop/public/hermes.png";
 
 fn common_binary_paths() -> &'static [PathBuf] {
     static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
@@ -61,6 +58,12 @@ fn common_binary_paths() -> &'static [PathBuf] {
                         .join("bin"),
                 );
             }
+            // Goose's legacy Windows installer (superseded by #2680) unpacked
+            // to %USERPROFILE%\goose\goose.exe, which is on no standard PATH —
+            // without this probe those installs stay permanently undiscovered.
+            if let Some(profile) = std::env::var_os("USERPROFILE") {
+                paths.push(PathBuf::from(profile).join("goose"));
+            }
         }
         paths
     })
@@ -83,7 +86,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_commands: &[],
         cli_install_instructions_url: "https://goose-docs.ai/docs/getting-started/installation/",
         adapter_install_instructions_url: "",
-        cli_install_hint: "Buzz requires the Goose CLI; the desktop app alone is not enough.",
+        cli_install_hint: "Buzz talks to Goose through the Goose CLI.",
         adapter_install_hint: "",
         skill_dir: Some(".goose/skills"),
         supports_acp_model_switching: false,
@@ -99,8 +102,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: Some("GOOSE_CONTEXT_LIMIT"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
-        readiness_probe_suffix: None,
-        auth_probe: RuntimeAuthProbe::NotApplicable,
+        auth_probe_args: None,
     },
     KnownAcpRuntime {
         id: "claude",
@@ -116,8 +118,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_commands: &["npm install -g @agentclientprotocol/claude-agent-acp"],
         cli_install_instructions_url: "https://code.claude.com/docs/en/getting-started",
         adapter_install_instructions_url: "https://github.com/agentclientprotocol/claude-agent-acp",
-        cli_install_hint: "Buzz requires the Claude Code CLI; the desktop app alone is not enough.",
-        adapter_install_hint: "Install the Claude Code ACP adapter via npm.",
+        cli_install_hint: "Buzz talks to Claude Code through the Claude Code CLI.",
+        adapter_install_hint: "Buzz talks to the Claude Code CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/claude-agent-acp.",
         skill_dir: Some(".claude/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -132,8 +134,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run the Claude CLI to complete authentication."),
-        readiness_probe_suffix: None,
-        auth_probe: RuntimeAuthProbe::Cli(&["claude", "auth", "status"]),
+        auth_probe_args: Some(&["claude", "auth", "status"]),
     },
     KnownAcpRuntime {
         id: "codex",
@@ -149,8 +150,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_commands: &["npm install -g @agentclientprotocol/codex-acp"],
         cli_install_instructions_url: "https://developers.openai.com/codex/cli/",
         adapter_install_instructions_url: "https://github.com/agentclientprotocol/codex-acp",
-        cli_install_hint: "Buzz requires the Codex CLI; the desktop app alone is not enough.",
-        adapter_install_hint: "Install the Codex ACP adapter via npm.",
+        cli_install_hint: "Buzz talks to Codex through the Codex CLI.",
+        adapter_install_hint: "Buzz talks to the Codex CLI through an ACP adapter. Install it with: npm install -g @agentclientprotocol/codex-acp.",
         skill_dir: Some(".codex/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -165,49 +166,8 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: None,
         required_normalized_fields: &[],
         login_hint: Some("Run `codex login` to authenticate."),
-        readiness_probe_suffix: None,
         // Verified: `codex login status` exits 0 when logged in, non-zero otherwise.
-        auth_probe: RuntimeAuthProbe::Cli(&["codex", "login", "status"]),
-    },
-    KnownAcpRuntime {
-        id: "hermes",
-        label: "Hermes Agent",
-        commands: &["hermes", "hermes-acp"],
-        aliases: &[],
-        avatar_url: HERMES_AVATAR_URL,
-        mcp_command: None,
-        mcp_hooks: false,
-        underlying_cli: None,
-        cli_install_commands: &[
-            "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
-        ],
-        cli_install_commands_windows: &[
-            "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"iex (irm https://hermes-agent.nousresearch.com/install.ps1)\"",
-        ],
-        adapter_install_commands: &[],
-        cli_install_instructions_url:
-            "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
-        adapter_install_instructions_url: "",
-        cli_install_hint: "Install Hermes Agent with the official installer.",
-        adapter_install_hint: "",
-        skill_dir: Some(".hermes/skills"),
-        supports_acp_model_switching: false,
-        model_env_var: None,
-        provider_env_var: None,
-        provider_locked: true,
-        default_env: &[],
-        config_file_path: Some("~/.hermes/config.yaml"),
-        config_file_format: Some("yaml"),
-        supports_acp_native_config: false,
-        thinking_env_var: None,
-        max_tokens_env_var: None,
-        context_limit_env_var: None,
-        required_normalized_fields: &[],
-        login_hint: None,
-        // Appended after the command-specific ACP args: `hermes acp --check`
-        // or `hermes-acp --check`. This validates only dependency readiness.
-        readiness_probe_suffix: Some(&["--check"]),
-        auth_probe: RuntimeAuthProbe::AcpHandshake,
+        auth_probe_args: Some(&["codex", "login", "status"]),
     },
     KnownAcpRuntime {
         id: "buzz-agent",
@@ -239,8 +199,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         context_limit_env_var: Some("BUZZ_AGENT_MAX_CONTEXT_TOKENS"),
         required_normalized_fields: &["model", "provider"],
         login_hint: None,
-        readiness_probe_suffix: None,
-        auth_probe: RuntimeAuthProbe::NotApplicable,
+        auth_probe_args: None,
     },
 ];
 
@@ -334,6 +293,7 @@ pub fn default_agent_command() -> String {
 ///   1. explicit override (non-empty) — a deliberate per-instance pin;
 ///   2. the record's own `runtime` id mapped to its primary command —
 ///      records materialize their runtime at create/migration time;
+///      checks both static builtins AND the loaded preset/custom registry;
 ///   3. legacy fallback: the linked persona's `runtime` (records created
 ///      before the unified model carry `persona_id` but no `runtime`);
 ///   4. `default_agent_command()`.
@@ -350,13 +310,17 @@ pub fn record_agent_command(
         return pin.to_string();
     }
 
-    if let Some(command) = record
-        .runtime
-        .as_deref()
-        .and_then(known_acp_runtime_exact)
-        .and_then(|r| r.commands.first().copied())
-    {
-        return command.to_string();
+    if let Some(id) = record.runtime.as_deref() {
+        // Check static builtins first.
+        if let Some(command) = known_acp_runtime_exact(id).and_then(|r| r.commands.first().copied())
+        {
+            return command.to_string();
+        }
+        // Fall back to loaded registry for preset/custom harnesses.
+        if let Some(def) = crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(id)
+        {
+            return def.command.clone();
+        }
     }
 
     effective_agent_command(record.persona_id.as_deref(), personas, None)
@@ -368,7 +332,8 @@ pub fn record_agent_command(
 ///
 /// Resolution order:
 ///   1. explicit override (non-empty) — a deliberate per-instance pin;
-///   2. the linked persona's `runtime` id mapped to its primary command;
+///   2. the linked persona's `runtime` id mapped to its primary command
+///      (checks builtins then loaded preset/custom registry);
 ///   3. `default_agent_command()` — no persona/runtime, or persona deleted.
 pub fn effective_agent_command(
     persona_id: Option<&str>,
@@ -382,23 +347,124 @@ pub fn effective_agent_command(
         return pin.to_string();
     }
 
-    persona_id
+    let runtime_id = persona_id
         .and_then(|pid| personas.iter().find(|p| p.id == pid))
-        .and_then(|persona| persona.runtime.as_deref())
-        .and_then(known_acp_runtime_exact)
-        .and_then(|r| r.commands.first().copied())
-        .map(str::to_string)
-        .unwrap_or_else(default_agent_command)
+        .and_then(|persona| persona.runtime.as_deref());
+
+    if let Some(id) = runtime_id {
+        // Check static builtins first.
+        if let Some(command) = known_acp_runtime_exact(id).and_then(|r| r.commands.first().copied())
+        {
+            return command.to_string();
+        }
+        // Check loaded preset/custom registry.
+        if let Some(def) = crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(id)
+        {
+            return def.command.clone();
+        }
+    }
+
+    default_agent_command()
 }
 
 mod overrides;
 pub use overrides::{apply_agent_command_update, create_time_agent_command_override};
 
+/// Prefix of the typed dangling-harness error produced by
+/// `try_record_agent_command` / `resolve_effective_harness_descriptor`.
+///
+/// This sentinel is an internal Rust contract: user-facing surfaces must
+/// convert it to a sentence via [`user_facing_harness_error`] (spawn) or to
+/// the missing id via [`dangling_harness_id`] (summary) — never show it raw.
+pub(crate) const DANGLING_HARNESS_PREFIX: &str = "DANGLING_HARNESS_ID:";
+
+/// Extract the missing harness id from a `DANGLING_HARNESS_ID:<id>` error.
+/// Returns `None` for any other error string.
+pub(crate) fn dangling_harness_id(error: &str) -> Option<&str> {
+    error.strip_prefix(DANGLING_HARNESS_PREFIX)
+}
+
+/// Convert a harness-resolution error to a user-facing sentence. Dangling
+/// harness ids become an actionable message; other errors pass through.
+pub(crate) fn user_facing_harness_error(error: &str) -> String {
+    match dangling_harness_id(error) {
+        Some(id) => format!(
+            "harness \"{id}\" was deleted — pick a new harness for this agent or restore the harness definition"
+        ),
+        None => error.to_string(),
+    }
+}
+
+/// Summary-row display for a dangling harness id: shows the *missing* id so
+/// the agent list tells the same story as spawn (which refuses with the
+/// sentence above), rather than silently falling back to the default command
+/// as if the agent were healthy.
+pub(crate) fn dangling_harness_display(id: &str) -> String {
+    format!("harness (deleted): {id}")
+}
+
+/// Spawn-time variant of `record_agent_command` that returns a typed error when
+/// a record's `runtime` id or its persona's `runtime` id is set but cannot be
+/// resolved (i.e. the definition was deleted after the agent was created).
+///
+/// Returns `Err("DANGLING_HARNESS_ID:<id>")` so callers can surface the error
+/// without falling through to `buzz-agent`.  When there is no runtime id at all
+/// the fallback to `default_agent_command()` is intentional (legacy agents
+/// pre-date the unified harness model).
+pub fn try_record_agent_command(
+    record: &crate::managed_agents::types::ManagedAgentRecord,
+    personas: &[crate::managed_agents::types::AgentDefinition],
+) -> Result<String, String> {
+    // Explicit pin always wins — if the user set a raw override, honour it.
+    if let Some(pin) = record
+        .agent_command_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return Ok(pin.to_string());
+    }
+
+    // Record-level runtime id: if set but unresolvable → typed error.
+    if let Some(id) = record.runtime.as_deref() {
+        if let Some(cmd) = known_acp_runtime_exact(id).and_then(|r| r.commands.first().copied()) {
+            return Ok(cmd.to_string());
+        }
+        if let Some(def) = crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(id)
+        {
+            return Ok(def.command.clone());
+        }
+        return Err(format!("DANGLING_HARNESS_ID:{id}"));
+    }
+
+    // Persona-level runtime id.
+    if let Some(persona_id) = record.persona_id.as_deref() {
+        if let Some(persona) = personas.iter().find(|p| p.id == persona_id) {
+            if let Some(id) = persona.runtime.as_deref() {
+                if let Some(cmd) =
+                    known_acp_runtime_exact(id).and_then(|r| r.commands.first().copied())
+                {
+                    return Ok(cmd.to_string());
+                }
+                if let Some(def) =
+                    crate::managed_agents::custom_harnesses::lookup_loaded_harness_by_id(id)
+                {
+                    return Ok(def.command.clone());
+                }
+                return Err(format!("DANGLING_HARNESS_ID:{id}"));
+            }
+        }
+    }
+
+    // No runtime id set — legacy agent; use the safe default.
+    Ok(default_agent_command())
+}
+
 fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
-        "goose" | "hermes" => Some(vec!["acp".to_string()]),
+        "goose" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" | "hermes-acp" | "buzz-agent" => Some(Vec::new()),
+        | "claudecode" | "buzz-agent" => Some(Vec::new()),
         _ => None,
     }
 }
@@ -537,7 +603,7 @@ pub fn clear_resolve_cache() {
 //
 // `build_managed_agent_summary` needs to compare the spawn-time adapter
 // availability against the *current* availability without triggering a live
-// `probe_codex_acp_major_version` subprocess on every poll cycle.  This cache
+// `probe_codex_acp_version` subprocess on every poll cycle.  This cache
 // stores the last availability status of the codex-acp binary at its resolved
 // path.  It is warmed by `discover_acp_runtimes` (which already probes), so
 // the badge path reads warm data, and is invalidated by `clear_resolve_cache`
@@ -953,11 +1019,103 @@ pub(crate) fn is_npm_global_install(cmd: &str) -> bool {
         || t.starts_with("npm uninstall -g ")
 }
 
-fn runtime_readiness_probe_args(command: &str, probe_suffix: &[&str]) -> Vec<String> {
-    let mut args = vec![command.to_string()];
-    args.extend(normalize_agent_args(command, Vec::new()));
-    args.extend(probe_suffix.iter().map(|arg| (*arg).to_string()));
-    args
+/// Run a CLI auth probe with a 10-second process-level timeout.
+///
+/// Spawns the probe CLI as a child process. Stdout and stderr are drained on
+/// background threads to prevent pipe-buffer deadlock. On timeout the child is
+/// killed and `Unknown` is returned; no orphaned threads or processes are left
+/// behind. Returns `Unknown` on timeout.
+fn probe_auth_status(binary_path: &Path, probe_args: &[&str]) -> AuthStatus {
+    use crate::managed_agents::readiness::cli_probe;
+
+    let augmented_path = cli_probe::augmented_path();
+
+    let mut command = std::process::Command::new(binary_path);
+    command.args(&probe_args[1..]);
+    if let Some(ref path) = augmented_path {
+        command.env("PATH", path);
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    crate::util::configure_no_window(&mut command);
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(_) => return AuthStatus::Unknown,
+    };
+
+    // Drain stdout/stderr on background threads to prevent pipe-buffer deadlock.
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
+    let stdout_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stdout_pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stderr_pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    // Save PID for kill-on-timeout before moving child into the wait thread.
+    let child_pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let wait_thread = std::thread::spawn(move || {
+        let _ = tx.send(child.wait());
+    });
+
+    // 10-second timeout for auth probes.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let exit_status = loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(child_pid as i32, libc::SIGTERM);
+            }
+            #[cfg(not(unix))]
+            let _ = child_pid;
+            drop(rx);
+            let _ = wait_thread.join();
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return AuthStatus::Unknown;
+        }
+        match rx.recv_timeout(Duration::from_millis(100).min(remaining)) {
+            Ok(Ok(status)) => break status,
+            Ok(Err(_)) => {
+                let _ = wait_thread.join();
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return AuthStatus::Unknown;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return AuthStatus::Unknown;
+            }
+        }
+    };
+
+    let _ = wait_thread.join();
+    let _ = stdout_thread.join();
+    let stderr_bytes = stderr_thread.join().unwrap_or_default();
+
+    match cli_probe::classify_probe_output(&stderr_bytes, exit_status.success()) {
+        cli_probe::ProbeOutcome::LoggedIn => AuthStatus::LoggedIn,
+        cli_probe::ProbeOutcome::LoggedOut => AuthStatus::LoggedOut,
+        cli_probe::ProbeOutcome::ConfigInvalid { stderr_excerpt } => AuthStatus::ConfigInvalid {
+            diagnostic: stderr_excerpt,
+        },
+    }
 }
 
 pub fn command_availability(command: &str) -> CommandAvailabilityInfo {
@@ -1005,15 +1163,30 @@ pub(crate) fn classify_runtime(
     }
 }
 
-/// Probe the major version of a `codex-acp` binary by running `--version`.
+/// The oldest `codex-acp` version supported by Buzz managed agents.
+///
+/// Older 1.x adapters are detected successfully, but can still bundle a Codex runtime
+/// that does not reliably give `buzz` CLI subprocesses outbound relay access.
+///
+/// Bump policy: raise this only when a newer adapter fixes a defect that breaks managed
+/// agents, and only to a version already published on npm — every user below the floor is
+/// offered a reinstall on their next discovery pass.
+pub(crate) const MIN_CODEX_ACP_VERSION: (u64, u64, u64) = (1, 1, 7);
+
+/// Probe the full version of a `codex-acp` binary by running `--version`.
 ///
 /// The 1.x adapter (`@agentclientprotocol/codex-acp`) outputs
 /// `@agentclientprotocol/codex-acp <major>.<minor>.<patch>` on stdout and exits 0.
 /// The old 0.16.x adapter (`@zed-industries/codex-acp`) is a Rust binary that does
 /// not recognise `--version` and exits non-zero.
 ///
-/// Returns the major version on success, `None` on any failure (non-zero exit,
-/// unparseable output, timeout, or missing binary).
+/// Returns the `(major, minor, patch)` triple on success, `None` on any failure
+/// (non-zero exit, unparseable output, timeout, or missing binary).
+///
+/// The parse is deliberately strict: exactly three numeric dot-separated components.
+/// Partial versions (`1.2`) and prerelease tags (`1.2.0-rc1`) return `None` and so
+/// classify as [`AcpAvailabilityStatus::AdapterOutdated`] — failing closed offers a
+/// reinstall rather than running an adapter whose version cannot be compared.
 ///
 /// The probe is bounded by a 5-second deadline. The child is polled with
 /// [`std::process::Child::try_wait`] (the repo's standard deadline pattern) and
@@ -1022,16 +1195,16 @@ pub(crate) fn classify_runtime(
 /// Stdout is redirected to a temporary file rather than a pipe, so forked
 /// descendants cannot hold EOF open. Reads from a regular file return EOF at its
 /// current write position regardless of inherited file descriptors, cross-platform.
-pub(crate) fn probe_codex_acp_major_version(binary_path: &Path) -> Option<u64> {
-    probe_codex_acp_major_version_with_path(
+pub(crate) fn probe_codex_acp_version(binary_path: &Path) -> Option<(u64, u64, u64)> {
+    probe_codex_acp_version_with_path(
         binary_path,
         crate::managed_agents::readiness::cli_probe::augmented_path().as_deref(),
     )
 }
-pub(crate) fn probe_codex_acp_major_version_with_path(
+pub(crate) fn probe_codex_acp_version_with_path(
     binary_path: &Path,
     augmented_path: Option<&str>,
-) -> Option<u64> {
+) -> Option<(u64, u64, u64)> {
     use std::io::{Read as _, Seek as _, SeekFrom};
     use std::time::{Duration, Instant};
     const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1087,30 +1260,35 @@ pub(crate) fn probe_codex_acp_major_version_with_path(
     let stdout = String::from_utf8_lossy(&buf);
     // Output format: "<package-name> <major>.<minor>.<patch>"
     let version_str = stdout.split_whitespace().last()?;
-    let major_str = version_str.split('.').next()?;
-    major_str.parse::<u64>().ok()
+    let mut components = version_str.split('.');
+    let major = components.next()?.parse::<u64>().ok()?;
+    let minor = components.next()?.parse::<u64>().ok()?;
+    let patch = components.next()?.parse::<u64>().ok()?;
+    if components.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
 }
 
 /// Classifies a resolved codex-acp binary path as [`AcpAvailabilityStatus::Available`]
 /// or [`AcpAvailabilityStatus::AdapterOutdated`].
 ///
 /// The 0.16.x adapter (`@zed-industries/codex-acp`) does not recognise `--version`
-/// and exits non-zero — that probe failure yields `AdapterOutdated`. The 1.x adapter
-/// (`@agentclientprotocol/codex-acp`) prints its version and exits 0; major ≥ 1
-/// yields `Available`.
+/// and exits non-zero — that probe failure yields `AdapterOutdated`. An adapter is
+/// available only when its version is at least [`MIN_CODEX_ACP_VERSION`].
 ///
 /// Used by `discover_acp_runtimes`, `cli_login_requirements`, and
 /// `install_acp_runtime_blocking` so the version-gate logic is not duplicated.
 pub(crate) fn codex_adapter_availability(path: &Path) -> AcpAvailabilityStatus {
-    match probe_codex_acp_major_version(path) {
-        Some(major) if major >= 1 => AcpAvailabilityStatus::Available,
+    match probe_codex_acp_version(path) {
+        Some(version) if version >= MIN_CODEX_ACP_VERSION => AcpAvailabilityStatus::Available,
         _ => AcpAvailabilityStatus::AdapterOutdated,
     }
 }
 
-/// Returns `true` when the codex-acp binary at `path` is outdated (major version < 1)
-/// or cannot be probed using `augmented_path`. Thin wrapper around
-/// [`codex_adapter_is_outdated_with_path`].
+/// Returns `true` when the codex-acp binary at `path` is below
+/// [`MIN_CODEX_ACP_VERSION`] or cannot be probed using `augmented_path`. Thin wrapper
+/// around [`codex_adapter_is_outdated_with_path`].
 #[cfg(test)]
 pub(crate) fn codex_adapter_is_outdated(path: &Path) -> bool {
     codex_adapter_is_outdated_with_path(
@@ -1119,15 +1297,15 @@ pub(crate) fn codex_adapter_is_outdated(path: &Path) -> bool {
     )
 }
 
-/// Returns `true` when the codex-acp binary at `path` is outdated (major version < 1)
-/// or cannot be probed with the supplied PATH.
+/// Returns `true` when the codex-acp binary at `path` is below
+/// [`MIN_CODEX_ACP_VERSION`] or cannot be probed with the supplied PATH.
 pub(crate) fn codex_adapter_is_outdated_with_path(
     path: &Path,
     augmented_path: Option<&str>,
 ) -> bool {
     !matches!(
-        probe_codex_acp_major_version_with_path(path, augmented_path),
-        Some(major) if major >= 1
+        probe_codex_acp_version_with_path(path, augmented_path),
+        Some(version) if version >= MIN_CODEX_ACP_VERSION
     )
 }
 
@@ -1150,33 +1328,14 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
     let (mut availability, command, binary_path) =
         classify_runtime(adapter_result, runtime.underlying_cli, underlying_cli_found);
 
-    // For codex-acp: when the adapter resolves as Available, probe the
-    // version. An adapter with major version < 1 is treated as outdated —
-    // the CODEX_CONFIG spawn contract requires 1.x.
+    // For codex-acp: when the adapter resolves as Available, probe its full
+    // version. An adapter below MIN_CODEX_ACP_VERSION is treated as outdated.
     if runtime.id == "codex"
         && availability == AcpAvailabilityStatus::Available
         && command.as_deref() == Some("codex-acp")
     {
         if let Some(path_str) = &binary_path {
             availability = codex_adapter_availability(&PathBuf::from(path_str));
-        }
-    }
-
-    // Dependency readiness is distinct from provider authentication. Append
-    // the suffix after the selected command's normal ACP arguments so Hermes
-    // runs either `hermes acp --check` or `hermes-acp --check`.
-    if availability == AcpAvailabilityStatus::Available {
-        if let (Some(probe_suffix), Some(command_name)) =
-            (runtime.readiness_probe_suffix, command.as_deref())
-        {
-            let owned_probe_args = runtime_readiness_probe_args(command_name, probe_suffix);
-            let probe_args = owned_probe_args
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            let probe_binary = binary_path.as_deref().map(Path::new);
-            availability =
-                availability_after_readiness_probe(availability, probe_binary, &probe_args);
         }
     }
 
@@ -1207,7 +1366,6 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
         AcpAvailabilityStatus::CliMissing => cli_hint.to_string(),
         AcpAvailabilityStatus::AdapterMissing => adapter_hint.to_string(),
         AcpAvailabilityStatus::AdapterOutdated => adapter_hint.to_string(),
-        AcpAvailabilityStatus::DependencyMissing => cli_hint.to_string(),
         AcpAvailabilityStatus::NotInstalled => {
             if !cli_hint.is_empty() && !adapter_hint.is_empty() {
                 format!("{cli_hint} {adapter_hint}")
@@ -1223,7 +1381,6 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             runtime.adapter_install_instructions_url
         }
         AcpAvailabilityStatus::Available
-        | AcpAvailabilityStatus::DependencyMissing
         | AcpAvailabilityStatus::CliMissing
         | AcpAvailabilityStatus::NotInstalled => runtime.cli_install_instructions_url,
     };
@@ -1262,6 +1419,9 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime) -> PartialEntr
             // Filled in by the auth-probe phase in full catalog discovery.
             auth_status: AuthStatus::Unknown,
             login_hint: None,
+            source: HarnessSource::Builtin,
+            // Builtin entries have no user-editable env; definition_env is empty.
+            definition_env: Default::default(),
         },
     }
 }
@@ -1276,8 +1436,246 @@ pub(crate) fn discover_acp_runtime_availability(runtime_id: &str) -> Option<AcpA
         .map(|partial| partial.entry.availability)
 }
 
-pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
-    // Phase 1: build all entries (fast — no probes yet).
+// ── Tier-2 preset harnesses ────────────────────────────────────────────────
+//
+// Static data for well-known ACP harnesses that have bundled logos and
+// verified command/args. PATH-probed at discovery time (Detected badge);
+// not editable or deletable by users. Logos are bundled assets referenced
+// by id in the frontend `RUNTIME_LOGOS` map.
+
+struct PresetHarness {
+    id: &'static str,
+    label: &'static str,
+    command: &'static str,
+    args: &'static [&'static str],
+    install_instructions_url: &'static str,
+    install_hint: &'static str,
+    /// Vendor CLI the ACP command wraps, when the preset is an adapter
+    /// (e.g. Amp's `amp-acp` wraps the separately-installed `amp` CLI).
+    /// Consulted only when the adapter is absent, so `AdapterMissing`
+    /// replaces the misleading `NotInstalled` when the CLI is present but
+    /// the adapter is not. Deliberately NOT fed through the builtins'
+    /// full `classify_runtime` predicate: that would flip
+    /// adapter-present/CLI-absent from today's `Available` to `CliMissing`
+    /// (unselectable), and presets carry a single flat `install_hint`, so
+    /// the `CliMissing` copy would tell the user to install the adapter
+    /// they already have. `None` when the command IS the vendor CLI.
+    underlying_cli: Option<&'static str>,
+}
+
+/// Build the catalog entry for one preset harness through an injectable
+/// resolver — the seam the preset loop consumes and tests bind.
+///
+/// Availability consumes only the adapter-missing arm of the builtin
+/// predicate: adapter presence alone decides `Available` (exactly today's
+/// behavior — an `amp-acp` without `amp` stays selectable), and
+/// `underlying_cli` is consulted only when the adapter is absent, to
+/// distinguish `AdapterMissing` (vendor CLI present) from `NotInstalled`
+/// (neither found). See the `underlying_cli` field doc for why the full
+/// `classify_runtime` predicate is deliberately not used here.
+fn preset_catalog_entry(
+    def: &PresetHarness,
+    resolve: impl Fn(&str) -> Option<PathBuf>,
+) -> AcpRuntimeCatalogEntry {
+    let (availability, command, binary_path) = match resolve(def.command) {
+        Some(path) => (
+            AcpAvailabilityStatus::Available,
+            Some(def.command.to_string()),
+            Some(path.display().to_string()),
+        ),
+        None => {
+            let underlying_cli_found = def
+                .underlying_cli
+                .map(|cli| resolve(cli).is_some())
+                .unwrap_or(false);
+            if underlying_cli_found {
+                (AcpAvailabilityStatus::AdapterMissing, None, None)
+            } else {
+                (AcpAvailabilityStatus::NotInstalled, None, None)
+            }
+        }
+    };
+    let underlying_cli_path = def
+        .underlying_cli
+        .and_then(resolve)
+        .map(|p| p.display().to_string());
+
+    let default_args = normalize_agent_args(
+        def.command,
+        def.args.iter().map(|s| s.to_string()).collect(),
+    );
+
+    AcpRuntimeCatalogEntry {
+        id: def.id.to_string(),
+        label: def.label.to_string(),
+        // No remote URL — all preset icons are bundled assets.
+        avatar_url: String::new(),
+        availability,
+        command,
+        binary_path,
+        default_args,
+        mcp_command: None,
+        model_env_var: None,
+        provider_env_var: None,
+        thinking_env_var: None,
+        install_hint: def.install_hint.to_string(),
+        install_instructions_url: def.install_instructions_url.to_string(),
+        can_auto_install: false,
+        // Kept false even for adapter presets: presets carry one flat
+        // install_hint (the adapter's), so the requiresExternalCli
+        // "CLI is missing" wording would pair the wrong noun with it.
+        // The builtin path, with per-availability hints, is the only
+        // consumer of the true case.
+        requires_external_cli: false,
+        underlying_cli_path,
+        node_required: false,
+        auth_status: AuthStatus::NotApplicable,
+        login_hint: None,
+        source: HarnessSource::Preset,
+        // Preset entries have static, non-editable env; definition_env is empty.
+        definition_env: Default::default(),
+    }
+}
+
+const PRESET_HARNESSES: &[PresetHarness] = &[
+    PresetHarness {
+        id: "cursor",
+        label: "Cursor",
+        command: "cursor-agent",
+        args: &["acp"],
+        install_instructions_url: "https://cursor.com/downloads",
+        install_hint: "Buzz talks to Cursor through the cursor-agent CLI's ACP mode.",
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "omp",
+        label: "Oh My Pi",
+        command: "omp",
+        args: &["acp"],
+        install_instructions_url: "https://github.com/can1357/oh-my-pi",
+        install_hint: "Buzz talks to Oh My Pi through its CLI's ACP mode (omp acp).",
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "grok",
+        label: "Grok Build",
+        command: "grok",
+        args: &["agent", "--always-approve", "stdio"],
+        install_instructions_url: "https://build.x.ai/docs",
+        install_hint: "Buzz talks to Grok Build through its CLI's agent stdio mode.",
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "opencode",
+        label: "OpenCode",
+        command: "opencode",
+        args: &["acp"],
+        install_instructions_url: "https://opencode.ai/docs",
+        install_hint: "Buzz talks to OpenCode through its CLI's ACP mode (opencode acp).",
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "kimi",
+        label: "Kimi Code",
+        command: "kimi",
+        args: &["acp"],
+        install_instructions_url: "https://kimi.ai/download",
+        install_hint: "Buzz talks to Kimi Code through its CLI's ACP mode (kimi acp).",
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "amp",
+        label: "Amp",
+        command: "amp-acp",
+        args: &[],
+        install_instructions_url: "https://github.com/tao12345666333/amp-acp",
+        install_hint: "Buzz talks to the Amp CLI through the amp-acp adapter. Follow the setup guide to install the adapter so the amp-acp command is on your PATH.",
+        underlying_cli: Some("amp"),
+    },
+    PresetHarness {
+        id: "hermes",
+        label: "Hermes Agent",
+        command: "hermes-acp",
+        args: &[],
+        install_instructions_url: "https://hermes-agent.nousresearch.com",
+        install_hint: "Buzz talks to Hermes Agent through its hermes-acp command.",
+        underlying_cli: None,
+    },
+    PresetHarness {
+        id: "openclaw",
+        label: "OpenClaw",
+        command: "openclaw",
+        args: &["acp"],
+        install_instructions_url: "https://docs.openclaw.ai/start/getting-started",
+        install_hint: "Buzz talks to OpenClaw through its ACP mode (openclaw acp), which relies on the OpenClaw Gateway daemon. Follow the setup guide to install both.\n\n\
+            ⚠️  Execution-locus note: `openclaw acp` runs tools inside the \
+            OpenClaw Gateway daemon, not in the Desktop process. \
+            Desktop-injected BUZZ_* env vars are visible to the `openclaw` \
+            harness process itself, but do NOT automatically reach the \
+            Gateway's execution environment. If your tools or agent logic \
+            needs BUZZ_* credentials at execution time, set them on the \
+            Gateway's own environment separately.",
+        underlying_cli: None,
+    },
+];
+
+/// Return the static preset harness definitions as `HarnessDefinition` values.
+///
+/// Used by `warm_harness_registry_from_dir` to seed the loaded-harness registry
+/// at startup before the frontend triggers a full discovery run.
+pub(crate) fn preset_harness_definitions(
+) -> Vec<crate::managed_agents::custom_harnesses::HarnessDefinition> {
+    PRESET_HARNESSES
+        .iter()
+        .map(
+            |p| crate::managed_agents::custom_harnesses::HarnessDefinition {
+                id: p.id.to_string(),
+                label: p.label.to_string(),
+                command: p.command.to_string(),
+                args: p.args.iter().map(|s| s.to_string()).collect(),
+                env: std::collections::BTreeMap::new(),
+                install_instructions_url: p.install_instructions_url.to_string(),
+                install_hint: p.install_hint.to_string(),
+            },
+        )
+        .collect()
+}
+
+/// Return the static slice of preset harness IDs.
+///
+/// Used by `check_id_collision` in `custom_harnesses` to derive the reserved-ID
+/// set from the single source of truth (`PRESET_HARNESSES`) rather than a
+/// hand-maintained copy.  Adding a preset automatically reserves its ID.
+pub(crate) fn preset_harness_ids() -> &'static [&'static str] {
+    // `PRESET_HARNESSES` is `'static`; we project its `id` fields.
+    // Computed once via OnceLock to avoid repeated allocations on hot paths.
+    use std::sync::OnceLock;
+    static IDS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    IDS.get_or_init(|| PRESET_HARNESSES.iter().map(|p| p.id).collect())
+        .as_slice()
+}
+
+/// Discover all ACP runtimes, optionally merging user-defined custom harnesses
+/// from `custom_harnesses_dir`.
+///
+/// This is the primary entry point used by the Tauri command layer. It:
+/// 1. Builds entries for all compiled-in (`Builtin`) runtimes.
+/// 2. Runs auth probes in parallel.
+/// 3. Inserts static `Preset` entries (PATH-probed, `source: Preset`).
+/// 4. If `custom_harnesses_dir` is `Some`, loads `*.json` files from that
+///    directory and appends `Custom` entries — no auth probe, command resolved
+///    via PATH, availability is `Available` or `NotInstalled`.
+///
+/// The custom dir is re-scanned on every call (goose `refresh_custom_providers`
+/// pattern) — no caching, no restart needed to pick up new files.
+///
+/// After building the catalog, updates the loaded-harness registry so spawn
+/// and readiness paths can resolve preset/custom harness commands without
+/// re-running discovery.
+pub fn discover_acp_runtimes_from(
+    custom_harnesses_dir: Option<&Path>,
+) -> Vec<AcpRuntimeCatalogEntry> {
+    // Phase 1: build all builtin entries (fast — no probes yet).
     let mut partials: Vec<PartialEntry> = KNOWN_ACP_RUNTIMES
         .iter()
         .map(discover_acp_runtime_phase1)
@@ -1292,9 +1690,7 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
             if partial.entry.availability != AcpAvailabilityStatus::Available {
                 return None;
             }
-            let RuntimeAuthProbe::Cli(probe_args) = partial.runtime.auth_probe else {
-                return None;
-            };
+            let probe_args = partial.runtime.auth_probe_args?;
             // Need the resolved binary path for the CLI (e.g. the actual `claude` binary).
             let binary_path = resolve_command(probe_args[0])?;
             let probe_args_owned: Vec<String> = probe_args.iter().map(|s| s.to_string()).collect();
@@ -1323,12 +1719,135 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
     // Fill NotApplicable / Unknown for non-probed entries.
     for partial in &mut partials {
         if partial.entry.auth_status == AuthStatus::Unknown {
-            partial.entry.auth_status =
-                auth_status_without_probe(&partial.entry.availability, &partial.runtime.auth_probe);
+            partial.entry.auth_status = if partial.entry.availability
+                == AcpAvailabilityStatus::Available
+                && partial.runtime.auth_probe_args.is_none()
+            {
+                AuthStatus::NotApplicable
+            } else {
+                AuthStatus::Unknown
+            };
         }
     }
 
-    partials.into_iter().map(|p| p.entry).collect()
+    let mut entries: Vec<AcpRuntimeCatalogEntry> = partials.into_iter().map(|p| p.entry).collect();
+
+    // Track all ids seen so far (builtins) to prevent preset/custom collisions.
+    let mut seen_ids: std::collections::HashSet<String> =
+        entries.iter().map(|e| e.id.clone()).collect();
+
+    // Phase 2.5: insert static preset entries (PATH-probed, not editable/deletable).
+    for def in PRESET_HARNESSES {
+        if seen_ids.contains(def.id) {
+            // Builtin or earlier preset shadowed this id — skip silently.
+            continue;
+        }
+        seen_ids.insert(def.id.to_string());
+
+        entries.push(preset_catalog_entry(def, find_command));
+    }
+
+    // Phase 3: load and append custom harness definitions.
+    if let Some(dir) = custom_harnesses_dir {
+        // The loader applies collision + duplicate filtering at the boundary,
+        // so anything it returns is safe to surface in the catalog. Builtin
+        // shadowing is impossible here (check_id_collision covers builtins and
+        // presets); `seen_ids` guards only same-run duplicates.
+        for def in crate::managed_agents::custom_harnesses::load_custom_harnesses(dir) {
+            if !seen_ids.insert(def.id.clone()) {
+                tracing::warn!("custom_harnesses: skipping duplicate id {:?}", def.id);
+                continue;
+            }
+
+            // Availability: command on PATH → Available, else NotInstalled.
+            let (availability, command, binary_path) = match find_command(&def.command) {
+                Some(path) => (
+                    AcpAvailabilityStatus::Available,
+                    Some(def.command.clone()),
+                    Some(path.display().to_string()),
+                ),
+                None => (AcpAvailabilityStatus::NotInstalled, None, None),
+            };
+
+            let default_args = normalize_agent_args(&def.command, def.args.clone());
+
+            entries.push(AcpRuntimeCatalogEntry {
+                id: def.id.clone(),
+                label: def.label.clone(),
+                // F1 security fix: never copy user-supplied avatar URL into the catalog.
+                // All icons are bundled assets; customs fall back to TerminalSquare in the UI.
+                avatar_url: String::new(),
+                availability,
+                command,
+                binary_path,
+                default_args,
+                // Custom harnesses are plain ACP — no MCP sidecar, no env-var
+                // model switching, no thinking knobs.
+                mcp_command: None,
+                model_env_var: None,
+                provider_env_var: None,
+                thinking_env_var: None,
+                install_hint: def.install_hint.clone(),
+                install_instructions_url: def.install_instructions_url.clone(),
+                // Security line: custom definitions carry no install scripts.
+                can_auto_install: false,
+                requires_external_cli: false,
+                underlying_cli_path: None,
+                node_required: false,
+                // No auth probe for custom harnesses.
+                auth_status: AuthStatus::NotApplicable,
+                login_hint: None,
+                source: HarnessSource::Custom,
+                // Carry definition env into the catalog so the edit form can
+                // read it back — prevents silently erasing env on save.
+                definition_env: def.env.clone(),
+            });
+        }
+    }
+
+    // Publish the loaded-harness registry from a FRESH directory read under the
+    // persist mutex — never from the snapshot taken before the auth probes ran.
+    // A save/delete landing during Phase 2 already re-warmed the registry; a
+    // stale-snapshot publish here would clobber it (the just-saved harness
+    // would become unresolvable at spawn until the next discovery).
+    //
+    // This exact line is pinned by `discovery_publish_path_survives_mid_flight_save`
+    // / `..._drops_mid_flight_delete` (discovery tests), which land a save/delete
+    // through the pre-publish test hook below and red if this reverts to
+    // publishing a stale snapshot.
+    #[cfg(test)]
+    pre_publish_test_hook::run();
+    crate::managed_agents::custom_harnesses::warm_harness_registry_locked(custom_harnesses_dir);
+
+    entries
+}
+
+/// Test-only seam: a callback invoked between discovery's directory scan and
+/// its registry publish, so tests can land a `save_and_warm`/`delete_and_warm`
+/// in exactly the window the stale-snapshot bug lived in — through the REAL
+/// `discover_acp_runtimes_from` call path, not a hand-called seam.
+#[cfg(test)]
+pub(crate) mod pre_publish_test_hook {
+    use std::sync::{Mutex, OnceLock};
+
+    type Hook = Box<dyn Fn() + Send>;
+
+    fn cell() -> &'static Mutex<Option<Hook>> {
+        static CELL: OnceLock<Mutex<Option<Hook>>> = OnceLock::new();
+        CELL.get_or_init(|| Mutex::new(None))
+    }
+
+    /// Install (or clear, with `None`) the hook. Callers must serialize via
+    /// `registry_test_lock` — the hook is process-global.
+    pub(crate) fn set(hook: Option<Hook>) {
+        *cell().lock().unwrap_or_else(|e| e.into_inner()) = hook;
+    }
+
+    pub(crate) fn run() {
+        if let Some(hook) = cell().lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            hook();
+        }
+    }
 }
 
 pub fn managed_agent_avatar_url(command: &str) -> Option<String> {
