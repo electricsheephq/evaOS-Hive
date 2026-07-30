@@ -18,7 +18,7 @@ use super::{
     issue_key_challenge, verify_key_challenge, ChallengeResponse, EvaosTeamsEntitlement,
     IdentityBinding,
 };
-use crate::app_state::AppState;
+use crate::app_state::{managed_identity::persist_managed_recovered_identity, AppState};
 
 const ENVELOPE_SCHEMA: &str = "evaos.hive_identity_envelope.v1";
 const RECOVERY_SCHEMA: &str = "evaos.hive_identity_recovery.v1";
@@ -617,7 +617,7 @@ pub(super) async fn recover_identity(
     std::fs::create_dir_all(&data_dir).map_err(|error| format!("create app data dir: {error}"))?;
     let key_path = data_dir.join("identity.key");
     let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
-    crate::app_state::persist_managed_recovered_identity(
+    persist_managed_recovered_identity(
         store, app_state, &keys, &key_path, &data_dir,
     )?;
     Ok((keys, entitlement))

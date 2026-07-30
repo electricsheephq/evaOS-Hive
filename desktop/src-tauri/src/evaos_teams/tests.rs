@@ -333,6 +333,16 @@ fn managed_store_shape_allows_only_opaque_session_and_logout_marker() {
 }
 
 #[test]
+fn newly_claimed_session_remains_logout_pending_until_login_commits() {
+    let runtime =
+        runtime_from_entries(Some(pending_session_entries("opaque-session-value"))).unwrap();
+
+    assert!(runtime.session.is_some());
+    assert!(runtime.logout_pending);
+    assert!(!runtime.custody_checked);
+}
+
+#[test]
 fn public_status_never_serializes_backend_proof_or_credentials() {
     let status = EvaosTeamsAuthStatus::managed(
         "reauth_required",

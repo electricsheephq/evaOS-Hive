@@ -42,6 +42,8 @@ mod device_code;
 mod http_api;
 #[cfg(feature = "evaos-teams-managed")]
 mod identity_custody;
+#[cfg(feature = "evaos-teams-managed")]
+mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
@@ -685,8 +687,16 @@ fn persist_active_session(
 }
 
 #[cfg(feature = "evaos-teams-managed")]
+fn pending_session_entries(session: &str) -> HashMap<String, String> {
+    HashMap::from([
+        (SESSION_KEY.to_string(), session.to_string()),
+        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
+    ])
+}
+
+#[cfg(feature = "evaos-teams-managed")]
 fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(), String> {
-    let replacement = HashMap::from([(SESSION_KEY.to_string(), session.to_string())]);
+    let replacement = pending_session_entries(session);
     managed_store()
         .replace_all(&replacement)
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
@@ -696,45 +706,10 @@ fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(),
     *state.runtime.lock().map_err(|error| error.to_string())? = ManagedRuntime {
         initialized: true,
         session: Some(Zeroizing::new(session.to_string())),
-        logout_pending: false,
+        logout_pending: true,
         custody_checked: false,
     };
     Ok(())
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-fn custody_checked(state: &EvaosTeamsState) -> Result<bool, String> {
-    initialize_runtime(state)?;
-    state
-        .runtime
-        .lock()
-        .map_err(|error| error.to_string())
-        .map(|runtime| runtime.custody_checked)
-}
-
-#[cfg(feature = "evaos-teams-managed")]
-fn mark_custody_checked(state: &EvaosTeamsState) -> Result<(), String> {
-    initialize_runtime(state)?;
-    state
-        .runtime
-        .lock()
-        .map_err(|error| error.to_string())?
-        .custody_checked = true;
-    Ok(())
-}
-
-fn binding_for_entitlement(
-    binding: &IdentityBinding,
-    entitlement: &EvaosTeamsEntitlement,
-) -> Result<IdentityBinding, String> {
-    let public_key = entitlement
-        .public_key
-        .clone()
-        .ok_or_else(|| "Managed entitlement did not include the verified identity".to_string())?;
-    Ok(IdentityBinding {
-        membership_id: binding.membership_id.clone(),
-        public_key: Some(public_key),
-    })
 }
 
 /// Return current managed-auth status and perform one bounded entitlement
@@ -827,8 +802,9 @@ pub(crate) async fn get_evaos_teams_auth_status(
         };
         match entitlement {
             Ok(entitlement) => {
-                if !custody_checked(&state)? {
-                    let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
+                if !login_identity::custody_checked(&state)? {
+                    let verified_binding =
+                        login_identity::binding_for_entitlement(&binding, &entitlement)?;
                     if let Err(error) = identity_custody::ensure_enrollment(
                         &app_state.http_client,
                         &session,
@@ -843,7 +819,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
                             Some(error),
                         ));
                     }
-                    mark_custody_checked(&state)?;
+                    login_identity::mark_custody_checked(&state)?;
                 }
                 match install_entitlement(&app_state, &keys, &entitlement) {
                     Ok(()) => Ok(EvaosTeamsAuthStatus::active(entitlement)),
@@ -971,58 +947,8 @@ pub(crate) async fn start_evaos_teams_login(
             let _ = remote_logout(&app_state.http_client, &claim.desktop_session).await;
             return Err(error);
         }
-        let result = async {
-            let binding =
-                get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
-            let local_keys = native_identity_for_managed_verification(&app_state);
-            let local_identity_matches = local_keys
-                .as_ref()
-                .ok()
-                .and_then(|keys| verify_existing_native_identity(&binding, keys).ok());
-            let (keys, entitlement) = if local_identity_matches.is_some() {
-                let keys = local_keys.map_err(|error| {
-                    format!("The local Hive identity could not be verified: {error}")
-                })?;
-                let entitlement = bind_identity(
-                    &app_state.http_client,
-                    &claim.desktop_session,
-                    &keys,
-                    &binding.membership_id,
-                )
-                .await?;
-                let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
-                identity_custody::ensure_enrollment(
-                    &app_state.http_client,
-                    &claim.desktop_session,
-                    &verified_binding,
-                    &keys,
-                )
-                .await?;
-                (keys, entitlement)
-            } else if binding.public_key.is_some() {
-                identity_custody::recover_identity(
-                    &app,
-                    &app_state,
-                    &app_state.http_client,
-                    &claim.desktop_session,
-                    &binding,
-                )
-                .await?
-            } else {
-                return Err(
-                    "Hive could not establish a native identity for this new membership"
-                        .to_string(),
-                );
-            };
-            persist_active_session(
-                &state,
-                &app_state,
-                claim.desktop_session,
-                &keys,
-                entitlement,
-            )
-        }
-        .await;
+        let result =
+            login_identity::complete_login(&app, &state, &app_state, claim.desktop_session).await;
         if result.is_err() {
             let _ = begin_managed_logout(&app, &state, &app_state).await;
         }
