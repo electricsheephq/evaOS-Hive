@@ -318,16 +318,45 @@ fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_recovery() {
 }
 
 #[test]
-fn managed_store_shape_allows_only_opaque_session_and_logout_marker() {
+fn managed_store_shape_migrates_only_known_legacy_identity_entries() {
     let session_only =
         HashMap::from([(SESSION_KEY.to_string(), "opaque-session-value".to_string())]);
     let runtime = runtime_from_entries(Some(session_only)).unwrap();
     assert!(runtime.session.is_some());
     assert!(!runtime.logout_pending);
 
+    let legacy = HashMap::from([
+        (SESSION_KEY.to_string(), "opaque-session-value".to_string()),
+        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
+        ("identity".to_string(), "nsec1forbidden".to_string()),
+        (
+            "active_membership_id".to_string(),
+            "10000000-0000-4000-8000-000000000002".to_string(),
+        ),
+        (
+            "identity:10000000-0000-4000-8000-000000000002".to_string(),
+            "nsec1forbidden".to_string(),
+        ),
+    ]);
+    let (normalized, removed_legacy_identity) = normalized_runtime_entries(Some(legacy)).unwrap();
+    assert!(removed_legacy_identity);
+    assert_eq!(
+        normalized,
+        HashMap::from([
+            (SESSION_KEY.to_string(), "opaque-session-value".to_string()),
+            (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
+        ])
+    );
+    let runtime = runtime_from_entries(Some(normalized)).unwrap();
+    assert!(runtime.session.is_some());
+    assert!(runtime.logout_pending);
+}
+
+#[test]
+fn managed_store_shape_still_rejects_unknown_material() {
     let forbidden = HashMap::from([
         (SESSION_KEY.to_string(), "opaque-session-value".to_string()),
-        ("identity".to_string(), "nsec1forbidden".to_string()),
+        ("unexpected_secret".to_string(), "value".to_string()),
     ]);
     assert!(runtime_from_entries(Some(forbidden)).is_err());
 }

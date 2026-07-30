@@ -52,6 +52,9 @@ const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const KEYRING_SERVICE: &str = "evaos-teams-desktop";
 const SESSION_KEY: &str = "electric_desktop_session";
 const LOGOUT_PENDING_KEY: &str = "logout_pending";
+const LEGACY_IDENTITY_KEY: &str = "identity";
+const LEGACY_IDENTITY_KEY_PREFIX: &str = "identity:";
+const LEGACY_ACTIVE_MEMBERSHIP_KEY: &str = "active_membership_id";
 const KEY_BINDING_KIND: u16 = 27_235;
 const KEY_BINDING_SCHEMA: &str = "evaos.buzz_key_binding.v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -418,14 +421,28 @@ fn install_entitlement(
     Ok(())
 }
 
-fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
-    let stored = stored.unwrap_or_default();
-    if stored
-        .keys()
-        .any(|key| key != SESSION_KEY && key != LOGOUT_PENDING_KEY)
-    {
+fn normalized_runtime_entries(
+    stored: Option<HashMap<String, String>>,
+) -> Result<(HashMap<String, String>, bool), String> {
+    let mut stored = stored.unwrap_or_default();
+    let has_unsupported = stored.keys().any(|key| {
+        key != SESSION_KEY
+            && key != LOGOUT_PENDING_KEY
+            && key != LEGACY_IDENTITY_KEY
+            && key != LEGACY_ACTIVE_MEMBERSHIP_KEY
+            && !key.starts_with(LEGACY_IDENTITY_KEY_PREFIX)
+    });
+    if has_unsupported {
         return Err("managed Keychain contains unsupported credential material".to_string());
     }
+    let original_len = stored.len();
+    stored.retain(|key, _| key == SESSION_KEY || key == LOGOUT_PENDING_KEY);
+    let removed_legacy_identity = stored.len() != original_len;
+    Ok((stored, removed_legacy_identity))
+}
+
+fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
+    let (stored, _) = normalized_runtime_entries(stored)?;
     let session = stored
         .get(SESSION_KEY)
         .filter(|value| !value.trim().is_empty())
@@ -451,7 +468,17 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
     if runtime.initialized {
         return Ok(());
     }
-    *runtime = runtime_from_entries(managed_store().load_all_readonly()?)?;
+    let (stored, removed_legacy_identity) =
+        normalized_runtime_entries(managed_store().load_all_readonly()?)?;
+    if removed_legacy_identity {
+        managed_store()
+            .replace_all(&stored)
+            .map_err(|_| "Could not migrate legacy managed Keychain metadata".to_string())?;
+        if managed_store().load_all_readonly()? != Some(stored.clone()) {
+            return Err("Could not verify legacy managed Keychain migration".to_string());
+        }
+    }
+    *runtime = runtime_from_entries(Some(stored))?;
     Ok(())
 }
 
