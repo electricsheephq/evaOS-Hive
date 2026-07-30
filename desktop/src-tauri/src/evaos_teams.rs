@@ -425,12 +425,17 @@ fn normalized_runtime_entries(
     stored: Option<HashMap<String, String>>,
 ) -> Result<(HashMap<String, String>, bool), String> {
     let mut stored = stored.unwrap_or_default();
+    let is_legacy_identity_key = |key: &str| {
+        key == LEGACY_IDENTITY_KEY
+            || key
+                .strip_prefix(LEGACY_IDENTITY_KEY_PREFIX)
+                .is_some_and(|membership_id| uuid::Uuid::parse_str(membership_id).is_ok())
+    };
     let has_unsupported = stored.keys().any(|key| {
         key != SESSION_KEY
             && key != LOGOUT_PENDING_KEY
-            && key != LEGACY_IDENTITY_KEY
             && key != LEGACY_ACTIVE_MEMBERSHIP_KEY
-            && !key.starts_with(LEGACY_IDENTITY_KEY_PREFIX)
+            && !is_legacy_identity_key(key)
     });
     if has_unsupported {
         return Err("managed Keychain contains unsupported credential material".to_string());
@@ -468,17 +473,10 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
     if runtime.initialized {
         return Ok(());
     }
-    let (stored, removed_legacy_identity) =
-        normalized_runtime_entries(managed_store().load_all_readonly()?)?;
-    if removed_legacy_identity {
-        managed_store()
-            .replace_all(&stored)
-            .map_err(|_| "Could not migrate legacy managed Keychain metadata".to_string())?;
-        if managed_store().load_all_readonly()? != Some(stored.clone()) {
-            return Err("Could not verify legacy managed Keychain migration".to_string());
-        }
-    }
-    *runtime = runtime_from_entries(Some(stored))?;
+    managed_store().replace_all_checked(|fresh| {
+        normalized_runtime_entries(Some(fresh.clone())).map(|(normalized, _)| normalized)
+    })?;
+    *runtime = runtime_from_entries(managed_store().load_all_readonly()?)?;
     Ok(())
 }
 

@@ -354,11 +354,13 @@ fn managed_store_shape_migrates_only_known_legacy_identity_entries() {
 
 #[test]
 fn managed_store_shape_still_rejects_unknown_material() {
-    let forbidden = HashMap::from([
-        (SESSION_KEY.to_string(), "opaque-session-value".to_string()),
-        ("unexpected_secret".to_string(), "value".to_string()),
-    ]);
-    assert!(runtime_from_entries(Some(forbidden)).is_err());
+    for unknown_key in ["unexpected_secret", "identity:not-a-membership-id"] {
+        let forbidden = HashMap::from([
+            (SESSION_KEY.to_string(), "opaque-session-value".to_string()),
+            (unknown_key.to_string(), "value".to_string()),
+        ]);
+        assert!(runtime_from_entries(Some(forbidden)).is_err());
+    }
 }
 
 #[cfg(feature = "evaos-teams-managed")]
