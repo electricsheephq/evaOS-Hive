@@ -463,7 +463,7 @@ pub fn run() {
             // a UI mount; it publishes discovery and reconciles membership for
             // MeshLLM's native admission and transport.
             #[cfg(feature = "mesh-llm")]
-            if !cfg!(feature = "evaos-teams-managed") {
+            {
                 // Route mesh-llm's download progress (model weights, runtime)
                 // onto Tauri events so the UI can render real progress.
                 crate::mesh_llm::install_progress_sink(&app_handle);
@@ -570,7 +570,7 @@ pub fn run() {
             // has no relay override to the localhost fallback. Preserve the
             // boot-time repos and identity recovery safety gates by only marking
             // restoration pending when both allow it.
-            if restore_agents && !recovery_mode && !cfg!(feature = "evaos-teams-managed") {
+            if restore_agents && !recovery_mode {
                 state
                     .managed_agent_restore_pending
                     .store(true, Ordering::Release);
@@ -629,20 +629,13 @@ pub fn run() {
                     use tauri::Manager;
                     loop {
                         let state = flush_handle.state::<AppState>();
-                        let managed_authorized = !cfg!(feature = "evaos-teams-managed")
-                            || state
-                                .evaos_teams_authorized
-                                .load(std::sync::atomic::Ordering::Acquire);
-                        if managed_authorized {
-                            if let Err(e) =
-                                managed_agents::persona_events::flush_active_pending_events(
-                                    &flush_handle,
-                                    &state,
-                                )
-                                .await
-                            {
-                                eprintln!("buzz-desktop: event-flush: {e}");
-                            }
+                        if let Err(e) = managed_agents::persona_events::flush_active_pending_events(
+                            &flush_handle,
+                            &state,
+                        )
+                        .await
+                        {
+                            eprintln!("buzz-desktop: event-flush: {e}");
                         }
                         tokio::time::sleep(Duration::from_secs(30)).await;
                     }
@@ -661,7 +654,7 @@ pub fn run() {
             get_evaos_teams_auth_status,
             start_evaos_teams_login,
             logout_evaos_teams,
-            list_hive_company_agents,
+            list_hive_company_agent_authorizations,
             get_desktop_product_policy,
             get_builderlab_nostr_identity,
             bind_builderlab_nostr_identity,

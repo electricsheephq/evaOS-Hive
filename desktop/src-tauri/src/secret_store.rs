@@ -10,19 +10,20 @@
 //! for the blob entry so that signed release builds and unsigned dev builds
 //! share the same store. DPK (Data Protection Keychain) is used only by the
 //! one-time migration path that reads old per-key entries written by #1264.
-//! Windows and Linux use the `keyring` crate directly. The `system-keyring`
-//! feature gates the whole store; when it is off, [`SecretStore`] is unusable
-//! and callers fall back to their own `0o600` file storage.
+//! Without `system-keyring`, [`SecretStore`] is unusable and callers fall back
+//! to their own `0o600` file storage.
 //!
 //! The store is deliberately NOT on any env-read path. `BUZZ_PRIVATE_KEY`
 //! resolution for harnessed agents and CI is handled upstream (an env
 //! short-circuit for the human key, child-process env injection for agents);
 //! adding an env tier here would duplicate that precedence and create a
 //! divergent-behavior trap.
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-
+#[cfg(feature = "evaos-teams-managed")]
+mod managed;
 /// Result of probing the keyring before a migration: distinguishes "reachable
 /// but holds no entry" (safe to migrate into) from "unreachable this boot"
 /// (must NOT migrate — re-importing from a leftover plaintext file could
@@ -219,8 +220,7 @@ pub struct SecretStore {
     /// In-memory cache of the deserialized blob. `None` means "not yet loaded".
     cache: Mutex<Option<HashMap<String, String>>>,
 }
-#[cfg(feature = "evaos-teams-managed")]
-mod managed;
+
 impl SecretStore {
     /// Keyring-backed store under `service`. The active platform backend
     /// (apple-native / windows-native / sync-secret-service) is chosen at

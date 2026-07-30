@@ -11,6 +11,17 @@ function git(args, cwd, options = {}) {
   });
 }
 
+function isAncestor(repoRoot, ancestor, descendant) {
+  try {
+    git(["merge-base", "--is-ancestor", ancestor, descendant], repoRoot, {
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function toPosixPath(relativePath) {
   return relativePath.split(path.sep).join("/");
 }
@@ -35,52 +46,45 @@ function findRule(rules, relativePath) {
   return rules.find((rule) => relativePath.startsWith(`${rule.root}/`));
 }
 
-function pathExistsAtRef(repoRoot, ref, filePath) {
-  try {
-    git(["cat-file", "-e", `${ref}:${filePath}`], repoRoot, {
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function applyBaseTransitions(repoRoot, baseRef, transitions = []) {
-  for (const transition of transitions) {
-    const markerAtHead = pathExistsAtRef(repoRoot, "HEAD", transition.marker);
-    const markerAtBase = pathExistsAtRef(repoRoot, baseRef, transition.marker);
-    if (markerAtHead && !markerAtBase) {
-      git(["cat-file", "-e", `${transition.baseRef}^{commit}`], repoRoot);
-      return transition.baseRef;
-    }
-  }
-  return baseRef;
-}
-
-export function resolveBaseRef(repoRoot, env = process.env, transitions = []) {
+export function resolveBaseRef(repoRoot, env = process.env) {
   if (env.CHECK_FILE_SIZES_BASE) {
     return env.CHECK_FILE_SIZES_BASE;
   }
 
-  if (env.GITHUB_ACTIONS === "true") {
-    return applyBaseTransitions(repoRoot, "HEAD^1", transitions);
-  }
-
+  let defaultBase;
   try {
-    const mergeBase = git(
-      ["merge-base", "origin/main", "HEAD"],
-      repoRoot,
-    ).trim();
-    const head = git(["rev-parse", "HEAD"], repoRoot).trim();
-    const defaultBase = mergeBase === head ? "HEAD" : mergeBase;
-    return applyBaseTransitions(repoRoot, defaultBase, transitions);
+    if (env.GITHUB_ACTIONS === "true") {
+      defaultBase = "HEAD^1";
+    } else {
+      const mergeBase = git(
+        ["merge-base", "origin/main", "HEAD"],
+        repoRoot,
+      ).trim();
+      const head = git(["rev-parse", "HEAD"], repoRoot).trim();
+      defaultBase = mergeBase === head ? "HEAD" : mergeBase;
+    }
   } catch (error) {
     throw new Error(
       "Could not resolve the file-size base from origin/main. Fetch origin/main or set CHECK_FILE_SIZES_BASE to an explicit commit.",
       { cause: error },
     );
   }
+
+  const adoptionBase = env.CHECK_FILE_SIZES_ADOPTION_BASE?.trim();
+  if (!adoptionBase) {
+    return defaultBase;
+  }
+
+  // During a deliberate upstream reset, the PR merge commit has the old fork
+  // as its first parent and the adopted upstream tree on its second. Compare
+  // against the approved adoption commit only at that boundary. Once main
+  // contains it, ordinary PR and push checks return to their normal base.
+  git(["cat-file", "-e", `${adoptionBase}^{commit}`], repoRoot);
+  const headContainsAdoption = isAncestor(repoRoot, adoptionBase, "HEAD");
+  const baseContainsAdoption = isAncestor(repoRoot, adoptionBase, defaultBase);
+  return headContainsAdoption && !baseContainsAdoption
+    ? adoptionBase
+    : defaultBase;
 }
 
 export function parseChangedFiles(output) {
@@ -131,18 +135,13 @@ function readBaseFile(repoRoot, baseRef, filePath) {
   }).toString("utf8");
 }
 
-export async function runFileSizeCheck({
-  projectRoot,
-  rules,
-  label,
-  baseTransitions = [],
-}) {
+export async function runFileSizeCheck({ projectRoot, rules, label }) {
   // Every governed project is a direct child of the repository root. Derive
   // these paths without Git so hook-provided repository environment variables
   // cannot collapse the project pathspec to an empty string.
   const repoRoot = path.dirname(projectRoot);
   const projectRelative = toPosixPath(path.basename(projectRoot));
-  const baseRef = resolveBaseRef(repoRoot, process.env, baseTransitions);
+  const baseRef = resolveBaseRef(repoRoot);
 
   // Fail clearly instead of silently turning a missing/shallow base into a pass.
   git(["cat-file", "-e", `${baseRef}^{commit}`], repoRoot);

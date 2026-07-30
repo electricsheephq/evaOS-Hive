@@ -3,7 +3,6 @@ use super::*;
 fn assert_key_eq(a: &Keys, b: &Keys) {
     assert_eq!(a.public_key().to_hex(), b.public_key().to_hex());
 }
-
 /// `BUZZ_PRIVATE_KEY` is process-global; serialize the env-mutating tests
 /// so they don't race each other under the parallel test runner.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -915,13 +914,18 @@ fn reachable_but_empty_with_marker_and_no_file_returns_lost_ephemeral_not_persis
     );
 }
 
-// ── signing_keys() gate tests ─────────────────────────────────────────────
-
+#[cfg(feature = "evaos-teams-managed")]
+fn authorize_managed_signing_test(state: &AppState) {
+    let expiry = &state.managed_entitlement_expires_at_unix;
+    expiry.store(i64::MAX, std::sync::atomic::Ordering::Relaxed);
+    *state.relay_url_override.lock().unwrap() = Some("wss://relay.example.com".to_string());
+}
+#[cfg(not(feature = "evaos-teams-managed"))]
+fn authorize_managed_signing_test(_state: &AppState) {}
 #[test]
 fn signing_keys_returns_ok_when_normal() {
-    // When neither identity_lost nor keyring_locked is set, signing_keys()
-    // must return the live keys and allow signing.
     let state = build_app_state();
+    authorize_managed_signing_test(&state);
     state
         .identity_lost
         .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -934,16 +938,14 @@ fn signing_keys_returns_ok_when_normal() {
         result.is_ok(),
         "signing_keys() must return Ok when neither flag is set"
     );
-    // The returned keys must match the stored keys.
     let expected = state.keys.lock().unwrap().clone();
     assert_key_eq(&result.unwrap(), &expected);
 }
 
 #[test]
 fn signing_keys_returns_err_when_identity_lost() {
-    // An ephemeral key is held when identity is lost — signing under it would
-    // publish events with a random identity the user does not own.
     let state = build_app_state();
+    authorize_managed_signing_test(&state);
     state
         .identity_lost
         .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -961,9 +963,8 @@ fn signing_keys_returns_err_when_identity_lost() {
 
 #[test]
 fn signing_keys_returns_err_when_keyring_locked() {
-    // The identity key is held in a keyring that is unavailable this boot —
-    // the stored keys are inaccessible so signing must be blocked.
     let state = build_app_state();
+    authorize_managed_signing_test(&state);
     state
         .keyring_locked
         .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -981,9 +982,8 @@ fn signing_keys_returns_err_when_keyring_locked() {
 
 #[test]
 fn signing_keys_identity_lost_takes_priority_over_keyring_locked() {
-    // When both flags are set, identity_lost is checked first and its error
-    // message is returned (the ephemeral-key case is more specific).
     let state = build_app_state();
+    authorize_managed_signing_test(&state);
     state
         .identity_lost
         .store(true, std::sync::atomic::Ordering::Relaxed);

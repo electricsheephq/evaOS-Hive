@@ -29,19 +29,19 @@ import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { useBakedBuildEnvQuery } from "@/features/agents/hooks";
-import {
-  excludeLocalPubkeyDuplicates,
-  filterLocalWelcomeAgents,
-  filterLocalWelcomePersonas,
-  filterLocalWelcomeTeams,
-  hasCanonicalCompanyWelcomeAgents,
-  mergeCompanyAgentsWithRelay,
-} from "@/features/agents/lib/companyAgentCatalog";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { getInheritedAgentDefaults } from "./bakedEnvHelpers";
+import { CompanyVmAgentsSection } from "./CompanyVmAgentsSection";
+import {
+  filterBuiltinWelcomeAgents,
+  filterBuiltinWelcomePersonas,
+  filterBuiltinWelcomeTeams,
+  hasCanonicalCompanyWelcomeAgents,
+} from "@/features/agents/lib/companyAgentCatalog";
+import { useCompanyVmAgents } from "@/features/agents/useCompanyVmAgents";
 
 export function AgentsView() {
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
@@ -50,36 +50,7 @@ export function AgentsView() {
   const inheritedDefaults = getInheritedAgentDefaults(globalConfig, bakedEnv);
   const agents = useManagedAgentActions();
   const personas = usePersonaActions();
-  const suppressLocalWelcome = hasCanonicalCompanyWelcomeAgents(
-    agents.relayAgentsQuery.companyAgentsQuery.data ?? [],
-  );
-  const visibleManagedAgents = React.useMemo(
-    () => filterLocalWelcomeAgents(suppressLocalWelcome, agents.managedAgents),
-    [agents.managedAgents, suppressLocalWelcome],
-  );
-  const visiblePersonas = React.useMemo(
-    () =>
-      filterLocalWelcomePersonas(
-        suppressLocalWelcome,
-        personas.libraryPersonas,
-      ),
-    [personas.libraryPersonas, suppressLocalWelcome],
-  );
-  const companyAgents = React.useMemo(
-    () =>
-      excludeLocalPubkeyDuplicates(
-        mergeCompanyAgentsWithRelay(
-          agents.relayAgentsQuery.data ?? [],
-          agents.relayAgentsQuery.companyAgentsQuery.data ?? [],
-        ),
-        agents.managedAgents,
-      ),
-    [
-      agents.managedAgents,
-      agents.relayAgentsQuery.data,
-      agents.relayAgentsQuery.companyAgentsQuery.data,
-    ],
-  );
+  const companyVmAgents = useCompanyVmAgents();
   const teamImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [isAiDefaultsOpen, setIsAiDefaultsOpen] = React.useState(false);
@@ -118,6 +89,21 @@ export function AgentsView() {
       Object.values(globalConfig.env_vars).some(
         (value) => value.trim().length > 0,
       ),
+  );
+  const suppressBuiltinWelcome = hasCanonicalCompanyWelcomeAgents(
+    companyVmAgents.data,
+  );
+  const presentedAgents = filterBuiltinWelcomeAgents(
+    agents.managedAgents,
+    suppressBuiltinWelcome,
+  );
+  const presentedPersonas = filterBuiltinWelcomePersonas(
+    personas.libraryPersonas,
+    suppressBuiltinWelcome,
+  );
+  const presentedTeams = filterBuiltinWelcomeTeams(
+    teamActions.teams,
+    suppressBuiltinWelcome,
   );
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; personas.handleImportSnapshotFile and teamActions.handleImportTeamSnapshotFile are stable
   React.useEffect(() => {
@@ -192,7 +178,7 @@ export function AgentsView() {
               defaultModel={inheritedDefaults.model.value}
               actionErrorMessage={agents.actionErrorMessage}
               actionNoticeMessage={agents.actionNoticeMessage}
-              agents={visibleManagedAgents}
+              agents={presentedAgents}
               agentsError={
                 agents.managedAgentsQuery.error instanceof Error
                   ? agents.managedAgentsQuery.error
@@ -215,7 +201,7 @@ export function AgentsView() {
                 void agents.handleStartPersona(persona);
               }}
               // Persona props
-              personas={visiblePersonas}
+              personas={presentedPersonas}
               personasError={
                 personas.personasQuery.error instanceof Error
                   ? personas.personasQuery.error
@@ -245,19 +231,18 @@ export function AgentsView() {
               onImportSnapshotFile={(fileBytes, fileName) => {
                 void personas.handleImportSnapshotFile(fileBytes, fileName);
               }}
-              companyAgents={companyAgents}
-              companyAgentsError={
-                agents.relayAgentsQuery.companyAgentsQuery.error instanceof
-                Error
-                  ? agents.relayAgentsQuery.companyAgentsQuery.error
+            />
+
+            <CompanyVmAgentsSection
+              agents={companyVmAgents.data}
+              error={
+                companyVmAgents.error instanceof Error
+                  ? companyVmAgents.error
                   : null
               }
-              isCompanyAgentsLoading={
-                agents.relayAgentsQuery.companyAgentsQuery.isLoading
-              }
-              onRefreshCompanyAgents={() => {
-                void agents.relayAgentsQuery.companyAgentsQuery.refetch();
-                void agents.relayAgentsQuery.refetch();
+              isLoading={companyVmAgents.isLoading}
+              onOpenProfile={(pubkey, options) => {
+                openProfilePanel?.(pubkey, options);
               }}
             />
 
@@ -282,11 +267,8 @@ export function AgentsView() {
               onImport={() => {
                 teamImportInputRef.current?.click();
               }}
-              personas={visiblePersonas}
-              teams={filterLocalWelcomeTeams(
-                suppressLocalWelcome,
-                teamActions.teams,
-              )}
+              personas={presentedPersonas}
+              teams={presentedTeams}
             />
           </div>
         </div>

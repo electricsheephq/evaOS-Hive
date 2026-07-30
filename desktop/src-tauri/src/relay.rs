@@ -104,7 +104,7 @@ pub fn build_nip98_auth_header(
     body: &[u8],
     state: &AppState,
 ) -> Result<String, String> {
-    let keys = state.keys.lock().map_err(|error| error.to_string())?;
+    let keys = state.signing_keys()?;
     build_nip98_auth_header_for_keys(&keys, method, url, body)
 }
 
@@ -547,6 +547,8 @@ pub async fn submit_event_with_keys(
     keys: &Keys,
     auth_tag: Option<&str>,
 ) -> Result<SubmitEventResponse, String> {
+    crate::evaos_teams::require_managed_authorization(state)?;
+
     let event = builder
         .sign_with_keys(keys)
         .map_err(|e| format!("failed to sign event: {e}"))?;
@@ -560,6 +562,8 @@ pub async fn submit_signed_event_with_keys(
     keys: &Keys,
     auth_tag: Option<&str>,
 ) -> Result<SubmitEventResponse, String> {
+    crate::evaos_teams::require_managed_authorization(state)?;
+
     if event.pubkey != keys.public_key() {
         return Err("signed event does not match the publishing identity".to_string());
     }

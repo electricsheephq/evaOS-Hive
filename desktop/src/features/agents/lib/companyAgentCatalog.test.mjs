@@ -2,163 +2,153 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  excludeLocalPubkeyDuplicates,
-  filterLocalWelcomeAgents,
-  filterLocalWelcomePersonas,
-  filterLocalWelcomeTeams,
+  filterBuiltinWelcomeAgents,
+  filterBuiltinWelcomePersonas,
+  filterBuiltinWelcomeTeams,
   hasCanonicalCompanyWelcomeAgents,
-  mergeCompanyAgentsWithRelay,
+  intersectAuthorizedCompanyAgents,
+  resolveCompanyVmAgents,
 } from "./companyAgentCatalog.ts";
 
-const PUBKEY = "a".repeat(64);
-const INSTANCE = "10000000-0000-4000-8000-000000000001";
+const PUBKEYS = {
+  tars: "a".repeat(64),
+  samantha: "b".repeat(64),
+  hal: "c".repeat(64),
+  atris: "d".repeat(64),
+  foreign: "e".repeat(64),
+};
 
-function companyAgent(overrides = {}) {
+function relayAgent(pubkey, name, overrides = {}) {
   return {
-    agentInstanceId: INSTANCE,
-    agentId: "tars",
-    publicKey: PUBKEY,
-    displayName: "TARS catalog",
-    runtime: "hermes",
+    pubkey,
+    name,
+    agentType: "general",
+    channels: ["general"],
+    channelIds: ["channel-general"],
+    capabilities: ["chat"],
+    status: "online",
+    respondTo: "allowlist",
+    respondToAllowlist: ["f".repeat(64)],
     ...overrides,
   };
 }
 
-test("catalog-only records have unknown status and no collaboration authority", () => {
-  assert.deepEqual(mergeCompanyAgentsWithRelay([], [companyAgent()]), [
+function authorization(publicKey, agentId, runtime = "hermes") {
+  return { publicKey, agentId, runtime };
+}
+
+test("intersects catalog authorization with native relay identities", () => {
+  const native = relayAgent(PUBKEYS.tars, "Native TARS", {
+    channels: ["private"],
+    status: "away",
+  });
+  const result = intersectAuthorizedCompanyAgents(
+    [native, relayAgent(PUBKEYS.foreign, "Other company")],
+    [
+      authorization(PUBKEYS.tars.toUpperCase(), "tars"),
+      authorization(PUBKEYS.atris, "atris"),
+    ],
+  );
+
+  assert.deepEqual(result, [
     {
-      agentInstanceId: INSTANCE,
+      ...native,
       agentId: "tars",
-      pubkey: PUBKEY,
-      name: "TARS catalog",
-      agentType: "hermes",
       runtime: "hermes",
-      channels: [],
-      channelIds: [],
-      capabilities: [],
-      status: "unknown",
-      respondTo: null,
-      respondToAllowlist: [],
     },
   ]);
 });
 
-test("signed relay collaboration fields win over catalog fallback", () => {
-  const relayAgent = {
-    pubkey: PUBKEY.toUpperCase(),
-    name: "TARS signed",
-    agentType: "acp",
-    channels: ["general"],
-    channelIds: ["room-1"],
-    capabilities: ["chat"],
-    status: "online",
-    respondTo: "allowlist",
-    respondToAllowlist: ["b".repeat(64)],
-  };
-  const [merged] = mergeCompanyAgentsWithRelay([relayAgent], [companyAgent()]);
-  assert.deepEqual(merged, {
-    agentInstanceId: INSTANCE,
-    agentId: "tars",
-    pubkey: PUBKEY,
-    name: "TARS signed",
-    agentType: "acp",
-    runtime: "hermes",
-    channels: ["general"],
-    channelIds: ["room-1"],
-    capabilities: ["chat"],
-    status: "online",
-    respondTo: "allowlist",
-    respondToAllowlist: ["b".repeat(64)],
-  });
-});
-
-test("company records dedupe by normalized public key", () => {
-  const merged = mergeCompanyAgentsWithRelay(
+test("never synthesizes a catalog-only company agent", () => {
+  assert.deepEqual(
+    intersectAuthorizedCompanyAgents(
+      [],
+      [authorization(PUBKEYS.atris, "atris")],
+    ),
     [],
-    [
-      companyAgent(),
-      companyAgent({
-        publicKey: PUBKEY.toUpperCase(),
-        displayName: "duplicate",
-      }),
-    ],
   );
-  assert.equal(merged.length, 1);
-  assert.equal(merged[0].name, "TARS catalog");
 });
 
-test("company cards suppress exact local public-key duplicates only", () => {
-  const visible = excludeLocalPubkeyDuplicates(
-    [
-      { pubkey: PUBKEY.toUpperCase(), name: "same identity" },
-      { pubkey: "b".repeat(64), name: "same display name" },
-    ],
-    [{ pubkey: PUBKEY }],
-  );
-  assert.deepEqual(visible, [
-    { pubkey: "b".repeat(64), name: "same display name" },
-  ]);
-});
-
-test("welcome suppression requires the complete canonical Hermes set", () => {
-  const partial = [
-    companyAgent({ agentId: "tars" }),
-    companyAgent({ agentId: "samantha", publicKey: "b".repeat(64) }),
-  ];
-  assert.equal(hasCanonicalCompanyWelcomeAgents(partial), false);
+test("failed catalog or relay refresh drops stale company authorization", () => {
+  const relayAgents = [relayAgent(PUBKEYS.tars, "Native TARS")];
+  const authorizations = [authorization(PUBKEYS.tars, "tars")];
   assert.equal(
-    hasCanonicalCompanyWelcomeAgents([
-      ...partial,
-      companyAgent({
-        agentId: "hal-9000",
-        publicKey: "c".repeat(64),
-        runtime: "openclaw",
-      }),
-    ]),
-    false,
+    resolveCompanyVmAgents(relayAgents, authorizations, false).length,
+    1,
   );
-  assert.equal(
-    hasCanonicalCompanyWelcomeAgents([
-      ...partial,
-      companyAgent({
-        agentId: "hal-9000",
-        publicKey: "c".repeat(64),
-      }),
-    ]),
-    true,
+  assert.deepEqual(
+    resolveCompanyVmAgents(relayAgents, authorizations, true),
+    [],
   );
 });
 
-test("welcome suppression uses exact stable IDs and preserves custom records", () => {
-  const agents = [
-    { name: "renamed", personaId: "builtin:fizz", teamId: null },
-    { name: "custom Fizz", personaId: "custom:fizz", teamId: null },
+test("drops invalid and duplicate authorization records", () => {
+  assert.deepEqual(
+    intersectAuthorizedCompanyAgents(
+      [relayAgent(PUBKEYS.tars, "Native TARS")],
+      [
+        authorization("not-a-key", "invalid"),
+        authorization(PUBKEYS.tars, "tars"),
+        authorization(PUBKEYS.tars, "duplicate"),
+        authorization(PUBKEYS.foreign, "foreign", " "),
+      ],
+    ).map(({ agentId }) => agentId),
+    ["tars"],
+  );
+});
+
+test("suppresses built-in welcome presentation only after all canonical VM identities exist", () => {
+  const incomplete = [
     {
-      name: "welcome custom",
-      personaId: "custom:any",
+      ...relayAgent(PUBKEYS.tars, "TARS"),
+      agentId: "tars",
+      runtime: "hermes",
+    },
+  ];
+  const complete = [
+    ...incomplete,
+    {
+      ...relayAgent(PUBKEYS.samantha, "Samantha"),
+      agentId: "samantha",
+      runtime: "hermes",
+    },
+    {
+      ...relayAgent(PUBKEYS.hal, "HAL 9000"),
+      agentId: "hal-9000",
+      runtime: "hermes",
+    },
+  ];
+
+  assert.equal(hasCanonicalCompanyWelcomeAgents(incomplete), false);
+  assert.equal(hasCanonicalCompanyWelcomeAgents(complete), true);
+});
+
+test("managed presentation filtering preserves custom local records", () => {
+  const personas = [{ id: "builtin:fizz" }, { id: "custom:tars" }];
+  const agents = [
+    { pubkey: PUBKEYS.tars, personaId: "builtin:fizz", teamId: null },
+    { pubkey: PUBKEYS.atris, personaId: "custom:tars", teamId: null },
+    {
+      pubkey: PUBKEYS.foreign,
+      personaId: "custom:welcome-member",
       teamId: "builtin-team:welcome",
     },
   ];
-  assert.deepEqual(filterLocalWelcomeAgents(true, agents), [agents[1]]);
-  assert.deepEqual(
-    filterLocalWelcomePersonas(true, [
-      { id: "builtin:honey", displayName: "renamed" },
-      { id: "custom:honey", displayName: "Honey" },
-    ]),
-    [{ id: "custom:honey", displayName: "Honey" }],
-  );
-  assert.deepEqual(
-    filterLocalWelcomeTeams(true, [
-      { id: "builtin-team:welcome", name: "renamed" },
-      { id: "custom:welcome", name: "Welcome" },
-    ]),
-    [{ id: "custom:welcome", name: "Welcome" }],
-  );
-});
+  const teams = [{ id: "builtin-team:welcome" }, { id: "custom-team" }];
 
-test("disabled suppression leaves unmanaged Buzz unchanged", () => {
-  const agents = [
-    { personaId: "builtin:fizz", teamId: "builtin-team:welcome" },
-  ];
-  assert.deepEqual(filterLocalWelcomeAgents(false, agents), agents);
+  assert.deepEqual(
+    filterBuiltinWelcomePersonas(personas, true).map(({ id }) => id),
+    ["custom:tars"],
+  );
+  assert.deepEqual(
+    filterBuiltinWelcomeAgents(agents, true).map(({ pubkey }) => pubkey),
+    [PUBKEYS.atris, PUBKEYS.foreign],
+  );
+  assert.deepEqual(
+    filterBuiltinWelcomeTeams(teams, true).map(({ id }) => id),
+    ["custom-team"],
+  );
+  assert.equal(filterBuiltinWelcomePersonas(personas, false), personas);
+  assert.equal(filterBuiltinWelcomeAgents(agents, false), agents);
+  assert.equal(filterBuiltinWelcomeTeams(teams, false), teams);
 });

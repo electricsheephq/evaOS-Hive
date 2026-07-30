@@ -11,10 +11,10 @@ test("Hive policy keeps its signed updater separate from hosted services", () =>
   installDesktopProductPolicy({
     managed: true,
     productName: "Hive",
-    version: "0.5.1-es.1",
+    version: "0.5.2-es.1",
     bundleIdentifier: "com.electricsheephq.evaos.teams",
     deepLinkScheme: "buzz",
-    artifactName: "Hive-0.5.1-es.1-arm64.dmg",
+    artifactName: "Hive-0.5.2-es.1-arm64.dmg",
     updateChannel: "hive-internal",
     updaterEnabled: true,
     upstreamHostedServicesEnabled: false,

@@ -1,5 +1,10 @@
 use super::*;
 
+#[test]
+fn managed_session_keyring_service_remains_upgrade_compatible() {
+    assert_eq!(KEYRING_SERVICE, "evaos-teams-desktop");
+}
+
 fn challenge(keys: &Keys) -> ChallengeResponse {
     let challenge = KeyBindingChallenge {
         schema_version: KEY_BINDING_SCHEMA.to_string(),
@@ -239,7 +244,7 @@ fn existing_native_key_activates_without_replacing_identity() {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
         public_key: Some(keys.public_key().to_hex()),
     };
-    assert!(verify_existing_native_identity(&binding, &keys).is_ok());
+    assert!(verify_existing_native_identity(&binding, &keys).unwrap());
 
     let state = crate::app_state::build_app_state();
     *state.keys.lock().unwrap() = keys.clone();
@@ -251,45 +256,65 @@ fn existing_native_key_activates_without_replacing_identity() {
     .unwrap();
 
     assert_eq!(state.keys.lock().unwrap().public_key(), keys.public_key());
-    assert!(state
-        .evaos_teams_authorized
-        .load(std::sync::atomic::Ordering::Acquire));
     assert_eq!(
         state.relay_url_override.lock().unwrap().as_deref(),
         Some("wss://relay.example.com")
     );
+    assert!(
+        state
+            .managed_entitlement_expires_at_unix
+            .load(std::sync::atomic::Ordering::Acquire)
+            > chrono::Utc::now().timestamp()
+    );
 }
 
 #[test]
-fn missing_or_mismatched_canonical_key_requires_restore_without_mutation() {
+fn entitlement_install_rejects_a_stale_verification_identity() {
+    let verified_keys = Keys::generate();
+    let state = crate::app_state::build_app_state();
+    *state.keys.lock().unwrap() = Keys::generate();
+
+    let result = install_entitlement(
+        &state,
+        &verified_keys,
+        &entitlement(Some(verified_keys.public_key().to_hex())),
+    );
+
+    assert!(result.is_err());
+    assert!(state.relay_url_override.lock().unwrap().is_none());
+    assert_eq!(
+        state
+            .managed_entitlement_expires_at_unix
+            .load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
+}
+
+#[test]
+fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_restore() {
     let keys = Keys::generate();
     let state = crate::app_state::build_app_state();
     *state.keys.lock().unwrap() = keys.clone();
     let before_key = state.keys.lock().unwrap().public_key();
     let before_relay = state.relay_url_override.lock().unwrap().clone();
-    let before_authorized = state
-        .evaos_teams_authorized
-        .load(std::sync::atomic::Ordering::Acquire);
 
-    for public_key in [None, Some(Keys::generate().public_key().to_hex())] {
-        let binding = IdentityBinding {
-            membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
-            public_key,
-        };
-        let error = verify_existing_native_identity(&binding, &keys).unwrap_err();
-        let status = EvaosTeamsAuthStatus::identity_restore_required(error);
-        assert_eq!(status.phase, "identity_restore_required");
-        assert!(!status.authenticated);
-    }
+    let unbound = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        public_key: None,
+    };
+    assert!(!verify_existing_native_identity(&unbound, &keys).unwrap());
+
+    let mismatched = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        public_key: Some(Keys::generate().public_key().to_hex()),
+    };
+    let error = verify_existing_native_identity(&mismatched, &keys).unwrap_err();
+    let status = EvaosTeamsAuthStatus::identity_restore_required(error);
+    assert_eq!(status.phase, "identity_restore_required");
+    assert!(!status.authenticated);
 
     assert_eq!(state.keys.lock().unwrap().public_key(), before_key);
     assert_eq!(*state.relay_url_override.lock().unwrap(), before_relay);
-    assert_eq!(
-        state
-            .evaos_teams_authorized
-            .load(std::sync::atomic::Ordering::Acquire),
-        before_authorized
-    );
 }
 
 #[test]

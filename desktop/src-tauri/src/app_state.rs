@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::Write,
     sync::{
-        atomic::{AtomicBool, AtomicU16},
+        atomic::{AtomicBool, AtomicI64, AtomicU16},
         Arc, Mutex,
     },
 };
@@ -30,6 +30,8 @@ pub struct AppState {
     /// Workspace-provided relay URL override. Set by `apply_workspace` on app
     /// init and takes priority over env vars and compile-time defaults.
     pub relay_url_override: Mutex<Option<String>>,
+    /// Unix expiry for the installed managed entitlement. Zero means none.
+    pub managed_entitlement_expires_at_unix: AtomicI64,
     /// Set during backend setup when managed agents are eligible for launch
     /// restore. `apply_workspace` consumes it after installing the workspace
     /// relay and identity, so agents never start against the fallback relay.
@@ -99,10 +101,6 @@ pub struct AppState {
     /// Ordering: written once in `setup()` with `Ordering::Release`; read in
     /// `get_identity` with `Ordering::Acquire`.
     pub reset_failed: AtomicBool,
-    /// Managed Hive builds may sign and publish only after Electric OAuth plus
-    /// canonical-key verification installs a current entitlement. Native Buzz
-    /// starts authorized and preserves its existing behavior.
-    pub evaos_teams_authorized: AtomicBool,
     /// Cached ACP session config from running agents, keyed by canonical
     /// `(agent pubkey, relay URL)` runtime identity.
     /// Populated when the harness emits `session_config_captured` observer events.
@@ -207,6 +205,7 @@ pub fn build_app_state() -> AppState {
              header across origins (redirect-hop SSRF)",
         ),
         relay_url_override: Mutex::new(None),
+        managed_entitlement_expires_at_unix: AtomicI64::new(0),
         managed_agent_restore_pending: AtomicBool::new(false),
         managed_agent_profile_reconcile_enabled: AtomicBool::new(true),
         shutdown_started: AtomicBool::new(false),
@@ -226,7 +225,6 @@ pub fn build_app_state() -> AppState {
         keyring_locked: AtomicBool::new(false),
         identity_lost: AtomicBool::new(false),
         reset_failed: AtomicBool::new(false),
-        evaos_teams_authorized: AtomicBool::new(!cfg!(feature = "evaos-teams-managed")),
         #[cfg(feature = "mesh-llm")]
         mesh_llm_runtime: AsyncMutex::new(None),
         #[cfg(feature = "mesh-llm")]
@@ -296,6 +294,31 @@ impl AppState {
         }
     }
 
+    /// Return the active identity keys if they are authorized and signable.
+    ///
+    /// Managed builds also require an installed server-selected relay
+    /// entitlement. All builds return `Err` when the identity is lost
+    /// (`identity_lost`) or the keyring is unavailable (`keyring_locked`).
+    /// Signing and publish commands must call this instead of locking
+    /// `state.keys` directly.
+    pub fn signing_keys(&self) -> Result<Keys, String> {
+        crate::evaos_teams::require_managed_authorization(self)?;
+        if self
+            .identity_lost
+            .load(std::sync::atomic::Ordering::Acquire)
+            || self
+                .keyring_locked
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("identity is in recovery mode; event signing is disabled \
+                 until the identity is restored and Buzz is relaunched"
+                .to_string());
+        }
+        self.keys
+            .lock()
+            .map_err(|e| e.to_string())
+            .map(|k| k.clone())
+    }
     /// Emit the current huddle state to the frontend via Tauri event.
     ///
     /// Acquires both locks (app_handle + huddle_state), clones a snapshot,
@@ -314,9 +337,6 @@ impl AppState {
         crate::huddle::state::emit_huddle_state(&app, &snapshot);
     }
 }
-
-mod signing;
-
 /// Resolve the user's identity key from the app data directory and wire
 /// the resulting [`RecoveryState`] into `AppState`.
 ///
@@ -339,7 +359,6 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
     if identity_from_env().is_some() {
         return Ok(());
     }
-
     let data_dir = app
         .path()
         .app_data_dir()

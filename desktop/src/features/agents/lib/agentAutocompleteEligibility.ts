@@ -33,16 +33,20 @@ export function relayAgentIsSharedWithUser(
 export function getMentionableAgentPubkeys({
   currentPubkey,
   managedAgentPubkeys,
+  authorizedAgentPubkeys = [],
   relayAgents,
   sharedChannelIds,
 }: {
   currentPubkey?: string | null;
   managedAgentPubkeys: Iterable<string>;
+  authorizedAgentPubkeys?: Iterable<string>;
   relayAgents: readonly RelayAgent[] | undefined;
   sharedChannelIds: ReadonlySet<string>;
 }) {
   const pubkeys = new Set(
-    [...managedAgentPubkeys].map((pubkey) => normalizePubkey(pubkey)),
+    [...managedAgentPubkeys, ...authorizedAgentPubkeys].map((pubkey) =>
+      normalizePubkey(pubkey),
+    ),
   );
 
   for (const agent of relayAgents ?? []) {
@@ -51,35 +55,6 @@ export function getMentionableAgentPubkeys({
     }
   }
 
-  return pubkeys;
-}
-
-/**
- * Verified company identities are directly addressable without treating their
- * catalog metadata as invocation policy.
- */
-export function getDirectMessageAgentPubkeys({
-  companyAgentPubkeys,
-  currentPubkey,
-  managedAgentPubkeys,
-  relayAgents,
-  sharedChannelIds,
-}: {
-  companyAgentPubkeys: Iterable<string>;
-  currentPubkey?: string | null;
-  managedAgentPubkeys: Iterable<string>;
-  relayAgents: readonly RelayAgent[] | undefined;
-  sharedChannelIds: ReadonlySet<string>;
-}) {
-  const pubkeys = getMentionableAgentPubkeys({
-    currentPubkey,
-    managedAgentPubkeys,
-    relayAgents,
-    sharedChannelIds,
-  });
-  for (const pubkey of companyAgentPubkeys) {
-    pubkeys.add(normalizePubkey(pubkey));
-  }
   return pubkeys;
 }
 
@@ -93,56 +68,23 @@ export function isAgentIdentityInManagedList(
   );
 }
 
-export function isAgentIdentityAddable(
-  candidate: { isAgent?: boolean; pubkey: string },
-  managedAgentPubkeys: ReadonlySet<string>,
-  companyAgentPubkeys: ReadonlySet<string>,
-) {
-  return (
-    isAgentIdentityInManagedList(candidate, managedAgentPubkeys) ||
-    companyAgentPubkeys.has(normalizePubkey(candidate.pubkey))
-  );
-}
-
-export function isAgentIdentityMentionable(
-  candidate: {
-    isAgent?: boolean;
-    isMember?: boolean;
-    pubkey: string;
-    role?: string | null;
-  },
-  managedAgentPubkeys: ReadonlySet<string>,
-) {
-  return (
-    isAgentIdentityInManagedList(candidate, managedAgentPubkeys) ||
-    (candidate.isMember === true && candidate.role === "bot")
-  );
-}
-
 export function shouldHideAgentFromMentions({
   isAgent,
   isMember,
   pubkey,
   mentionableAgentPubkeys,
   directoryAgentPubkeys,
-  companyAgentPubkeys = new Set(),
 }: {
   isAgent: boolean;
   isMember: boolean;
   pubkey: string;
   mentionableAgentPubkeys: ReadonlySet<string>;
   directoryAgentPubkeys: ReadonlySet<string>;
-  companyAgentPubkeys?: ReadonlySet<string>;
 }) {
   if (!isAgent) return false;
   const normalized = normalizePubkey(pubkey);
   // Invocable => always show.
   if (mentionableAgentPubkeys.has(normalized)) return false;
-  // A tenant-verified provider that is already a native bot member of this
-  // channel remains selectable even when its relay invocation metadata is
-  // stale. Catalog-only identities are never admitted by this branch because
-  // the caller must also prove current-channel membership.
-  if (isMember && companyAgentPubkeys.has(normalized)) return false;
   // Non-member, non-invocable => hide (preserves prior behavior).
   if (!isMember) return true;
   // Member (Option B): hide only when we have an explicit not-invocable

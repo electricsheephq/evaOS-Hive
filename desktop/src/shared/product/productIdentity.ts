@@ -16,7 +16,7 @@ export type DesktopProductPolicy = {
 export const NATIVE_PRODUCT_POLICY: DesktopProductPolicy = Object.freeze({
   managed: false,
   productName: "Buzz",
-  version: "0.5.1",
+  version: "0.5.2",
   bundleIdentifier: "xyz.block.buzz.app",
   deepLinkScheme: "buzz",
   artifactName: "",

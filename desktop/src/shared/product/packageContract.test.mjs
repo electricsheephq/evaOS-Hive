@@ -14,8 +14,8 @@ const buildScript = readFileSync(`${root}scripts/build-hive.mjs`, "utf8");
 
 test("Hive package identity and selected assets are coherent", () => {
   assert.equal(contract.productName, "Hive");
-  assert.equal(contract.version, "0.5.1-es.1");
-  assert.equal(contract.artifactName, "Hive-0.5.1-es.1-arm64.dmg");
+  assert.equal(contract.version, "0.5.2-es.1");
+  assert.equal(contract.artifactName, "Hive-0.5.2-es.1-arm64.dmg");
   assert.equal(config.productName, contract.productName);
   assert.equal(config.version, contract.version);
   assert.equal(config.identifier, contract.bundleIdentifier);

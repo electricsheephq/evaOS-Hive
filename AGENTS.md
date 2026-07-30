@@ -4,11 +4,6 @@ This guide is for AI agents contributing to the Buzz codebase. It covers
 agent-specific context and conventions. For general contributor info (setup,
 code style, PR process, architecture), see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Electric Sheep fork work must also follow [VISION_HIVE.md](VISION_HIVE.md) and
-the [Hive thin-adapter runbook](docs/hive-thin-adapter-runbook.md). Those
-documents constrain Electric-only changes; they do not replace upstream Buzz
-architecture or contributor guidance.
-
 ---
 
 ## Ecosystem

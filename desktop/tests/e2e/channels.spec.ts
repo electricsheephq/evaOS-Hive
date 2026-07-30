@@ -603,10 +603,10 @@ test("keeps typing focus while arrow keys traverse and select DM recipients", as
 
   const search = page.getByTestId("new-dm-search");
   await expect(search).toBeFocused();
-  await expect(search).toHaveAttribute(
+  const initialActiveDescendant = await search.getAttribute(
     "aria-activedescendant",
-    /^new-dm-option-/,
   );
+  expect(initialActiveDescendant).toMatch(/^new-dm-option-/);
   await search.press("Enter");
   await expect(
     page.locator("button[data-testid^='new-dm-selected-']"),
@@ -1716,9 +1716,7 @@ test("channel with messages shows content", async ({ page }) => {
   await expect(page.getByTestId("welcome-composer-guide-banner")).toHaveCount(
     0,
   );
-  await expect(
-    page.getByTestId("message-timeline-day-divider").first(),
-  ).toBeVisible();
+  await expect(page.getByTestId("message-timeline-day-divider")).toBeVisible();
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Welcome to #general",
   );

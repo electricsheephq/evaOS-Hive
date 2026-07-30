@@ -3,14 +3,18 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { useCommunities } from "@/features/communities/useCommunities";
+import { NostrKeyImportForm } from "@/features/onboarding/ui/NostrKeyImportForm";
 import {
   evaosTeamsRefreshDelay,
+  evaosTeamsNeedsNativeIdentityRecovery,
   evaosTeamsStatusCopy,
   getEvaosTeamsAuthStatus,
+  logoutEvaosTeams,
   startEvaosTeamsLogin,
   type EvaosTeamsAuthStatus,
 } from "@/features/evaosTeams/api";
 import { isManagedCommunityStateReady } from "@/features/evaosTeams/managedCommunity";
+import { importIdentity } from "@/shared/api/tauriIdentity";
 import { ProductMark } from "@/shared/product/ProductMark";
 import { Button } from "@/shared/ui/button";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
@@ -54,6 +58,8 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
 
   const activeEntitlement =
     status?.phase === "active" ? status.entitlement : undefined;
+  const needsNativeIdentityRecovery =
+    evaosTeamsNeedsNativeIdentityRecovery(status);
   let managedCommunityReady = false;
   let managedCommunityError: string | null = null;
   if (activeEntitlement) {
@@ -123,6 +129,16 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     return children;
   }
 
+  async function restoreNativeIdentity(nsec: string) {
+    await importIdentity(nsec);
+    const next = await refresh();
+    if (next?.phase !== "active") {
+      throw new Error(
+        next?.message ?? "Hive could not verify the restored identity.",
+      );
+    }
+  }
+
   const copy =
     activeEntitlement && !managedCommunityReady
       ? {
@@ -138,9 +154,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const maySignIn =
     status?.phase === "signed_out" || status?.phase === "reauth_required";
   const mayRetry =
-    status?.phase === "keychain_locked" ||
-    status?.phase === "logout_pending" ||
-    status?.phase === "identity_restore_required";
+    status?.phase === "keychain_locked" || status?.phase === "logout_pending";
 
   return (
     <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-background px-6 py-12">
@@ -168,36 +182,47 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
           </p>
         ) : null}
 
-        <div className="mt-6 flex flex-col gap-3">
-          {maySignIn ? (
-            <Button
-              disabled={working}
-              onClick={() => void run(startEvaosTeamsLogin)}
-            >
-              {working
-                ? "Waiting for browser sign-in…"
-                : "Sign in with Electric Sheep"}
-            </Button>
-          ) : null}
-          {mayRetry ? (
-            <Button
-              disabled={working}
-              variant="outline"
-              onClick={() => void run(async () => (await refresh()) ?? status)}
-            >
-              Try again
-            </Button>
-          ) : null}
-          {activeEntitlement && !managedCommunityReady ? (
-            <Button
-              disabled={working || Boolean(managedCommunityError)}
-              variant="outline"
-              onClick={reconcileActiveCommunity}
-            >
-              Try again
-            </Button>
-          ) : null}
-        </div>
+        {needsNativeIdentityRecovery ? (
+          <NostrKeyImportForm
+            backLabel="Cancel sign-in"
+            errorMessage={error}
+            onBack={() => void run(logoutEvaosTeams)}
+            onImport={restoreNativeIdentity}
+          />
+        ) : (
+          <div className="mt-6 flex flex-col gap-3">
+            {maySignIn ? (
+              <Button
+                disabled={working}
+                onClick={() => void run(startEvaosTeamsLogin)}
+              >
+                {working
+                  ? "Waiting for browser sign-in…"
+                  : "Sign in with Electric Sheep"}
+              </Button>
+            ) : null}
+            {mayRetry ? (
+              <Button
+                disabled={working}
+                variant="outline"
+                onClick={() =>
+                  void run(async () => (await refresh()) ?? status)
+                }
+              >
+                Try again
+              </Button>
+            ) : null}
+            {activeEntitlement && !managedCommunityReady ? (
+              <Button
+                disabled={working || Boolean(managedCommunityError)}
+                variant="outline"
+                onClick={reconcileActiveCommunity}
+              >
+                Try again
+              </Button>
+            ) : null}
+          </div>
+        )}
       </section>
     </main>
   );

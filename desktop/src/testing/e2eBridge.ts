@@ -209,6 +209,12 @@ type E2eConfig = {
         refreshAfterSeconds: number;
       };
     };
+    /** Tenant-authorized company VM identity classifications for managed Hive. */
+    hiveCompanyAgentAuthorizations?: Array<{
+      publicKey: string;
+      agentId?: string;
+      runtime: string;
+    }>;
     acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
     /** Catalog returned after a successful mocked install. */
     acpRuntimesCatalogAfterInstall?: RawAcpRuntimeCatalogEntry[];
@@ -939,8 +945,8 @@ function createMockRelayMembershipEvent(): RelayEvent {
  * sets from distinct pubkeys so the e2e exercises the union/collapse path, not
  * a single relay-owned set. `:buzz:` is the stable shortcode exercised by
  * custom-emoji.spec.ts (claimed by BOTH members with different URLs, so the
- * palette must collapse it to one deterministic winner); `:narf:` proves a
- * second member's distinct emoji unions in.
+ * palette must collapse it to one deterministic winner); `:narf:` and
+ * `:bufo_joy:` prove a second member's distinct emoji unions in.
  */
 function createMockCustomEmojiSetEvents(): RelayEvent[] {
   return [
@@ -967,6 +973,7 @@ function createMockCustomEmojiSetEvents(): RelayEvent[] {
         // member B claims :buzz: with a DIFFERENT url — unionCustomEmoji must
         // collapse it to one deterministic winner, never expose two URLs.
         ["emoji", "buzz", "https://example.com/e2e/buzz-b.png"],
+        ["emoji", "bufo_joy", "https://example.com/e2e/bufo-joy.png"],
       ],
       "b".repeat(64),
     ),
@@ -9710,13 +9717,15 @@ export function maybeInstallE2eTauriMocks() {
           productName: activeConfig?.mock?.desktopProductManaged
             ? "Hive"
             : "Buzz",
-          version: "0.5.1",
+          version: activeConfig?.mock?.desktopProductManaged
+            ? "0.5.2-es.1"
+            : "0.5.2",
           bundleIdentifier: activeConfig?.mock?.desktopProductManaged
             ? "com.electricsheephq.evaos.teams"
             : "xyz.block.buzz.app",
           deepLinkScheme: "buzz",
           artifactName: activeConfig?.mock?.desktopProductManaged
-            ? "Hive-0.5.1-es.1-arm64.dmg"
+            ? "Hive-0.5.2-es.1-arm64.dmg"
             : "",
           updateChannel: activeConfig?.mock?.desktopProductManaged
             ? "hive-internal"
@@ -9758,6 +9767,8 @@ export function maybeInstallE2eTauriMocks() {
         }
         return signedOut;
       }
+      case "list_hive_company_agent_authorizations":
+        return activeConfig?.mock?.hiveCompanyAgentAuthorizations ?? [];
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {

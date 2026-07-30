@@ -14,6 +14,7 @@ import {
 } from "@/shared/features/useFeatureEnabled";
 import { topChromeBackdrop } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   Sidebar,
   SidebarContent,
@@ -69,7 +70,14 @@ const settingsNavGroups: Array<{
   },
   {
     label: "App",
-    sections: ["agents", "compute", "experimental", "mobile", "updates"],
+    sections: [
+      "electric-sheep",
+      "agents",
+      "compute",
+      "experimental",
+      "mobile",
+      "updates",
+    ],
   },
 ];
 
@@ -130,6 +138,9 @@ export function SettingsView({
   const featureState = useFeatureSnapshot();
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
+      if (s.managedOnly && !desktopProductPolicy().managed) {
+        return false;
+      }
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).
@@ -188,6 +199,9 @@ export function SettingsView({
     () => new Map(visibleSections.map((entry) => [entry.value, entry])),
     [visibleSections],
   );
+  const effectiveSection = visibleSectionByValue.has(section)
+    ? section
+    : (visibleSections[0]?.value ?? "appearance");
   const visibleNavGroups = React.useMemo(
     () =>
       settingsNavGroups
@@ -330,9 +344,9 @@ export function SettingsView({
           >
             <div
               className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4"
-              data-testid={`settings-panel-${section}`}
+              data-testid={`settings-panel-${effectiveSection}`}
             >
-              {renderSettingsSection(section, {
+              {renderSettingsSection(effectiveSection, {
                 currentPubkey,
                 fallbackDisplayName,
                 isUpdatingDesktopNotifications,

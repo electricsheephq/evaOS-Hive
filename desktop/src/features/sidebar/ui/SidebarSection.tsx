@@ -5,7 +5,6 @@ import {
   CircleDot,
   FileText,
   Hash,
-  Headphones,
   Lock,
   X,
 } from "lucide-react";
@@ -18,10 +17,6 @@ import {
 
 import { ChannelContextMenuItems } from "@/features/sidebar/ui/ChannelContextMenu";
 import type { ActiveChannelTurnSummary } from "@/features/agents/activeAgentTurnsStore";
-import {
-  type ActiveHuddleSummary,
-  getHuddleParticipantCount,
-} from "@/features/huddle/lib/activeHuddleState";
 import { formatElapsed } from "@/features/agents/ui/agentSessionUtils";
 import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
 import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
@@ -156,38 +151,6 @@ function ChannelWorkingBadge({
   );
 }
 
-function ChannelHuddleBadge({
-  channelName,
-  isActive,
-  summary,
-}: {
-  channelName: string;
-  isActive: boolean;
-  summary: ActiveHuddleSummary;
-}) {
-  const count = getHuddleParticipantCount(summary);
-  const label = `${count}`;
-  const title = `${count} ${count === 1 ? "person" : "people"} in huddle`;
-
-  return (
-    <span
-      aria-label={title}
-      className={cn(
-        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-2xs font-medium leading-none tabular-nums group-data-[collapsible=icon]:hidden",
-        isActive
-          ? "bg-sidebar-active-foreground/20 text-sidebar-active-foreground"
-          : "bg-primary/10 text-primary",
-      )}
-      data-testid={`channel-active-huddle-${channelName}`}
-      role="status"
-      title={title}
-    >
-      <Headphones aria-hidden="true" className="h-3 w-3" />
-      <span aria-hidden="true">{label}</span>
-    </span>
-  );
-}
-
 export type SidebarDmParticipant = {
   avatarUrl: string | null;
   label: string;
@@ -289,7 +252,6 @@ export function ChannelMenuButton({
   hasUnread,
   unreadCount = 0,
   activeWorking,
-  activeHuddle,
   isMuted,
   dmParticipants,
   presenceStatus,
@@ -301,7 +263,6 @@ export function ChannelMenuButton({
   hasUnread: boolean;
   unreadCount?: number;
   activeWorking?: ActiveChannelTurnSummary;
-  activeHuddle?: ActiveHuddleSummary;
   isMuted?: boolean;
   dmParticipants?: SidebarDmParticipant[];
   presenceStatus?: PresenceStatus;
@@ -350,13 +311,6 @@ export function ChannelMenuButton({
           summary={activeWorking}
         />
       ) : null}
-      {activeHuddle ? (
-        <ChannelHuddleBadge
-          channelName={channel.name}
-          isActive={isActive}
-          summary={activeHuddle}
-        />
-      ) : null}
       {isMuted ? (
         <BellOff
           className={cn(
@@ -385,7 +339,6 @@ export function ChannelMenuButton({
 export function SidebarSection({
   action,
   activeWorkingByChannelId,
-  activeHuddlesByChannelId,
   dmParticipantsByChannelId,
   emptyState,
   items,
@@ -410,7 +363,6 @@ export function SidebarSection({
 }: {
   action?: React.ReactNode;
   activeWorkingByChannelId?: ReadonlyMap<string, ActiveChannelTurnSummary>;
-  activeHuddlesByChannelId?: ReadonlyMap<string, ActiveHuddleSummary>;
   dmParticipantsByChannelId?: Record<string, SidebarDmParticipant[]>;
   emptyState?: React.ReactNode;
   items: Channel[];
@@ -488,7 +440,6 @@ export function SidebarSection({
                     <ChannelMenuButton
                       channel={channel}
                       activeWorking={activeWorkingByChannelId?.get(channel.id)}
-                      activeHuddle={activeHuddlesByChannelId?.get(channel.id)}
                       dmParticipants={dmParticipantsByChannelId?.[channel.id]}
                       hasUnread={unreadChannelIds.has(channel.id)}
                       unreadCount={unreadChannelCounts.get(channel.id) ?? 0}

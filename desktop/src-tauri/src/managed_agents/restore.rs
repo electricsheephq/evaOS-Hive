@@ -282,7 +282,9 @@ pub async fn restore_managed_agents_on_launch(
         .managed_agent_runtime_transition
         .lock()
         .map_err(|error| error.to_string())?;
-    if shutdown_started.load(Ordering::SeqCst) {
+    if shutdown_started.load(Ordering::SeqCst)
+        || crate::evaos_teams::require_managed_authorization(&state).is_err()
+    {
         return Ok(());
     }
 

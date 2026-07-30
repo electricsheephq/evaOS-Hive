@@ -2,6 +2,7 @@
 import * as React from "react";
 import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
+
 import type { Community } from "@/features/communities/types";
 import { AddCommunityDialog } from "@/features/communities/ui/AddCommunityDialog";
 import type { AddCommunityPrefillRequest } from "@/features/communities/addCommunityPrefill";
@@ -12,7 +13,6 @@ import {
   type ChannelSection,
 } from "@/features/sidebar/lib/useChannelSections";
 import { useActiveWorkingChannelsById } from "@/features/sidebar/lib/useActiveWorkingChannelsById";
-import { useActiveHuddlesByChannelId } from "@/features/huddle/lib/useActiveHuddlesByChannelId";
 import { useDmSidebarMetadata } from "@/features/sidebar/useDmSidebarMetadata";
 import { sortDmChannelsForSidebar } from "@/features/sidebar/lib/dmSidebarSort";
 import {
@@ -238,7 +238,6 @@ export function AppSidebar({
   onUnstarChannel,
 }: AppSidebarProps) {
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
-  const activeHuddlesByChannelId = useActiveHuddlesByChannelId(channels);
   const { status: updateStatus } = useUpdaterContext();
   const canShowSidebarUpdateCard = shouldShowSidebarUpdateCard(updateStatus);
   const { open: sidebarOpen, openMobile } = useSidebar();
@@ -631,7 +630,6 @@ export function AppSidebar({
                       isCollapsed={collapsedGroups.starred}
                       isActiveChannel={selectedView === "channel"}
                       activeWorkingByChannelId={activeWorkingByChannelId}
-                      activeHuddlesByChannelId={activeHuddlesByChannelId}
                       items={starredChannels}
                       sortMode={sortModeFor("starred")}
                       onSortModeChange={(mode) =>
@@ -683,7 +681,6 @@ export function AppSidebar({
                         isCollapsed={collapsedSections[section.id] ?? false}
                         isActiveChannel={selectedView === "channel"}
                         activeWorkingByChannelId={activeWorkingByChannelId}
-                        activeHuddlesByChannelId={activeHuddlesByChannelId}
                         selectedChannelId={selectedChannelId}
                         unreadChannelCounts={unreadChannelCounts}
                         unreadChannelIds={unreadChannelIds}
@@ -739,7 +736,6 @@ export function AppSidebar({
                       isCollapsed={collapsedGroups.channels}
                       isActiveChannel={selectedView === "channel"}
                       activeWorkingByChannelId={activeWorkingByChannelId}
-                      activeHuddlesByChannelId={activeHuddlesByChannelId}
                       items={sectionBuckets.unassigned}
                       sortMode={sortModeFor("channels")}
                       onSortModeChange={(mode) =>
@@ -781,7 +777,6 @@ export function AppSidebar({
                       isCollapsed={collapsedGroups.forums}
                       isActiveChannel={selectedView === "channel"}
                       activeWorkingByChannelId={activeWorkingByChannelId}
-                      activeHuddlesByChannelId={activeHuddlesByChannelId}
                       items={forumChannels}
                       sortMode={sortModeFor("forums")}
                       onSortModeChange={(mode) =>
@@ -829,7 +824,6 @@ export function AppSidebar({
                     isCollapsed={collapsedGroups.directMessages}
                     isActiveChannel={selectedView === "channel"}
                     activeWorkingByChannelId={activeWorkingByChannelId}
-                    activeHuddlesByChannelId={activeHuddlesByChannelId}
                     items={sortedDirectMessages}
                     channelLabels={dmChannelLabels}
                     onHideDm={onHideDm}

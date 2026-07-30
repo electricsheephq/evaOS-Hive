@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  applyBaseTransitions,
   allowedLineCount,
   countLines,
   evaluateFileSize,
@@ -38,33 +37,38 @@ test("local base resolution uses the branch merge-base and fails without origin/
   );
 });
 
-test("a one-time adoption marker selects its transition base until the marker reaches main", () => {
-  const repo = mkdtempSync(path.join(tmpdir(), "file-size-transition-"));
+test("adoption base applies only while the default base lacks the adopted tree", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "file-size-adoption-"));
   git(repo, "init", "-b", "main");
   git(repo, "config", "user.name", "Test");
   git(repo, "config", "user.email", "test@example.com");
-  git(repo, "commit", "--allow-empty", "-m", "old main");
-  const oldMain = git(repo, "rev-parse", "HEAD");
-  git(repo, "switch", "-c", "upstream");
-  git(repo, "commit", "--allow-empty", "-m", "adoption base");
-  const adoptionBase = git(repo, "rev-parse", "HEAD");
-  git(repo, "switch", "-c", "feature");
-  git(repo, "commit", "--allow-empty", "-m", "feature start");
-  mkdirSync(path.join(repo, "docs"));
-  writeFileSync(path.join(repo, "docs", "adopted.json"), "{}\n");
-  git(repo, "add", "docs/adopted.json");
-  git(repo, "commit", "-m", "record adoption");
+  git(repo, "commit", "--allow-empty", "-m", "common");
+  const common = git(repo, "rev-parse", "HEAD");
+  git(repo, "commit", "--allow-empty", "-m", "legacy fork");
+  git(repo, "switch", "-c", "reset", common);
+  git(repo, "commit", "--allow-empty", "-m", "adopt upstream");
+  const adoption = git(repo, "rev-parse", "HEAD");
+  git(repo, "switch", "main");
+  git(repo, "merge", "--no-ff", "reset", "-m", "merge reset");
 
-  const transitions = [
-    { marker: "docs/adopted.json", baseRef: adoptionBase },
-  ];
   assert.equal(
-    applyBaseTransitions(repo, oldMain, transitions),
-    adoptionBase,
+    resolveBaseRef(repo, {
+      GITHUB_ACTIONS: "true",
+      CHECK_FILE_SIZES_ADOPTION_BASE: adoption,
+    }),
+    adoption,
   );
 
-  git(repo, "branch", "-f", "main", "HEAD");
-  assert.equal(applyBaseTransitions(repo, "main", transitions), "main");
+  const adoptedMain = git(repo, "rev-parse", "HEAD");
+  git(repo, "commit", "--allow-empty", "-m", "later change");
+  assert.equal(
+    resolveBaseRef(repo, {
+      GITHUB_ACTIONS: "true",
+      CHECK_FILE_SIZES_ADOPTION_BASE: adoption,
+    }),
+    "HEAD^1",
+  );
+  assert.equal(git(repo, "rev-parse", "HEAD^1"), adoptedMain);
 });
 
 test("counts empty, LF, and CRLF content with the existing semantics", () => {

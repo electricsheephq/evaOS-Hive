@@ -12,6 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   BUZZ_TEST_POSTGRES_PASSWORD: buzz_dev
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+  CHECK_FILE_SIZES_ADOPTION_BASE: 3e48f1b2365d326ee1c9582448d86a99b44ecd5d
 
 jobs:
   changes:
@@ -139,8 +140,8 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          # The desktop file-size ratchet compares this adoption branch with
-          # the exact pinned upstream v0.5.1 commit.
+          # The v0.5.2 reset-boundary file-size ratchet needs the pinned
+          # adoption commit and its ancestry until this branch lands.
           fetch-depth: 0
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
@@ -764,7 +765,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          fetch-depth: 2
+          # The v0.5.2 reset-boundary file-size ratchet needs the pinned
+          # adoption commit and its ancestry until this branch lands.
+          fetch-depth: 0
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
       - name: Get pnpm store directory
         id: pnpm-cache
@@ -799,7 +802,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          fetch-depth: 2
+          # The v0.5.2 reset-boundary file-size ratchet needs the pinned
+          # adoption commit and its ancestry until this branch lands.
+          fetch-depth: 0
       - uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
       - name: Compute Hermit cache key
         id: hermit-bin-hash

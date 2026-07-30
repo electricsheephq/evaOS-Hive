@@ -205,9 +205,6 @@ pub async fn import_identity(
     nsec: String,
     app_handle: tauri::AppHandle,
 ) -> Result<IdentityInfo, String> {
-    if cfg!(feature = "evaos-teams-managed") {
-        return Err("Managed identity import is reserved for identity restoration".to_string());
-    }
     tokio::task::spawn_blocking(move || {
         let trimmed = nsec.trim();
         let keys = Keys::parse(trimmed).map_err(|e| format!("Invalid private key: {e}"))?;
@@ -217,6 +214,7 @@ pub async fn import_identity(
         // this import.
         let state = app_handle.state::<AppState>();
         let _mutation_guard = state.identity_mutation.lock().map_err(|e| e.to_string())?;
+        crate::evaos_teams::prepare_managed_identity_recovery(&app_handle, &state)?;
 
         let data_dir = app_handle
             .path()
@@ -283,9 +281,6 @@ pub async fn import_identity(
 pub async fn persist_current_identity(
     app_handle: tauri::AppHandle,
 ) -> Result<IdentityInfo, String> {
-    if cfg!(feature = "evaos-teams-managed") {
-        return Err("Managed identity persistence is handled by native startup".to_string());
-    }
     tokio::task::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
 

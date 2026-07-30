@@ -3,12 +3,9 @@ import test from "node:test";
 
 import {
   coalesceAgentAutocompleteCandidates,
-  getDirectMessageAgentPubkeys,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
-  isAgentIdentityAddable,
   isAgentIdentityInManagedList,
-  isAgentIdentityMentionable,
   relayAgentIsSharedWithUser,
   shouldHideAgentFromMentions,
 } from "./agentAutocompleteEligibility.ts";
@@ -48,57 +45,6 @@ test("getSharedChannelIds: includes only active joined channels", () => {
     ]),
     new Set(["joined"]),
   );
-});
-
-test("direct messages include verified company identities without granting mention policy", () => {
-  assert.deepEqual(
-    getDirectMessageAgentPubkeys({
-      companyAgentPubkeys: [PUB_B.toUpperCase()],
-      currentPubkey: CURRENT_PUBKEY,
-      managedAgentPubkeys: [PUB_A],
-      relayAgents: [],
-      sharedChannelIds: new Set(),
-    }),
-    new Set([PUB_A, PUB_B]),
-  );
-});
-
-test("channel add accepts verified provider identities without claiming local ownership", () => {
-  const candidate = { isAgent: true, pubkey: PUB_B.toUpperCase() };
-  assert.equal(
-    isAgentIdentityAddable(candidate, new Set(), new Set([PUB_B])),
-    true,
-  );
-  assert.equal(isAgentIdentityInManagedList(candidate, new Set()), false);
-});
-
-test("native bot membership admits a remote identity to current-channel mentions", () => {
-  assert.equal(
-    isAgentIdentityMentionable(
-      { isAgent: true, isMember: true, pubkey: PUB_B, role: "bot" },
-      new Set(),
-    ),
-    true,
-  );
-  assert.equal(
-    isAgentIdentityMentionable(
-      { isAgent: true, isMember: false, pubkey: PUB_B, role: "bot" },
-      new Set(),
-    ),
-    false,
-  );
-});
-
-test("verified provider membership tolerates stale invocation metadata only in-channel", () => {
-  const base = {
-    isAgent: true,
-    pubkey: PUB_B,
-    mentionableAgentPubkeys: new Set(),
-    directoryAgentPubkeys: new Set([PUB_B]),
-    companyAgentPubkeys: new Set([PUB_B]),
-  };
-  assert.equal(shouldHideAgentFromMentions({ ...base, isMember: true }), false);
-  assert.equal(shouldHideAgentFromMentions({ ...base, isMember: false }), true);
 });
 
 test("relayAgentIsSharedWithUser: accepts shared anyone agents and rejects unshared ones", () => {
@@ -160,9 +106,10 @@ test("relayAgentIsSharedWithUser: accepts allowlist agents for the current user"
   );
 });
 
-test("getMentionableAgentPubkeys: keeps managed agents and shared relay agents", () => {
+test("getMentionableAgentPubkeys: keeps managed, authorized, and shared relay agents", () => {
   const result = getMentionableAgentPubkeys({
     managedAgentPubkeys: [PUB_A],
+    authorizedAgentPubkeys: [PUB_D],
     currentPubkey: CURRENT_PUBKEY,
     relayAgents: [
       {
@@ -187,7 +134,7 @@ test("getMentionableAgentPubkeys: keeps managed agents and shared relay agents",
     sharedChannelIds: new Set(["general"]),
   });
 
-  assert.deepEqual(result, new Set([PUB_A, PUB_B, PUB_C]));
+  assert.deepEqual(result, new Set([PUB_A, PUB_D, PUB_B, PUB_C]));
 });
 
 test("isAgentIdentityInManagedList: keeps people and only current managed agent identities", () => {
@@ -229,7 +176,7 @@ test("shouldHideAgentFromMentions: never hides non-agents", () => {
   );
 });
 
-test("shouldHideAgentFromMentions: shows invocable agents even when non-member", () => {
+test("shouldHideAgentFromMentions: shows invocable relay agents even when absent from local managed agents", () => {
   assert.equal(
     shouldHideAgentFromMentions({
       isAgent: true,

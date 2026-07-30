@@ -148,8 +148,11 @@ pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), Stri
     // groups first, then wait for exits in parallel to avoid serial 1s waits.
     struct AgentToStop {
         idx: usize,
+        key: managed_agents::ManagedAgentRuntimeKey,
         pid: u32,
-        runtime: Option<managed_agents::ManagedAgentPairRuntime>,
+        runtime: managed_agents::ManagedAgentPairRuntime,
+        exit_code: Option<i32>,
+        stopped: bool,
     }
 
     let mut to_stop: Vec<AgentToStop> = Vec::new();
@@ -163,15 +166,17 @@ pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), Stri
         // marker, instead of falling through to the orphan sweep's 200ms
         // grace below.
         for key in managed_agents::managed_agent_runtime_keys(&runtimes, &record.pubkey) {
-            let runtime = runtimes.remove(&key);
-            let Some(pid) = runtime
-                .as_ref()
-                .map(|rt| rt.child.id())
-                .or(record.runtime_pid)
-            else {
+            let Some(runtime) = runtimes.remove(&key) else {
                 continue;
             };
-            to_stop.push(AgentToStop { idx, pid, runtime });
+            to_stop.push(AgentToStop {
+                idx,
+                key,
+                pid: runtime.child.id(),
+                runtime,
+                exit_code: None,
+                stopped: false,
+            });
         }
     }
 
@@ -213,31 +218,25 @@ pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), Stri
             }
         }
 
-        // Reap children and update records.
-        for mut agent in to_stop {
-            if let Some(ref mut rt) = agent.runtime {
-                // Best-effort reap — don’t block shutdown if the child is stuck
-                // in uninterruptible sleep. The zombie will be cleaned up when
-                // our process exits and launchd reaps it.
-                let _ = rt.child.try_wait();
-                // Write log marker (best-effort).
-                let record = &records[agent.idx];
-                let _ = managed_agents::append_log_marker(
-                    &rt.log_path,
-                    &format!(
-                        "=== stopped {} ({}) at {} ===",
-                        record.name,
-                        record.pubkey,
-                        util::now_iso()
-                    ),
-                );
+        // Confirm exits after SIGKILL. A managed logout or entitlement expiry
+        // must never report success while a local agent is still alive.
+        let kill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            for agent in &mut to_stop {
+                if agent.stopped {
+                    continue;
+                }
+                if let Ok(Some(status)) = agent.runtime.child.try_wait() {
+                    agent.exit_code = status.code();
+                    agent.stopped = true;
+                }
             }
-            let record = &mut records[agent.idx];
-            record.runtime_pid = None;
-            record.last_stopped_at = Some(util::now_iso());
-            record.updated_at = util::now_iso();
-            record.last_exit_code = None;
-            record.last_error = None;
+            if to_stop.iter().all(|agent| agent.stopped)
+                || std::time::Instant::now() >= kill_deadline
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
         }
     }
 
@@ -256,11 +255,56 @@ pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), Stri
     // whose desktop process is no longer running and reap them.
     managed_agents::reap_dead_instance_agents(&managed_agents::current_instance_id(app), &[]);
 
+    let mut shutdown_errors = Vec::new();
+    for mut agent in to_stop {
+        if !agent.stopped {
+            if let Ok(Some(status)) = agent.runtime.child.try_wait() {
+                agent.exit_code = status.code();
+                agent.stopped = true;
+            }
+        }
+        let record = &mut records[agent.idx];
+        if !agent.stopped && managed_agents::process_is_running(agent.pid) {
+            record.last_error = Some(format!(
+                "failed to confirm local agent process {} stopped",
+                agent.pid
+            ));
+            record.last_error_code = Some(1);
+            record.updated_at = util::now_iso();
+            shutdown_errors.push(format!("{} ({})", record.name, agent.pid));
+            runtimes.insert(agent.key, agent.runtime);
+            continue;
+        }
+        managed_agents::remove_agent_runtime_receipt(app, &agent.key);
+        let _ = managed_agents::append_log_marker(
+            &agent.runtime.log_path,
+            &format!(
+                "=== stopped {} ({}) at {} ===",
+                record.name,
+                record.pubkey,
+                util::now_iso()
+            ),
+        );
+        record.runtime_pid = None;
+        record.last_stopped_at = Some(util::now_iso());
+        record.updated_at = util::now_iso();
+        record.last_exit_code = agent.exit_code;
+        record.last_error = None;
+        record.last_error_code = None;
+    }
+
     if changed {
         save_managed_agents(app, &records)?;
     }
 
-    Ok(())
+    if shutdown_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to stop local agents: {}",
+            shutdown_errors.join(", ")
+        ))
+    }
 }
 
 #[cfg(test)]

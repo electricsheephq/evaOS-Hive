@@ -16,7 +16,6 @@ import {
   coalesceAutocompleteCandidatesByKey,
   getMentionableAgentPubkeys,
   getSharedChannelIds,
-  isAgentIdentityMentionable,
   shouldHideAgentFromMentions,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
 import {
@@ -47,6 +46,7 @@ import {
   type MentionCandidate,
   mentionCandidateLabel,
 } from "./mentionCandidates";
+const MENTION_DEBOUNCE_MS = 120;
 const MENTION_SUGGESTION_LIMIT = 50;
 export type PersonaMentionTarget = {
   displayName: string;
@@ -92,6 +92,7 @@ export function useMentions(
   const mentionMapRef = React.useRef<Map<string, string>>(new Map());
   const personaMentionMapRef = React.useRef<Map<string, string>>(new Map());
   const previousSuggestionsRef = React.useRef<MentionSuggestion[]>([]);
+  void options?.channelType;
   const mentionSearchQuery = mentionQuery?.trim() ?? "";
   const canSearchGlobalPeople = mentionSearchQuery.length > 0;
   const identityQuery = useIdentityQuery();
@@ -170,12 +171,12 @@ export function useMentions(
   const relayAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
-        [
-          ...(relayAgentsQuery.data ?? []),
-          ...relayAgentsQuery.companyVmAgents,
-        ].map((agent) => [normalizePubkey(agent.pubkey), agent.name]),
+        (relayAgentsQuery.data ?? []).map((agent) => [
+          normalizePubkey(agent.pubkey),
+          agent.name,
+        ]),
       ),
-    [relayAgentsQuery.companyVmAgents, relayAgentsQuery.data],
+    [relayAgentsQuery.data],
   );
   const directoryAgentPubkeys = React.useMemo(
     () =>
@@ -244,9 +245,6 @@ export function useMentions(
       if (isArchivedDiscovery(pubkey)) {
         return;
       }
-      if (!isAgentIdentityMentionable(candidate, managedAgentPubkeys)) {
-        return;
-      }
       if (
         shouldHideAgentFromMentions({
           isAgent: candidate.isAgent === true,
@@ -254,7 +252,6 @@ export function useMentions(
           pubkey,
           mentionableAgentPubkeys,
           directoryAgentPubkeys,
-          companyAgentPubkeys: relayAgentsQuery.companyAgentPubkeys,
         })
       ) {
         return;
@@ -419,7 +416,6 @@ export function useMentions(
     managedAgentNamesByPubkey,
     managedAgentPersonaIds,
     managedAgentPersonaIdsByPubkey,
-    managedAgentPubkeys,
     managedAgentsQuery.data,
     memberPubkeys,
     members,
@@ -427,7 +423,6 @@ export function useMentions(
     personaNameByPubkey,
     profiles,
     relayAgentNamesByPubkey,
-    relayAgentsQuery.companyAgentPubkeys,
     relayAgentsQuery.data,
   ]);
 
@@ -786,7 +781,7 @@ export function useMentions(
         } else {
           setMentionQuery(null);
         }
-      }, 120);
+      }, MENTION_DEBOUNCE_MS);
     },
     [],
   );

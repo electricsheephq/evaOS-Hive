@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   evaosTeamsGateBypassed,
-  evaosTeamsLogoutClosesGate,
+  evaosTeamsNeedsNativeIdentityRecovery,
   evaosTeamsRefreshDelay,
   evaosTeamsStatusCopy,
 } from "./api.ts";
@@ -28,17 +28,29 @@ const status = (phase, refreshAfterSeconds) => ({
     : {}),
 });
 
-test("every non-active managed logout result closes the native app gate", () => {
-  assert.equal(evaosTeamsLogoutClosesGate(status("signed_out")), true);
-  assert.equal(evaosTeamsLogoutClosesGate(status("logout_pending")), true);
-  assert.equal(evaosTeamsLogoutClosesGate(status("keychain_locked")), true);
-  assert.equal(evaosTeamsLogoutClosesGate(status("active")), false);
+test("refresh delay is bounded by the validated entitlement interval", () => {
+  const now = Date.parse("2029-01-01T00:00:00Z");
+  assert.equal(evaosTeamsRefreshDelay(status("active", 29), now), 30_000);
+  assert.equal(evaosTeamsRefreshDelay(status("active", 300), now), 300_000);
+  assert.equal(evaosTeamsRefreshDelay(status("active", 3601), now), 3_600_000);
 });
 
-test("refresh delay is bounded by the validated entitlement interval", () => {
-  assert.equal(evaosTeamsRefreshDelay(status("active", 29)), 30_000);
-  assert.equal(evaosTeamsRefreshDelay(status("active", 300)), 300_000);
-  assert.equal(evaosTeamsRefreshDelay(status("active", 3601)), 3_600_000);
+test("refresh delay never outlives the managed entitlement", () => {
+  const expiringStatus = status("active", 300);
+  expiringStatus.entitlement.expiresAt = "2029-01-01T00:00:20Z";
+  assert.equal(
+    evaosTeamsRefreshDelay(expiringStatus, Date.parse("2029-01-01T00:00:00Z")),
+    20_000,
+  );
+  expiringStatus.entitlement.expiresAt = "2029-01-01T00:00:00.500Z";
+  assert.equal(
+    evaosTeamsRefreshDelay(expiringStatus, Date.parse("2029-01-01T00:00:00Z")),
+    500,
+  );
+  assert.equal(
+    evaosTeamsRefreshDelay(expiringStatus, Date.parse("2029-01-01T00:00:01Z")),
+    0,
+  );
 });
 
 test("status copy distinguishes identity restoration from reauthentication", () => {
@@ -64,4 +76,16 @@ test("unmanaged and native status bypass the managed auth gate", () => {
     true,
   );
   assert.equal(evaosTeamsGateBypassed(true, status("signed_out")), false);
+});
+
+test("managed canonical-key mismatch hands control to native recovery", () => {
+  assert.equal(
+    evaosTeamsNeedsNativeIdentityRecovery(status("identity_restore_required")),
+    true,
+  );
+  assert.equal(
+    evaosTeamsNeedsNativeIdentityRecovery(status("signed_out")),
+    false,
+  );
+  assert.equal(evaosTeamsNeedsNativeIdentityRecovery(null), false);
 });

@@ -12,16 +12,12 @@ use crate::relay;
 
 #[cfg(any(test, feature = "evaos-teams-managed"))]
 fn validate_managed_workspace_request(
-    authorized: bool,
     allowed_relay: Option<&str>,
     requested_relay: &str,
     nsec: Option<&str>,
 ) -> Result<(), String> {
     if nsec.is_some_and(|value| !value.trim().is_empty()) {
         return Err("Managed workspaces cannot import a private key".to_string());
-    }
-    if !authorized {
-        return Err("Managed workspace access is not authorized".to_string());
     }
     let allowed_relay =
         allowed_relay.ok_or_else(|| "Managed workspace relay is unavailable".to_string())?;
@@ -159,16 +155,12 @@ pub async fn apply_workspace(
         // ── Validate before mutating ──────────────────────────────────────────
         #[cfg(feature = "evaos-teams-managed")]
         {
-            let authorized = state
-                .evaos_teams_authorized
-                .load(std::sync::atomic::Ordering::Acquire);
             let allowed_relay = state
                 .relay_url_override
                 .lock()
                 .map_err(|error| error.to_string())?
                 .clone();
             validate_managed_workspace_request(
-                authorized,
                 allowed_relay.as_deref(),
                 &relay_url,
                 nsec.as_deref(),
@@ -328,14 +320,12 @@ mod managed_tests {
     #[test]
     fn managed_workspace_rejects_client_relay_and_private_key() {
         assert!(validate_managed_workspace_request(
-            true,
             Some("wss://relay.example.com"),
             "wss://attacker.example.com",
             None,
         )
         .is_err());
         assert!(validate_managed_workspace_request(
-            true,
             Some("wss://relay.example.com"),
             "wss://relay.example.com",
             Some("nsec1secret"),
@@ -346,18 +336,13 @@ mod managed_tests {
     #[test]
     fn managed_workspace_accepts_only_authorized_entitlement_relay() {
         assert!(validate_managed_workspace_request(
-            true,
             Some("wss://relay.example.com"),
             "wss://relay.example.com/",
             None,
         )
         .is_ok());
-        assert!(validate_managed_workspace_request(
-            false,
-            Some("wss://relay.example.com"),
-            "wss://relay.example.com",
-            None,
-        )
-        .is_err());
+        assert!(
+            validate_managed_workspace_request(None, "wss://relay.example.com", None,).is_err()
+        );
     }
 }

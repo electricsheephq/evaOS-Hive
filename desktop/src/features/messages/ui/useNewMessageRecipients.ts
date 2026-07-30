@@ -6,9 +6,10 @@ import {
 } from "@/features/agents/hooks";
 import {
   coalesceAgentAutocompleteCandidates,
-  getDirectMessageAgentPubkeys,
+  getMentionableAgentPubkeys,
   getSharedChannelIds,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
+import { useCompanyVmAgents } from "@/features/agents/useCompanyVmAgents";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import {
@@ -87,6 +88,7 @@ export function useNewMessageRecipients({
 
   const identityQuery = useIdentityQuery();
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: active });
+  const companyVmAgentsQuery = useCompanyVmAgents();
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: active });
   const channelsQuery = useChannelsQuery({ enabled: active });
   const userSearchQuery = useInfiniteUserSearchQuery(deferredSearchQuery, {
@@ -109,10 +111,12 @@ export function useNewMessageRecipients({
     const currentPubkeyNormalized = currentPubkey
       ? normalizePubkey(currentPubkey)
       : null;
-    const eligibleAgentPubkeys = getDirectMessageAgentPubkeys({
-      companyAgentPubkeys: relayAgentsQuery.companyAgentPubkeys,
+    const eligibleAgentPubkeys = getMentionableAgentPubkeys({
       currentPubkey,
       managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
+        (agent) => agent.pubkey,
+      ),
+      authorizedAgentPubkeys: (companyVmAgentsQuery.data ?? []).map(
         (agent) => agent.pubkey,
       ),
       relayAgents: relayAgentsQuery.data,
@@ -185,20 +189,6 @@ export function useNewMessageRecipients({
       );
     }
 
-    for (const agent of relayAgentsQuery.companyVmAgents) {
-      addCandidate(
-        {
-          pubkey: agent.pubkey,
-          displayName: agent.name,
-          avatarUrl: null,
-          nip05Handle: null,
-          ownerPubkey: null,
-          isAgent: true,
-        },
-        { includeSelected: deferredSearchQuery.length > 0 },
-      );
-    }
-
     for (const agent of managedAgentsQuery.data ?? []) {
       addCandidate(
         {
@@ -232,12 +222,11 @@ export function useNewMessageRecipients({
     });
   }, [
     channelsQuery.data,
+    companyVmAgentsQuery.data,
     currentPubkey,
     deferredSearchQuery,
     isArchivedDiscovery,
     managedAgentsQuery.data,
-    relayAgentsQuery.companyAgentPubkeys,
-    relayAgentsQuery.companyVmAgents,
     relayAgentsQuery.data,
     selectedPubkeys,
     userSearchResults,
@@ -245,8 +234,8 @@ export function useNewMessageRecipients({
 
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
-    relayAgentsQuery.companyAgentsQuery.isLoading ||
     managedAgentsQuery.isLoading ||
+    companyVmAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;
   React.useEffect(() => {

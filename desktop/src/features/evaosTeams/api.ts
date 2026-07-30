@@ -26,11 +26,9 @@ export type EvaosTeamsAuthStatus = {
   entitlement?: EvaosTeamsEntitlement;
 };
 
-export type HiveCompanyAgent = {
-  agentInstanceId: string;
-  agentId?: string;
+export type HiveCompanyAgentAuthorization = {
   publicKey: string;
-  displayName: string;
+  agentId?: string;
   runtime: string;
 };
 
@@ -46,13 +44,25 @@ export function logoutEvaosTeams() {
   return invoke<EvaosTeamsAuthStatus>("logout_evaos_teams");
 }
 
-export function listHiveCompanyAgents() {
-  return invoke<HiveCompanyAgent[]>("list_hive_company_agents");
+export function listHiveCompanyAgentAuthorizations() {
+  return invoke<HiveCompanyAgentAuthorization[]>(
+    "list_hive_company_agent_authorizations",
+  );
 }
 
-export function evaosTeamsRefreshDelay(status: EvaosTeamsAuthStatus) {
+export function evaosTeamsRefreshDelay(
+  status: EvaosTeamsAuthStatus,
+  now = Date.now(),
+) {
   const seconds = status.entitlement?.refreshAfterSeconds ?? 300;
-  return Math.min(Math.max(seconds, 30), 3600) * 1000;
+  const refreshDelay = Math.min(Math.max(seconds, 30), 3600) * 1000;
+  const expiresAt = status.entitlement?.expiresAt
+    ? Date.parse(status.entitlement.expiresAt)
+    : Number.NaN;
+  if (!Number.isFinite(expiresAt)) {
+    return refreshDelay;
+  }
+  return Math.max(0, Math.min(refreshDelay, expiresAt - now));
 }
 
 export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
@@ -105,6 +115,10 @@ export function evaosTeamsGateBypassed(
   return !productManaged || status?.managed === false;
 }
 
-export function evaosTeamsLogoutClosesGate(status: EvaosTeamsAuthStatus) {
-  return status.managed && status.phase !== "active";
+export function evaosTeamsNeedsNativeIdentityRecovery(
+  status: EvaosTeamsAuthStatus | null,
+): boolean {
+  return (
+    status?.managed === true && status.phase === "identity_restore_required"
+  );
 }

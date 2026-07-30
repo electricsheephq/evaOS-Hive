@@ -34,6 +34,7 @@ import {
   getRuntimeFileConfig,
   installAcpRuntime,
   listManagedAgents,
+  listRelayAgents,
   saveCustomHarness,
   updateManagedAgent,
 } from "@/shared/api/tauri";
@@ -63,7 +64,6 @@ import {
   updatePersona,
 } from "@/shared/api/tauriPersonas";
 import { teamsQueryKey } from "@/features/agents/teamHooks";
-import { relayAgentsQueryKey } from "@/features/agents/relayAgentsQuery";
 import type {
   AcpRuntime,
   AgentPersona,
@@ -86,10 +86,6 @@ import type {
 } from "@/features/agents/channelAgents";
 export { findReusableAgent } from "@/features/agents/agentReuse";
 export {
-  relayAgentsQueryKey,
-  useRelayAgentsQuery,
-} from "@/features/agents/relayAgentsQuery";
-export {
   teamsQueryKey,
   useCreateTeamMutation,
   useDeleteTeamMutation,
@@ -108,6 +104,7 @@ export type {
   ProvisionChannelManagedAgentResult,
 } from "@/features/agents/channelAgents";
 
+export const relayAgentsQueryKey = ["relay-agents"] as const;
 export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const acpRuntimesQueryKey = ["acp-runtimes"] as const;
@@ -320,6 +317,25 @@ export function useManagedAgentPrereqsQuery(
         mcpCommand: normalizedMcpCommand || undefined,
       }),
     staleTime: 15_000,
+  });
+}
+
+export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: relayAgentsQueryKey,
+    queryFn: listRelayAgents,
+    staleTime: 30_000,
+    // Relay agent profiles (kind:10100) are near-static and the backing
+    // `list_relay_agents` command is an unfiltered relay query for the whole
+    // profile set — mounted on ~13 always-live surfaces (channel screen,
+    // members bar, mentions, sidebar, profile popovers), so a tight interval
+    // re-pulls the full set app-wide. This poll is also the ONLY refresh path:
+    // the `agents-data-changed` event fires only for local persona/team/managed
+    // reconcile (kinds PERSONA/TEAM/MANAGED_AGENT), never for kind:10100. So we
+    // keep polling but at a relaxed cadence and pause it while backgrounded.
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    enabled: options?.enabled,
   });
 }
 

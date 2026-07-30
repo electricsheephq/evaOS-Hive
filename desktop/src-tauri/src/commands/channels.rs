@@ -2,7 +2,6 @@ use tauri::State;
 
 use crate::{
     app_state::AppState,
-    commands::metadata_poll::poll_metadata,
     events,
     models::{ChannelDetailInfo, ChannelInfo, ChannelMembersResponse},
     nostr_convert,
@@ -494,26 +493,6 @@ fn has_all_starter_channels(channels: &[ChannelInfo]) -> bool {
     })
 }
 
-async fn poll_channel_metadata(
-    state: &AppState,
-    channel_id: &str,
-) -> Result<Option<nostr::Event>, String> {
-    poll_metadata(|| async {
-        let events = query_relay(
-            state,
-            &[serde_json::json!({
-                "kinds": [39000],
-                "#d": [channel_id],
-                "limit": 1
-            })],
-        )
-        .await?;
-
-        Ok(events.into_iter().next())
-    })
-    .await
-}
-
 async fn ensure_starter_channel_memberships(
     state: &AppState,
     keys: &nostr::Keys,
@@ -611,13 +590,22 @@ pub async fn create_channel(
     let channel_uuid_string = channel_uuid.to_string();
     state.mark_pending_owned_channel(&creator_pubkey, &channel_uuid_string);
 
-    // Relay acceptance can precede read-index visibility. Poll briefly so a
-    // successful create is not reported as a failure during ordinary lag.
-    let event = poll_channel_metadata(&state, &channel_uuid_string)
-        .await?
-        .ok_or_else(|| "channel created but metadata not yet available".to_string())?;
+    // Re-fetch the canonical metadata event to return ChannelInfo.
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [39000],
+            "#d": [channel_uuid_string],
+            "limit": 1
+        })],
+    )
+    .await?;
 
-    nostr_convert::channel_info_from_event(&event, None, None)
+    events
+        .first()
+        .map(|ev| nostr_convert::channel_info_from_event(ev, None, None))
+        .transpose()?
+        .ok_or_else(|| "channel created but metadata not yet available".to_string())
 }
 
 #[tauri::command]
@@ -724,11 +712,21 @@ pub async fn update_channel(
     )?;
     submit_event(builder, &state).await?;
 
-    let event = poll_channel_metadata(&state, &input.channel_id)
-        .await?
-        .ok_or_else(|| "channel updated but metadata not yet available".to_string())?;
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [39000],
+            "#d": [input.channel_id],
+            "limit": 1
+        })],
+    )
+    .await?;
 
-    nostr_convert::channel_detail_from_event(&event)
+    events
+        .first()
+        .map(nostr_convert::channel_detail_from_event)
+        .transpose()?
+        .ok_or_else(|| "channel updated but metadata not yet available".to_string())
 }
 
 #[tauri::command]
