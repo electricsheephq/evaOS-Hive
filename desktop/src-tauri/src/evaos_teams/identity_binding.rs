@@ -2,6 +2,7 @@ use serde::Deserialize;
 
 #[cfg(feature = "evaos-teams-managed")]
 use super::{http_api::post_json, relay_websocket_url};
+use super::{validate_entitlement, EvaosTeamsEntitlement};
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub(super) struct IdentityBinding {
@@ -15,6 +16,39 @@ pub(super) struct IdentityBinding {
 pub(super) struct IdentityBindingResponse {
     pub(super) status: String,
     pub(super) binding: IdentityBinding,
+}
+
+pub(super) fn validate_identity_binding(
+    binding: &IdentityBinding,
+    expected_membership_id: &str,
+    expected_community_id: &str,
+    expected_relay_host: &str,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    if binding.membership_id != expected_membership_id
+        || binding.community_id != expected_community_id
+        || binding.relay_host != expected_relay_host
+        || binding.public_key.as_deref() != Some(expected_public_key)
+    {
+        return Err("Managed identity selection changed the server-selected scope".to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn validate_entitlement_for_binding(
+    binding: &IdentityBinding,
+    entitlement: &EvaosTeamsEntitlement,
+    expected_membership_id: &str,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    validate_identity_binding(
+        binding,
+        expected_membership_id,
+        &entitlement.community_id,
+        &entitlement.relay_host,
+        expected_public_key,
+    )?;
+    validate_entitlement(entitlement, expected_public_key).map(|_| ())
 }
 
 #[cfg(feature = "evaos-teams-managed")]

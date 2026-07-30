@@ -29,19 +29,26 @@ pub(super) struct IdentityRotationChallengeResponse {
 
 fn validate_identity_rotation_challenge(
     response: &IdentityRotationChallengeResponse,
-    expected_membership_id: &str,
-    expected_public_key: &str,
+    binding: &IdentityBinding,
+    expected_current_public_key: &str,
+    expected_replacement_public_key: &str,
 ) -> Result<(), String> {
     if response.status != "identity_rotation_challenge_issued"
         || response.challenge.schema_version != IDENTITY_ROTATION_SCHEMA
-        || response.challenge.membership_id != expected_membership_id
-        || response.challenge.replacement_public_key != expected_public_key
+        || response.challenge.replacement_public_key != expected_replacement_public_key
         || response.event_template.kind != KEY_BINDING_KIND
     {
         return Err(
             "managed identity replacement challenge does not match this device".to_string(),
         );
     }
+    identity_binding::validate_identity_binding(
+        binding,
+        &response.challenge.membership_id,
+        &response.challenge.community_id,
+        &response.relay_host,
+        expected_current_public_key,
+    )?;
     for id in [
         &response.challenge.rotation_id,
         &response.challenge.previous_identity_id,
@@ -89,11 +96,13 @@ fn validate_identity_rotation_challenge(
 fn signed_identity_rotation_challenge(
     response: &IdentityRotationChallengeResponse,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
+    expected_current_public_key: &str,
 ) -> Result<serde_json::Value, String> {
     validate_identity_rotation_challenge(
         response,
-        expected_membership_id,
+        binding,
+        expected_current_public_key,
         &keys.public_key().to_hex(),
     )?;
     let tags = response
@@ -158,17 +167,13 @@ fn validate_completed_identity_rotation(
     expected_membership_id: &str,
     expected_public_key: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
-    if binding.membership_id != expected_membership_id
-        || binding.public_key.as_deref() != Some(expected_public_key)
-    {
-        return Err("managed identity replacement was not completed".to_string());
-    }
-    validate_rotated_entitlement(
-        entitlement,
-        &binding.community_id,
-        &binding.relay_host,
+    validate_entitlement_for_binding(
+        binding,
+        &entitlement,
+        expected_membership_id,
         expected_public_key,
-    )
+    )?;
+    Ok(entitlement)
 }
 
 #[derive(Debug, PartialEq)]
@@ -215,7 +220,8 @@ async fn rotate_lost_identity(
     client: &reqwest::Client,
     token: &str,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
+    expected_current_public_key: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
     let challenge: IdentityRotationChallengeResponse = post_json(
@@ -235,7 +241,7 @@ async fn rotate_lost_identity(
     .await
     .map_err(|error| format!("Identity replacement was not available: {error}"))?;
     let signed_event =
-        signed_identity_rotation_challenge(&challenge, keys, expected_membership_id)?;
+        signed_identity_rotation_challenge(&challenge, keys, binding, expected_current_public_key)?;
 
     let verified: Result<EntitlementResponse, ApiFailure> = post_json(
         client,
@@ -255,7 +261,7 @@ async fn rotate_lost_identity(
             &public_key,
         ),
         Ok(_) | Err(_) => {
-            recover_completed_identity_rotation(client, token, expected_membership_id, keys)
+            recover_completed_identity_rotation(client, token, &binding.membership_id, keys)
                 .await
                 .map_err(|_| {
                     "Hive could not confirm identity replacement. The replacement key remains safely staged in Keychain; sign in again and retry."
@@ -321,18 +327,21 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
                     &app_state.http_client,
                     pending.session.as_str(),
                     &keys,
-                    &pending.membership_id,
+                    &current_binding,
+                    &pending.public_key,
                 )
                 .await?
             }
         };
 
-        let replacement_binding = IdentityBinding {
-            membership_id: pending.membership_id.clone(),
-            community_id: entitlement.community_id.clone(),
-            relay_host: entitlement.relay_host.clone(),
-            public_key: Some(replacement_public_key),
-        };
+        let replacement_binding =
+            get_identity_binding(&app_state.http_client, pending.session.as_str()).await?;
+        let entitlement = validate_completed_identity_rotation(
+            &replacement_binding,
+            entitlement,
+            &pending.membership_id,
+            &replacement_public_key,
+        )?;
         identity_custody::ensure_enrollment(
             &app_state.http_client,
             pending.session.as_str(),
@@ -365,6 +374,7 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
             pending.session.to_string(),
             &keys,
             &pending.membership_id,
+            &replacement_binding,
             entitlement,
         )?;
         Ok(status)
@@ -418,13 +428,17 @@ mod tests {
     #[test]
     fn rotation_signature_uses_only_the_exact_server_template() {
         let keys = Keys::generate();
+        let current_public_key = Keys::generate().public_key().to_hex();
         let response = fixture(&keys);
-        let event = signed_identity_rotation_challenge(
-            &response,
-            &keys,
-            "10000000-0000-4000-8000-000000000003",
-        )
-        .unwrap();
+        let binding = IdentityBinding {
+            membership_id: response.challenge.membership_id.clone(),
+            community_id: response.challenge.community_id.clone(),
+            relay_host: response.relay_host.clone(),
+            public_key: Some(current_public_key.clone()),
+        };
+        let event =
+            signed_identity_rotation_challenge(&response, &keys, &binding, &current_public_key)
+                .unwrap();
         assert_eq!(event["pubkey"], keys.public_key().to_hex());
         assert_eq!(event["content"], response.event_template.content);
 
@@ -433,10 +447,20 @@ mod tests {
             "community".to_string(),
             altered.challenge.community_id.clone(),
         ]);
+        assert!(
+            signed_identity_rotation_challenge(&altered, &keys, &binding, &current_public_key,)
+                .is_err()
+        );
+
+        let mut altered_scope = fixture(&keys);
+        altered_scope.challenge.community_id = "20000000-0000-4000-8000-000000000004".to_string();
+        altered_scope.event_template.content =
+            serde_json::to_string(&altered_scope.challenge).unwrap();
         assert!(signed_identity_rotation_challenge(
-            &altered,
+            &altered_scope,
             &keys,
-            "10000000-0000-4000-8000-000000000003",
+            &binding,
+            &current_public_key,
         )
         .is_err());
     }
@@ -555,5 +579,18 @@ mod tests {
             .unwrap(),
             IdentityRotationProgress::Rotate
         );
+    }
+
+    #[test]
+    fn unrelated_binding_cannot_rotate_or_resume_identity() {
+        let lost_public_key = Keys::generate().public_key().to_hex();
+        let replacement_public_key = Keys::generate().public_key().to_hex();
+        let unrelated_public_key = Keys::generate().public_key().to_hex();
+        assert!(identity_rotation_progress(
+            Some(&unrelated_public_key),
+            &lost_public_key,
+            &replacement_public_key,
+        )
+        .is_err());
     }
 }

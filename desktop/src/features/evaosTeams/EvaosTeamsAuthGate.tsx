@@ -13,6 +13,7 @@ import {
   evaosTeamsRefreshDelay,
   evaosTeamsStatusCopy,
   getEvaosTeamsAuthStatus,
+  logoutEvaosTeams,
   replaceLostEvaosTeamsIdentity,
   startEvaosTeamsLogin,
   submitEvaosTeamsLoginCode,
@@ -36,6 +37,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const [backupCodeSent, setBackupCodeSent] = useState(false);
   const [submittingCode, setSubmittingCode] = useState(false);
   const [lostIdentityConfirmed, setLostIdentityConfirmed] = useState(false);
+  const [logoutPending, setLogoutPending] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -117,6 +119,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     setError(null);
     try {
       setStatus(await action());
+      return true;
     } catch (actionError) {
       const actionMessage =
         actionError instanceof Error
@@ -124,6 +127,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
           : String(actionError);
       await refresh();
       setError(actionMessage);
+      return false;
     } finally {
       setWorking(false);
     }
@@ -145,17 +149,19 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
 
   async function runIdentityReset() {
     if (!lostIdentityConfirmed || working) return;
-    setWorking(true);
-    setError(null);
-    try {
-      setStatus(await replaceLostEvaosTeamsIdentity());
+    const succeeded = await run(() => replaceLostEvaosTeamsIdentity());
+    if (succeeded) {
       setLostIdentityConfirmed(false);
-    } catch (resetError) {
-      setError(
-        resetError instanceof Error ? resetError.message : String(resetError),
-      );
+    }
+  }
+
+  async function runLogout() {
+    if (working || logoutPending) return;
+    setLogoutPending(true);
+    try {
+      await run(() => logoutEvaosTeams());
     } finally {
-      setWorking(false);
+      setLogoutPending(false);
     }
   }
 
@@ -306,6 +312,15 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
                 {working
                   ? "Replacing identity…"
                   : "Replace lost identity on this Mac"}
+              </Button>
+              <Button
+                disabled={working || logoutPending}
+                onClick={() => void runLogout()}
+                variant="outline"
+              >
+                {logoutPending
+                  ? "Signing out…"
+                  : "Sign out without replacing identity"}
               </Button>
             </div>
           ) : null}

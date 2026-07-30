@@ -7,10 +7,11 @@ pub(super) fn persist_active_session(
     session: String,
     keys: &Keys,
     membership_id: &str,
+    binding: &IdentityBinding,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
-    install_entitlement(app_state, keys, &entitlement)?;
+    install_entitlement(app_state, keys, binding, membership_id, &entitlement)?;
     if managed_store()
         .replace_all_checked(|fresh| {
             keychain_migration::active_session_entries(
@@ -65,6 +66,16 @@ pub(super) fn binding_for_entitlement(
         .public_key
         .clone()
         .ok_or_else(|| "Managed entitlement did not include the verified identity".to_string())?;
+    if entitlement.community_id != binding.community_id
+        || entitlement.relay_host != binding.relay_host
+        || binding
+            .public_key
+            .as_deref()
+            .is_some_and(|canonical| canonical != public_key)
+    {
+        return Err("Managed entitlement changed the server-selected identity scope".to_string());
+    }
+    validate_entitlement(entitlement, &public_key)?;
     Ok(IdentityBinding {
         membership_id: binding.membership_id.clone(),
         community_id: binding.community_id.clone(),
@@ -195,12 +206,20 @@ pub(super) async fn complete_login(
             "Hive could not establish a native identity for this new membership".to_string(),
         );
     };
+    let verified_binding = get_identity_binding(&app_state.http_client, &desktop_session).await?;
+    validate_entitlement_for_binding(
+        &verified_binding,
+        &entitlement,
+        &binding.membership_id,
+        &keys.public_key().to_hex(),
+    )?;
     persist_active_session(
         state,
         app_state,
         desktop_session,
         &keys,
         &binding.membership_id,
+        &verified_binding,
         entitlement,
     )
 }

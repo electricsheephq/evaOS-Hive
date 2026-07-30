@@ -33,6 +33,16 @@ test("managed recovery keeps the action error after refreshing rolled-back statu
   );
 });
 
+test("identity reset uses the shared recovery runner and offers safe sign-out", () => {
+  assert.match(
+    authGate,
+    /const succeeded = await run\(\(\) => replaceLostEvaosTeamsIdentity\(\)\);/,
+  );
+  assert.match(authGate, /await refresh\(\);[\s\S]*setError\(actionMessage\);/);
+  assert.match(authGate, /await run\(\(\) => logoutEvaosTeams\(\)\);/);
+  assert.match(authGate, /Sign out without replacing identity/);
+});
+
 test("lost identity replacement is explicit, consequential, and command backed", () => {
   assert.match(authGate, /status\?\.phase === "identity_reset_required"/);
   assert.match(authGate, /lostIdentityConfirmed/);

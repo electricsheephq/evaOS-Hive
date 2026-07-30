@@ -50,6 +50,7 @@ mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
 #[cfg(feature = "evaos-teams-managed")]
 use identity_binding::get_identity_binding;
+use identity_binding::validate_entitlement_for_binding;
 use identity_binding::IdentityBinding;
 #[cfg(test)]
 use identity_binding::IdentityBindingResponse;
@@ -394,6 +395,8 @@ fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Re
 fn install_entitlement(
     app_state: &AppState,
     keys: &Keys,
+    binding: &IdentityBinding,
+    expected_membership_id: &str,
     entitlement: &EvaosTeamsEntitlement,
 ) -> Result<(), String> {
     let _identity_guard = app_state
@@ -409,7 +412,13 @@ fn install_entitlement(
     if active_public_key != keys.public_key().to_hex() {
         return Err("Native identity changed during managed verification".to_string());
     }
-    let relay = validate_entitlement(entitlement, &active_public_key)?;
+    validate_entitlement_for_binding(
+        binding,
+        entitlement,
+        expected_membership_id,
+        &active_public_key,
+    )?;
+    let relay = relay_websocket_url(&entitlement.relay_host)?;
     let expires_at = chrono::DateTime::parse_from_rfc3339(&entitlement.expires_at)
         .map_err(|_| "managed entitlement expiry is invalid".to_string())?
         .timestamp();
@@ -721,7 +730,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 ));
             }
         };
-        let binding = match get_identity_binding(&app_state.http_client, &session).await {
+        let mut binding = match get_identity_binding(&app_state.http_client, &session).await {
             Ok(binding) => binding,
             Err(error) => {
                 disable_managed_access(&app_state);
@@ -746,18 +755,42 @@ pub(crate) async fn get_evaos_teams_auth_status(
         let entitlement = match get_remote_entitlement(&app_state.http_client, &session).await {
             Ok(entitlement) => Ok(entitlement),
             Err(error) if error.status == reqwest::StatusCode::NOT_FOUND => {
-                bind_identity(
+                match bind_identity(
                     &app_state.http_client,
                     &session,
                     &keys,
                     &binding.membership_id,
                 )
                 .await
+                {
+                    Ok(entitlement) => {
+                        match get_identity_binding(&app_state.http_client, &session).await {
+                            Ok(verified_binding) => {
+                                binding = verified_binding;
+                                Ok(entitlement)
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
             }
             Err(error) => Err(format!("Managed access could not be refreshed: {error}")),
         };
         match entitlement {
             Ok(entitlement) => {
+                if let Err(error) = validate_entitlement_for_binding(
+                    &binding,
+                    &entitlement,
+                    &binding.membership_id,
+                    &keys.public_key().to_hex(),
+                ) {
+                    disable_managed_access(&app_state);
+                    return Ok(EvaosTeamsAuthStatus::managed(
+                        "reauth_required",
+                        Some(error),
+                    ));
+                }
                 if !login_identity::custody_checked(&state)? {
                     let verified_binding =
                         match login_identity::binding_for_entitlement(&binding, &entitlement) {
@@ -787,7 +820,13 @@ pub(crate) async fn get_evaos_teams_auth_status(
                     }
                     login_identity::mark_custody_checked(&state)?;
                 }
-                match install_entitlement(&app_state, &keys, &entitlement) {
+                match install_entitlement(
+                    &app_state,
+                    &keys,
+                    &binding,
+                    &binding.membership_id,
+                    &entitlement,
+                ) {
                     Ok(()) => Ok(EvaosTeamsAuthStatus::active(entitlement)),
                     Err(error) => {
                         disable_managed_access(&app_state);
