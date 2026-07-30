@@ -52,7 +52,7 @@ pub(crate) use company_agents::list_hive_company_agent_authorizations;
 use identity_binding::get_identity_binding;
 #[cfg(test)]
 use identity_binding::IdentityBindingResponse;
-use identity_binding::{validate_challenge_for_binding, IdentityBinding};
+use identity_binding::{validate_challenge_for_binding, validate_refresh, IdentityBinding};
 pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
 use identity_rotation::PendingIdentityReset;
 use keychain_migration::{
@@ -741,16 +741,22 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 ));
             }
         };
+        let expected_binding = binding.clone();
         let entitlement = match get_remote_entitlement(&app_state.http_client, &session).await {
             Ok(entitlement) => Ok(entitlement),
             Err(error) if error.status == reqwest::StatusCode::NOT_FOUND => {
                 match bind_identity(&app_state.http_client, &session, &keys, &binding).await {
                     Ok(entitlement) => {
                         match get_identity_binding(&app_state.http_client, &session).await {
-                            Ok(verified_binding) => {
+                            Ok(verified_binding) => validate_refresh(
+                                &verified_binding,
+                                &expected_binding,
+                                &keys.public_key().to_hex(),
+                            )
+                            .map(|()| {
                                 binding = verified_binding;
-                                Ok(entitlement)
-                            }
+                                entitlement
+                            }),
                             Err(error) => Err(error),
                         }
                     }
@@ -764,7 +770,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 if let Err(error) = identity_binding::validate_entitlement_for_binding(
                     &binding,
                     &entitlement,
-                    &binding.membership_id,
+                    &expected_binding.membership_id,
                     &keys.public_key().to_hex(),
                 ) {
                     disable_managed_access(&app_state);

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use super::{http_api::post_json, relay_websocket_url};
 use super::{validate_challenge, validate_entitlement, ChallengeResponse, EvaosTeamsEntitlement};
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(super) struct IdentityBinding {
     pub(super) membership_id: String,
     pub(super) community_id: String,
@@ -33,6 +33,20 @@ pub(super) fn validate_identity_binding(
         return Err("Managed identity selection changed the server-selected scope".to_string());
     }
     Ok(())
+}
+
+pub(super) fn validate_refresh(
+    binding: &IdentityBinding,
+    expected: &IdentityBinding,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    validate_identity_binding(
+        binding,
+        &expected.membership_id,
+        &expected.community_id,
+        &expected.relay_host,
+        expected_public_key,
+    )
 }
 
 pub(super) fn validate_challenge_for_binding(
