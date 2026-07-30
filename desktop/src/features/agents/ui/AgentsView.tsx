@@ -34,6 +34,14 @@ import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { getInheritedAgentDefaults } from "./bakedEnvHelpers";
+import { CompanyVmAgentsSection } from "./CompanyVmAgentsSection";
+import {
+  filterBuiltinWelcomeAgents,
+  filterBuiltinWelcomePersonas,
+  filterBuiltinWelcomeTeams,
+  hasCanonicalCompanyWelcomeAgents,
+} from "@/features/agents/lib/companyAgentCatalog";
+import { useCompanyVmAgents } from "@/features/agents/useCompanyVmAgents";
 
 export function AgentsView() {
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
@@ -42,6 +50,7 @@ export function AgentsView() {
   const inheritedDefaults = getInheritedAgentDefaults(globalConfig, bakedEnv);
   const agents = useManagedAgentActions();
   const personas = usePersonaActions();
+  const companyVmAgents = useCompanyVmAgents();
   const teamImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const aiDefaultsTriggerRef = React.useRef<HTMLButtonElement>(null);
   const [isAiDefaultsOpen, setIsAiDefaultsOpen] = React.useState(false);
@@ -80,6 +89,21 @@ export function AgentsView() {
       Object.values(globalConfig.env_vars).some(
         (value) => value.trim().length > 0,
       ),
+  );
+  const suppressBuiltinWelcome = hasCanonicalCompanyWelcomeAgents(
+    companyVmAgents.data,
+  );
+  const presentedAgents = filterBuiltinWelcomeAgents(
+    agents.managedAgents,
+    suppressBuiltinWelcome,
+  );
+  const presentedPersonas = filterBuiltinWelcomePersonas(
+    personas.libraryPersonas,
+    suppressBuiltinWelcome,
+  );
+  const presentedTeams = filterBuiltinWelcomeTeams(
+    teamActions.teams,
+    suppressBuiltinWelcome,
   );
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; personas.handleImportSnapshotFile and teamActions.handleImportTeamSnapshotFile are stable
   React.useEffect(() => {
@@ -154,7 +178,7 @@ export function AgentsView() {
               defaultModel={inheritedDefaults.model.value}
               actionErrorMessage={agents.actionErrorMessage}
               actionNoticeMessage={agents.actionNoticeMessage}
-              agents={agents.managedAgents}
+              agents={presentedAgents}
               agentsError={
                 agents.managedAgentsQuery.error instanceof Error
                   ? agents.managedAgentsQuery.error
@@ -177,7 +201,7 @@ export function AgentsView() {
                 void agents.handleStartPersona(persona);
               }}
               // Persona props
-              personas={personas.libraryPersonas}
+              personas={presentedPersonas}
               personasError={
                 personas.personasQuery.error instanceof Error
                   ? personas.personasQuery.error
@@ -209,6 +233,19 @@ export function AgentsView() {
               }}
             />
 
+            <CompanyVmAgentsSection
+              agents={companyVmAgents.data}
+              error={
+                companyVmAgents.error instanceof Error
+                  ? companyVmAgents.error
+                  : null
+              }
+              isLoading={companyVmAgents.isLoading}
+              onOpenProfile={(pubkey, options) => {
+                openProfilePanel?.(pubkey, options);
+              }}
+            />
+
             <TeamsSection
               error={
                 teamActions.teamsQuery.error instanceof Error
@@ -230,8 +267,8 @@ export function AgentsView() {
               onImport={() => {
                 teamImportInputRef.current?.click();
               }}
-              personas={personas.libraryPersonas}
-              teams={teamActions.teams}
+              personas={presentedPersonas}
+              teams={presentedTeams}
             />
           </div>
         </div>

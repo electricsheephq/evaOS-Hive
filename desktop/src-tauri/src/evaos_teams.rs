@@ -32,7 +32,10 @@ use device_code::{dashboard_login_url, DeviceCodeProof};
 
 mod authorization;
 mod callback;
+mod company_agents;
 mod device_code;
+
+pub(crate) use company_agents::list_hive_company_agent_authorizations;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";

@@ -209,6 +209,12 @@ type E2eConfig = {
         refreshAfterSeconds: number;
       };
     };
+    /** Tenant-authorized company VM identity classifications for managed Hive. */
+    hiveCompanyAgentAuthorizations?: Array<{
+      publicKey: string;
+      agentId?: string;
+      runtime: string;
+    }>;
     acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
     /** Catalog returned after a successful mocked install. */
     acpRuntimesCatalogAfterInstall?: RawAcpRuntimeCatalogEntry[];
@@ -9761,6 +9767,8 @@ export function maybeInstallE2eTauriMocks() {
         }
         return signedOut;
       }
+      case "list_hive_company_agent_authorizations":
+        return activeConfig?.mock?.hiveCompanyAgentAuthorizations ?? [];
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {
