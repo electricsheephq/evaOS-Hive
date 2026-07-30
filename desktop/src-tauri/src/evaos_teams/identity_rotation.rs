@@ -174,8 +174,13 @@ fn validate_completed_identity_rotation(
     binding: &IdentityBinding,
     entitlement: EvaosTeamsEntitlement,
     expected_membership_id: &str,
+    expected_community_id: &str,
+    expected_relay_host: &str,
     expected_public_key: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
+    if binding.community_id != expected_community_id || binding.relay_host != expected_relay_host {
+        return Err("Managed identity replacement changed the selected scope".to_string());
+    }
     identity_binding::validate_entitlement_for_binding(
         binding,
         &entitlement,
@@ -227,6 +232,8 @@ async fn recover_completed_identity_rotation(
     client: &reqwest::Client,
     token: &str,
     expected_membership_id: &str,
+    expected_community_id: &str,
+    expected_relay_host: &str,
     keys: &Keys,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
@@ -234,7 +241,14 @@ async fn recover_completed_identity_rotation(
     let entitlement = get_remote_entitlement(client, token)
         .await
         .map_err(|_| "managed identity replacement entitlement was not available".to_string())?;
-    validate_completed_identity_rotation(&binding, entitlement, expected_membership_id, &public_key)
+    validate_completed_identity_rotation(
+        &binding,
+        entitlement,
+        expected_membership_id,
+        expected_community_id,
+        expected_relay_host,
+        &public_key,
+    )
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -244,6 +258,8 @@ async fn rotate_lost_identity(
     keys: &Keys,
     binding: &IdentityBinding,
     expected_current_public_key: &str,
+    expected_community_id: &str,
+    expected_relay_host: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
     let challenge: IdentityRotationChallengeResponse = post_json(
@@ -278,18 +294,23 @@ async fn rotate_lost_identity(
     match verified {
         Ok(response) if response.status == "active" => validate_rotated_entitlement(
             response.entitlement,
-            &challenge.challenge.community_id,
-            &challenge.relay_host,
+            expected_community_id,
+            expected_relay_host,
             &public_key,
         ),
-        Ok(_) | Err(_) => {
-            recover_completed_identity_rotation(client, token, &binding.membership_id, keys)
-                .await
-                .map_err(|_| {
+        Ok(_) | Err(_) => recover_completed_identity_rotation(
+            client,
+            token,
+            &binding.membership_id,
+            expected_community_id,
+            expected_relay_host,
+            keys,
+        )
+        .await
+        .map_err(|_| {
                     "Hive could not confirm identity replacement. The replacement key remains safely staged in Keychain; sign in again and retry."
                         .to_string()
-                })
-        }
+                }),
     }
 }
 
@@ -343,6 +364,8 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
                     &app_state.http_client,
                     pending.session.as_str(),
                     &pending.membership_id,
+                    &pending.community_id,
+                    &pending.relay_host,
                     &keys,
                 )
                 .await?
@@ -354,6 +377,8 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
                     &keys,
                     &current_binding,
                     &pending.public_key,
+                    &pending.community_id,
+                    &pending.relay_host,
                 )
                 .await?
             }
@@ -365,6 +390,8 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
             &replacement_binding,
             entitlement,
             &pending.membership_id,
+            &pending.community_id,
+            &pending.relay_host,
             &replacement_public_key,
         )?;
         identity_custody::ensure_enrollment(
@@ -561,6 +588,8 @@ mod tests {
             &binding,
             entitlement.clone(),
             &binding.membership_id,
+            &binding.community_id,
+            &binding.relay_host,
             &public_key,
         )
         .is_ok());
@@ -583,6 +612,42 @@ mod tests {
                 &binding,
                 mismatched,
                 &binding.membership_id,
+                &binding.community_id,
+                &binding.relay_host,
+                &public_key,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn completed_rotation_rejects_scope_drift_when_membership_and_key_match() {
+        let keys = Keys::generate();
+        let public_key = keys.public_key().to_hex();
+        let expected_community = "10000000-0000-4000-8000-000000000004";
+        let expected_relay = "https://relay.example.com";
+        let membership_id = "10000000-0000-4000-8000-000000000003";
+
+        for (community_id, relay_host) in [
+            ("20000000-0000-4000-8000-000000000004", expected_relay),
+            (expected_community, "https://other.example.com"),
+        ] {
+            let binding = IdentityBinding {
+                membership_id: membership_id.to_string(),
+                community_id: community_id.to_string(),
+                relay_host: relay_host.to_string(),
+                public_key: Some(public_key.clone()),
+            };
+            let mut entitlement = fixture_entitlement(&keys);
+            entitlement.community_id = community_id.to_string();
+            entitlement.relay_host = relay_host.to_string();
+
+            assert!(validate_completed_identity_rotation(
+                &binding,
+                entitlement,
+                membership_id,
+                expected_community,
+                expected_relay,
                 &public_key,
             )
             .is_err());
