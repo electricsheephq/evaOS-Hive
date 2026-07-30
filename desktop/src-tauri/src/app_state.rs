@@ -491,12 +491,8 @@ fn resolve_identity_with_store(
                             "buzz-desktop: persisted identity pubkey {}",
                             keyring_keys.public_key().to_hex()
                         );
-                        // Check for a leftover identity.key. If it holds a
-                        // DIFFERENT pubkey, the user imported that key after
-                        // the last boot (pre-fix, import only wrote the file).
-                        // Adopt it into the keyring so the user's intent sticks.
-                        // If the pubkeys match it is a stale leftover from a
-                        // prior migration whose remove_file failed — clean it up.
+                        // Reconcile a leftover identity.key with the verified
+                        // keyring identity; managed mode keeps Keychain authoritative.
                         if legacy_path.exists() {
                             match load_key_file(legacy_path) {
                                 Ok(file_keys)
@@ -515,13 +511,8 @@ fn resolve_identity_with_store(
                                          adopting imported key {}",
                                             file_keys.public_key().to_hex()
                                         );
-                                        // Delegate the store→read-back-verify→marker→delete
-                                        // sequence to `persist_identity_to_keyring`, which owns
-                                        // the marker-before-delete invariant and the fallback
-                                        // logic that keeps identity.key when the marker write
-                                        // fails. A transient keyring failure must not abort
-                                        // boot — the file key is safe and adoption retries next
-                                        // boot when the keyring is reachable again.
+                                        // Preserve the marker-before-delete invariant; retry
+                                        // adoption next boot after a transient keyring failure.
                                         if let Err(e) = persist_identity_to_keyring(
                                             store,
                                             &file_keys,
