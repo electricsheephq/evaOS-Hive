@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   evaosTeamsGateBypassed,
-  evaosTeamsNeedsNativeIdentityRecovery,
   evaosTeamsRefreshDelay,
   evaosTeamsStatusCopy,
 } from "./api.ts";
@@ -53,11 +52,7 @@ test("refresh delay never outlives the managed entitlement", () => {
   );
 });
 
-test("status copy distinguishes identity restoration from reauthentication", () => {
-  assert.match(
-    evaosTeamsStatusCopy(status("identity_restore_required")).title,
-    /Restore/,
-  );
+test("managed identity recovery stays inside Electric reauthentication", () => {
   assert.match(
     evaosTeamsStatusCopy(status("reauth_required")).title,
     /Sign in/,
@@ -76,16 +71,4 @@ test("unmanaged and native status bypass the managed auth gate", () => {
     true,
   );
   assert.equal(evaosTeamsGateBypassed(true, status("signed_out")), false);
-});
-
-test("managed canonical-key mismatch hands control to native recovery", () => {
-  assert.equal(
-    evaosTeamsNeedsNativeIdentityRecovery(status("identity_restore_required")),
-    true,
-  );
-  assert.equal(
-    evaosTeamsNeedsNativeIdentityRecovery(status("signed_out")),
-    false,
-  );
-  assert.equal(evaosTeamsNeedsNativeIdentityRecovery(null), false);
 });

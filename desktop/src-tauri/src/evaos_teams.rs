@@ -1,8 +1,9 @@
-//! Electric-only managed admission for Hive.
+//! Electric-only managed admission and identity recovery for Hive.
 //!
 //! This adapter deliberately reuses Buzz's resolved native identity and native
-//! workspace/runtime paths. Electric stores only an opaque desktop session; it
-//! never receives or persists the native private key.
+//! workspace/runtime paths. Electric stores an opaque desktop session plus an
+//! end-to-end encrypted recovery envelope; private key plaintext remains inside
+//! the native process and macOS Keychain.
 #![cfg_attr(not(feature = "evaos-teams-managed"), allow(dead_code, unused_imports))]
 
 use std::{
@@ -39,6 +40,8 @@ mod callback;
 mod company_agents;
 mod device_code;
 mod http_api;
+#[cfg(feature = "evaos-teams-managed")]
+mod identity_custody;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
@@ -130,10 +133,6 @@ impl EvaosTeamsAuthStatus {
             entitlement: Some(entitlement),
         }
     }
-
-    fn identity_restore_required(message: impl Into<String>) -> Self {
-        Self::managed("identity_restore_required", Some(message.into()))
-    }
 }
 
 #[derive(Default)]
@@ -141,6 +140,7 @@ struct ManagedRuntime {
     initialized: bool,
     session: Option<Zeroizing<String>>,
     logout_pending: bool,
+    custody_checked: bool,
 }
 
 /// Backend-only managed session state.
@@ -439,6 +439,7 @@ fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<Manag
         initialized: true,
         session,
         logout_pending,
+        custody_checked: false,
     })
 }
 
@@ -600,6 +601,17 @@ async fn bind_identity(
     expected_membership_id: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
+    let challenge = issue_key_challenge(client, token, &public_key, expected_membership_id).await?;
+    verify_key_challenge(client, token, &challenge, keys, expected_membership_id).await
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+async fn issue_key_challenge(
+    client: &reqwest::Client,
+    token: &str,
+    public_key: &str,
+    expected_membership_id: &str,
+) -> Result<ChallengeResponse, String> {
     let challenge: ChallengeResponse = post_json(
         client,
         "evaos-teams-access",
@@ -616,7 +628,20 @@ async fn bind_identity(
     )
     .await
     .map_err(|error| format!("Managed key challenge was not available: {error}"))?;
-    let signed_event = signed_challenge(&challenge, keys, expected_membership_id)?;
+    validate_challenge(&challenge, public_key, expected_membership_id)?;
+    Ok(challenge)
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+async fn verify_key_challenge(
+    client: &reqwest::Client,
+    token: &str,
+    challenge: &ChallengeResponse,
+    keys: &Keys,
+    expected_membership_id: &str,
+) -> Result<EvaosTeamsEntitlement, String> {
+    let public_key = keys.public_key().to_hex();
+    let signed_event = signed_challenge(challenge, keys, expected_membership_id)?;
     let verified: EntitlementResponse = post_json(
         client,
         "evaos-teams-access",
@@ -631,7 +656,7 @@ async fn bind_identity(
     if verified.status != "active" {
         return Err("Managed key verification did not activate access".to_string());
     }
-    bind_verified_entitlement(verified.entitlement, &challenge, &public_key)
+    bind_verified_entitlement(verified.entitlement, challenge, &public_key)
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -654,6 +679,7 @@ fn persist_active_session(
         initialized: true,
         session: Some(Zeroizing::new(session)),
         logout_pending: false,
+        custody_checked: true,
     };
     Ok(EvaosTeamsAuthStatus::active(entitlement))
 }
@@ -671,8 +697,44 @@ fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(),
         initialized: true,
         session: Some(Zeroizing::new(session.to_string())),
         logout_pending: false,
+        custody_checked: false,
     };
     Ok(())
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+fn custody_checked(state: &EvaosTeamsState) -> Result<bool, String> {
+    initialize_runtime(state)?;
+    state
+        .runtime
+        .lock()
+        .map_err(|error| error.to_string())
+        .map(|runtime| runtime.custody_checked)
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+fn mark_custody_checked(state: &EvaosTeamsState) -> Result<(), String> {
+    initialize_runtime(state)?;
+    state
+        .runtime
+        .lock()
+        .map_err(|error| error.to_string())?
+        .custody_checked = true;
+    Ok(())
+}
+
+fn binding_for_entitlement(
+    binding: &IdentityBinding,
+    entitlement: &EvaosTeamsEntitlement,
+) -> Result<IdentityBinding, String> {
+    let public_key = entitlement
+        .public_key
+        .clone()
+        .ok_or_else(|| "Managed entitlement did not include the verified identity".to_string())?;
+    Ok(IdentityBinding {
+        membership_id: binding.membership_id.clone(),
+        public_key: Some(public_key),
+    })
 }
 
 /// Return current managed-auth status and perform one bounded entitlement
@@ -720,7 +782,12 @@ pub(crate) async fn get_evaos_teams_auth_status(
             Ok(keys) => keys,
             Err(error) => {
                 disable_managed_access(&app_state);
-                return Ok(EvaosTeamsAuthStatus::identity_restore_required(error));
+                return Ok(EvaosTeamsAuthStatus::managed(
+                    "reauth_required",
+                    Some(format!(
+                        "Sign in again with Electric Sheep to recover this device's Hive identity: {error}"
+                    )),
+                ));
             }
         };
         let binding = match get_identity_binding(&app_state.http_client, &session).await {
@@ -737,7 +804,12 @@ pub(crate) async fn get_evaos_teams_auth_status(
             Ok(identity_bound) => identity_bound,
             Err(error) => {
                 disable_managed_access(&app_state);
-                return Ok(EvaosTeamsAuthStatus::identity_restore_required(error));
+                return Ok(EvaosTeamsAuthStatus::managed(
+                    "reauth_required",
+                    Some(format!(
+                        "Sign in again with Electric Sheep to recover this device's Hive identity: {error}"
+                    )),
+                ));
             }
         };
         let entitlement = match get_remote_entitlement(&app_state.http_client, &session).await {
@@ -754,16 +826,36 @@ pub(crate) async fn get_evaos_teams_auth_status(
             Err(error) => Err(format!("Managed access could not be refreshed: {error}")),
         };
         match entitlement {
-            Ok(entitlement) => match install_entitlement(&app_state, &keys, &entitlement) {
-                Ok(()) => Ok(EvaosTeamsAuthStatus::active(entitlement)),
-                Err(error) => {
-                    disable_managed_access(&app_state);
-                    Ok(EvaosTeamsAuthStatus::managed(
-                        "reauth_required",
-                        Some(error),
-                    ))
+            Ok(entitlement) => {
+                if !custody_checked(&state)? {
+                    let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
+                    if let Err(error) = identity_custody::ensure_enrollment(
+                        &app_state.http_client,
+                        &session,
+                        &verified_binding,
+                        &keys,
+                    )
+                    .await
+                    {
+                        disable_managed_access(&app_state);
+                        return Ok(EvaosTeamsAuthStatus::managed(
+                            "reauth_required",
+                            Some(error),
+                        ));
+                    }
+                    mark_custody_checked(&state)?;
                 }
-            },
+                match install_entitlement(&app_state, &keys, &entitlement) {
+                    Ok(()) => Ok(EvaosTeamsAuthStatus::active(entitlement)),
+                    Err(error) => {
+                        disable_managed_access(&app_state);
+                        Ok(EvaosTeamsAuthStatus::managed(
+                            "reauth_required",
+                            Some(error),
+                        ))
+                    }
+                }
+            }
             Err(error) => {
                 disable_managed_access(&app_state);
                 Ok(EvaosTeamsAuthStatus::managed(
@@ -875,32 +967,64 @@ pub(crate) async fn start_evaos_teams_login(
 
         let claim =
             claim_device_code(&app_state.http_client, &code, &device_code_proof.verifier).await?;
-        persist_pending_session(&state, &claim.desktop_session)?;
-        let keys = match native_identity_for_managed_verification(&app_state) {
-            Ok(keys) => keys,
-            Err(error) => return Ok(EvaosTeamsAuthStatus::identity_restore_required(error)),
-        };
-        let binding = get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
-        if let Err(error) = verify_existing_native_identity(&binding, &keys) {
-            return Ok(EvaosTeamsAuthStatus::identity_restore_required(error));
+        if let Err(error) = persist_pending_session(&state, &claim.desktop_session) {
+            let _ = remote_logout(&app_state.http_client, &claim.desktop_session).await;
+            return Err(error);
         }
-        let entitlement = bind_identity(
-            &app_state.http_client,
-            &claim.desktop_session,
-            &keys,
-            &binding.membership_id,
-        )
-        .await?;
-        let rollback_session = claim.desktop_session.clone();
-        let result = persist_active_session(
-            &state,
-            &app_state,
-            claim.desktop_session,
-            &keys,
-            entitlement,
-        );
+        let result = async {
+            let binding =
+                get_identity_binding(&app_state.http_client, &claim.desktop_session).await?;
+            let local_keys = native_identity_for_managed_verification(&app_state);
+            let local_identity_matches = local_keys
+                .as_ref()
+                .ok()
+                .and_then(|keys| verify_existing_native_identity(&binding, keys).ok());
+            let (keys, entitlement) = if local_identity_matches.is_some() {
+                let keys = local_keys.map_err(|error| {
+                    format!("The local Hive identity could not be verified: {error}")
+                })?;
+                let entitlement = bind_identity(
+                    &app_state.http_client,
+                    &claim.desktop_session,
+                    &keys,
+                    &binding.membership_id,
+                )
+                .await?;
+                let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
+                identity_custody::ensure_enrollment(
+                    &app_state.http_client,
+                    &claim.desktop_session,
+                    &verified_binding,
+                    &keys,
+                )
+                .await?;
+                (keys, entitlement)
+            } else if binding.public_key.is_some() {
+                identity_custody::recover_identity(
+                    &app,
+                    &app_state,
+                    &app_state.http_client,
+                    &claim.desktop_session,
+                    &binding,
+                )
+                .await?
+            } else {
+                return Err(
+                    "Hive could not establish a native identity for this new membership"
+                        .to_string(),
+                );
+            };
+            persist_active_session(
+                &state,
+                &app_state,
+                claim.desktop_session,
+                &keys,
+                entitlement,
+            )
+        }
+        .await;
         if result.is_err() {
-            let _ = remote_logout(&app_state.http_client, &rollback_session).await;
+            let _ = begin_managed_logout(&app, &state, &app_state).await;
         }
         result
     }

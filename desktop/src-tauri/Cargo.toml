@@ -100,6 +100,9 @@ mesh-llm-node = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "f455d
 mesh-llm-system = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "f455d493a2ae82baf2a326e2d0fda351433b4b30", package = "mesh-llm-system", optional = true }
 mesh-llm-events = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "f455d493a2ae82baf2a326e2d0fda351433b4b30", package = "mesh-llm-events", optional = true }
 base64 = "0.22"
+aes-gcm = "0.11"
+getrandom = "0.3"
+hpke = { version = "0.14", default-features = false, features = ["aes", "alloc", "getrandom", "nistp"] }
 sha2 = "0.11"
 tar = "0.4"
 bzip2 = "0.6"
