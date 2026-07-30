@@ -29,9 +29,19 @@ const status = (phase, refreshAfterSeconds) => ({
 });
 
 test("refresh delay is bounded by the validated entitlement interval", () => {
-  assert.equal(evaosTeamsRefreshDelay(status("active", 29)), 30_000);
-  assert.equal(evaosTeamsRefreshDelay(status("active", 300)), 300_000);
-  assert.equal(evaosTeamsRefreshDelay(status("active", 3601)), 3_600_000);
+  const now = Date.parse("2029-01-01T00:00:00Z");
+  assert.equal(evaosTeamsRefreshDelay(status("active", 29), now), 30_000);
+  assert.equal(evaosTeamsRefreshDelay(status("active", 300), now), 300_000);
+  assert.equal(evaosTeamsRefreshDelay(status("active", 3601), now), 3_600_000);
+});
+
+test("refresh delay never outlives the managed entitlement", () => {
+  const expiringStatus = status("active", 300);
+  expiringStatus.entitlement.expiresAt = "2029-01-01T00:00:20Z";
+  assert.equal(
+    evaosTeamsRefreshDelay(expiringStatus, Date.parse("2029-01-01T00:00:00Z")),
+    20_000,
+  );
 });
 
 test("status copy distinguishes identity restoration from reauthentication", () => {

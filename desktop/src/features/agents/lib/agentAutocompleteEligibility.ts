@@ -33,16 +33,20 @@ export function relayAgentIsSharedWithUser(
 export function getMentionableAgentPubkeys({
   currentPubkey,
   managedAgentPubkeys,
+  authorizedAgentPubkeys = [],
   relayAgents,
   sharedChannelIds,
 }: {
   currentPubkey?: string | null;
   managedAgentPubkeys: Iterable<string>;
+  authorizedAgentPubkeys?: Iterable<string>;
   relayAgents: readonly RelayAgent[] | undefined;
   sharedChannelIds: ReadonlySet<string>;
 }) {
   const pubkeys = new Set(
-    [...managedAgentPubkeys].map((pubkey) => normalizePubkey(pubkey)),
+    [...managedAgentPubkeys, ...authorizedAgentPubkeys].map((pubkey) =>
+      normalizePubkey(pubkey),
+    ),
   );
 
   for (const agent of relayAgents ?? []) {

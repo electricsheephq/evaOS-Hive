@@ -50,9 +50,19 @@ export function listHiveCompanyAgentAuthorizations() {
   );
 }
 
-export function evaosTeamsRefreshDelay(status: EvaosTeamsAuthStatus) {
+export function evaosTeamsRefreshDelay(
+  status: EvaosTeamsAuthStatus,
+  now = Date.now(),
+) {
   const seconds = status.entitlement?.refreshAfterSeconds ?? 300;
-  return Math.min(Math.max(seconds, 30), 3600) * 1000;
+  const refreshDelay = Math.min(Math.max(seconds, 30), 3600) * 1000;
+  const expiresAt = status.entitlement?.expiresAt
+    ? Date.parse(status.entitlement.expiresAt)
+    : Number.NaN;
+  if (!Number.isFinite(expiresAt)) {
+    return refreshDelay;
+  }
+  return Math.max(1_000, Math.min(refreshDelay, expiresAt - now));
 }
 
 export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {

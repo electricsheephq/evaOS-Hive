@@ -106,9 +106,10 @@ test("relayAgentIsSharedWithUser: accepts allowlist agents for the current user"
   );
 });
 
-test("getMentionableAgentPubkeys: keeps managed agents and shared relay agents", () => {
+test("getMentionableAgentPubkeys: keeps managed, authorized, and shared relay agents", () => {
   const result = getMentionableAgentPubkeys({
     managedAgentPubkeys: [PUB_A],
+    authorizedAgentPubkeys: [PUB_D],
     currentPubkey: CURRENT_PUBKEY,
     relayAgents: [
       {
@@ -133,7 +134,7 @@ test("getMentionableAgentPubkeys: keeps managed agents and shared relay agents",
     sharedChannelIds: new Set(["general"]),
   });
 
-  assert.deepEqual(result, new Set([PUB_A, PUB_B, PUB_C]));
+  assert.deepEqual(result, new Set([PUB_A, PUB_D, PUB_B, PUB_C]));
 });
 
 test("isAgentIdentityInManagedList: keeps people and only current managed agent identities", () => {

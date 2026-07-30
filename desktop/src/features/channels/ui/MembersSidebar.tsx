@@ -11,6 +11,7 @@ import {
   coalesceAgentAutocompleteCandidates,
   isAgentIdentityInManagedList,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
+import { useCompanyVmAgents } from "@/features/agents/useCompanyVmAgents";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
@@ -184,6 +185,7 @@ export function MembersSidebar({
     managedAgentsQuery,
     relayAgentsQuery,
   } = useClassifiedMembers(rawMembers, currentPubkey);
+  const companyVmAgentsQuery = useCompanyVmAgents();
   const activeMembers = React.useMemo(
     () =>
       [...people, ...bots].sort((left, right) =>
@@ -271,7 +273,12 @@ export function MembersSidebar({
         .map((member) => member.displayName?.trim().toLowerCase())
         .filter((label): label is string => Boolean(label)),
     );
-    const managedAgentPubkeys = new Set(managedAgentsByPubkey.keys());
+    const allowedAgentPubkeys = new Set([
+      ...managedAgentsByPubkey.keys(),
+      ...(companyVmAgentsQuery.data ?? []).map((agent) =>
+        normalizePubkey(agent.pubkey),
+      ),
+    ]);
 
     const addCandidate = (candidate: AddMemberSearchCandidate) => {
       const pubkey = normalizePubkey(candidate.pubkey);
@@ -282,7 +289,7 @@ export function MembersSidebar({
           )) ||
         memberPubkeys.has(pubkey) ||
         isArchivedDiscovery(pubkey) ||
-        !isAgentIdentityInManagedList(candidate, managedAgentPubkeys)
+        !isAgentIdentityInManagedList(candidate, allowedAgentPubkeys)
       ) {
         return;
       }
@@ -361,6 +368,7 @@ export function MembersSidebar({
     });
   }, [
     canAddMembers,
+    companyVmAgentsQuery.data,
     isArchivedDiscovery,
     currentPubkey,
     managedAgentsQuery.data,
@@ -373,6 +381,7 @@ export function MembersSidebar({
   const isAddSearchLoading =
     userSearchQuery.isLoading ||
     managedAgentsQuery.isLoading ||
+    companyVmAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading;
   const handlePeopleSearchScroll = useUserSearchFetchMoreOnScroll(
     userSearchQuery,

@@ -32,19 +32,16 @@ use callback::{login_callback, LoginCallback};
 #[cfg(test)]
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, DeviceCodeProof};
+use http_api::{post_json, ApiFailure};
 
 mod authorization;
 mod callback;
 mod company_agents;
 mod device_code;
+mod http_api;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
-const SUPABASE_ORIGIN: &str = "https://rhfojelkgtwcxnrfhtlj.supabase.co";
-// The publishable client identifier is injected only into managed builds. It
-// is intentionally absent from source control and is not an authorization
-// credential; authorization still comes only from the opaque desktop session.
-const SUPABASE_PUBLISHABLE_KEY: Option<&str> = option_env!("HIVE_SUPABASE_PUBLISHABLE_KEY");
 // Keep the legacy internal service name so upgrades retain and can revoke the
 // existing opaque desktop session. This identifier is not product copy.
 const KEYRING_SERVICE: &str = "evaos-teams-desktop";
@@ -53,7 +50,6 @@ const LOGOUT_PENDING_KEY: &str = "logout_pending";
 const KEY_BINDING_KIND: u16 = 27_235;
 const KEY_BINDING_SCHEMA: &str = "evaos.buzz_key_binding.v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 fn managed_store() -> &'static SecretStore {
     static STORE: OnceLock<SecretStore> = OnceLock::new();
     STORE.get_or_init(|| SecretStore::keyring(KEYRING_SERVICE))
@@ -209,81 +205,6 @@ struct LogoutResponse {
 struct ClaimResponse {
     desktop_session: String,
     desktop_session_expires_at: String,
-}
-
-#[derive(Debug)]
-struct ApiFailure {
-    status: reqwest::StatusCode,
-    code: String,
-}
-
-impl std::fmt::Display for ApiFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "HTTP {} ({})", self.status, self.code)
-    }
-}
-
-impl ApiFailure {
-    fn means_session_is_absent(&self) -> bool {
-        matches!(self.status.as_u16(), 401 | 404)
-    }
-}
-
-fn functions_url(name: &str) -> Result<Url, String> {
-    Url::parse(&format!("{SUPABASE_ORIGIN}/functions/v1/{name}"))
-        .map_err(|error| format!("invalid managed API URL: {error}"))
-}
-
-async fn post_json<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
-    function: &str,
-    bearer: Option<&str>,
-    body: serde_json::Value,
-) -> Result<T, ApiFailure> {
-    let publishable_key = SUPABASE_PUBLISHABLE_KEY
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| ApiFailure {
-            status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-            code: "missing_build_configuration".to_string(),
-        })?;
-    let url = functions_url(function).map_err(|code| ApiFailure {
-        status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-        code,
-    })?;
-    let mut request = client
-        .post(url)
-        .header("apikey", publishable_key)
-        .header(
-            "x-client-info",
-            format!("hive-desktop/{}", env!("CARGO_PKG_VERSION")),
-        )
-        .timeout(REQUEST_TIMEOUT)
-        .json(&body);
-    if let Some(token) = bearer {
-        request = request.bearer_auth(token);
-    }
-    let response = request.send().await.map_err(|error| ApiFailure {
-        status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
-        code: format!("network_error:{}", error.is_timeout()),
-    })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(ApiFailure {
-            status,
-            code: "request_failed".to_string(),
-        });
-    }
-    let value = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|_| ApiFailure {
-            status,
-            code: "invalid_json".to_string(),
-        })?;
-    serde_json::from_value(value).map_err(|_| ApiFailure {
-        status,
-        code: "invalid_response".to_string(),
-    })
 }
 
 fn relay_websocket_url(relay_host: &str) -> Result<String, String> {
@@ -577,12 +498,19 @@ fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
 
 #[cfg(feature = "evaos-teams-managed")]
 async fn retry_pending_logout(
+    app: &tauri::AppHandle,
     client: &reqwest::Client,
     state: &EvaosTeamsState,
     app_state: &AppState,
     session: &str,
 ) -> EvaosTeamsAuthStatus {
     disable_managed_access(app_state);
+    if let Err(error) = authorization::revoke_managed_access(app, app_state) {
+        return EvaosTeamsAuthStatus::managed(
+            "logout_pending",
+            Some(format!("Local agent shutdown is still pending: {error}")),
+        );
+    }
     if let Err(error) = remote_logout(client, session).await {
         if !error.means_session_is_absent() {
             return EvaosTeamsAuthStatus::managed(
@@ -599,6 +527,7 @@ async fn retry_pending_logout(
 
 #[cfg(feature = "evaos-teams-managed")]
 async fn begin_managed_logout(
+    app: &tauri::AppHandle,
     state: &EvaosTeamsState,
     app_state: &AppState,
 ) -> Result<EvaosTeamsAuthStatus, String> {
@@ -617,7 +546,7 @@ async fn begin_managed_logout(
     if let Ok(mut runtime) = state.runtime.lock() {
         runtime.logout_pending = true;
     }
-    Ok(retry_pending_logout(&app_state.http_client, state, app_state, &session).await)
+    Ok(retry_pending_logout(app, &app_state.http_client, state, app_state, &session).await)
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -750,12 +679,13 @@ fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(),
 /// refresh. Unmanaged builds retain the native bypass.
 #[tauri::command]
 pub(crate) async fn get_evaos_teams_auth_status(
+    app: tauri::AppHandle,
     state: State<'_, EvaosTeamsState>,
     app_state: State<'_, AppState>,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
-        let _ = (&state, &app_state);
+        let _ = (&app, &state, &app_state);
         Ok(EvaosTeamsAuthStatus::unmanaged())
     }
 
@@ -777,9 +707,14 @@ pub(crate) async fn get_evaos_teams_auth_status(
             }
         };
         if logout_pending {
-            return Ok(
-                retry_pending_logout(&app_state.http_client, &state, &app_state, &session).await,
-            );
+            return Ok(retry_pending_logout(
+                &app,
+                &app_state.http_client,
+                &state,
+                &app_state,
+                &session,
+            )
+            .await);
         }
         let keys = match native_identity_for_managed_verification(&app_state) {
             Ok(keys) => keys,
@@ -988,10 +923,7 @@ pub(crate) async fn logout_evaos_teams(
     #[cfg(feature = "evaos-teams-managed")]
     {
         let _operation = state.operation.lock().await;
-        let revocation = authorization::revoke_managed_access(&app, &app_state);
-        let status = begin_managed_logout(&state, &app_state).await?;
-        revocation?;
-        Ok(status)
+        begin_managed_logout(&app, &state, &app_state).await
     }
 }
 

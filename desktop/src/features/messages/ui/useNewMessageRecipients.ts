@@ -9,6 +9,7 @@ import {
   getMentionableAgentPubkeys,
   getSharedChannelIds,
 } from "@/features/agents/lib/agentAutocompleteEligibility";
+import { useCompanyVmAgents } from "@/features/agents/useCompanyVmAgents";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import {
@@ -87,6 +88,7 @@ export function useNewMessageRecipients({
 
   const identityQuery = useIdentityQuery();
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: active });
+  const companyVmAgentsQuery = useCompanyVmAgents();
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: active });
   const channelsQuery = useChannelsQuery({ enabled: active });
   const userSearchQuery = useInfiniteUserSearchQuery(deferredSearchQuery, {
@@ -112,6 +114,9 @@ export function useNewMessageRecipients({
     const eligibleAgentPubkeys = getMentionableAgentPubkeys({
       currentPubkey,
       managedAgentPubkeys: (managedAgentsQuery.data ?? []).map(
+        (agent) => agent.pubkey,
+      ),
+      authorizedAgentPubkeys: (companyVmAgentsQuery.data ?? []).map(
         (agent) => agent.pubkey,
       ),
       relayAgents: relayAgentsQuery.data,
@@ -217,6 +222,7 @@ export function useNewMessageRecipients({
     });
   }, [
     channelsQuery.data,
+    companyVmAgentsQuery.data,
     currentPubkey,
     deferredSearchQuery,
     isArchivedDiscovery,
@@ -229,6 +235,7 @@ export function useNewMessageRecipients({
   const isDirectoryLoading =
     userSearchQuery.isLoading ||
     managedAgentsQuery.isLoading ||
+    companyVmAgentsQuery.isLoading ||
     relayAgentsQuery.isLoading ||
     channelsQuery.isLoading;
   React.useEffect(() => {
