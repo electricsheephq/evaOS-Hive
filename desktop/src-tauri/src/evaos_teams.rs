@@ -467,6 +467,13 @@ fn current_session(state: &EvaosTeamsState) -> Result<(Zeroizing<String>, bool),
 }
 
 #[cfg(feature = "evaos-teams-managed")]
+fn previous_session_to_revoke(current: Option<&str>, claimed: &str) -> Option<String> {
+    current
+        .filter(|session| *session != claimed)
+        .map(str::to_string)
+}
+
+#[cfg(feature = "evaos-teams-managed")]
 async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiFailure> {
     let response: LogoutResponse = post_json(
         client,
@@ -778,7 +785,16 @@ pub(crate) async fn get_evaos_teams_auth_status(
             Ok(entitlement) => {
                 if !login_identity::custody_checked(&state)? {
                     let verified_binding =
-                        login_identity::binding_for_entitlement(&binding, &entitlement)?;
+                        match login_identity::binding_for_entitlement(&binding, &entitlement) {
+                            Ok(verified_binding) => verified_binding,
+                            Err(error) => {
+                                disable_managed_access(&app_state);
+                                return Ok(EvaosTeamsAuthStatus::managed(
+                                    "reauth_required",
+                                    Some(error),
+                                ));
+                            }
+                        };
                     if let Err(error) = identity_custody::ensure_enrollment(
                         &app_state.http_client,
                         &session,
@@ -918,6 +934,24 @@ pub(crate) async fn start_evaos_teams_login(
 
         let claim =
             claim_device_code(&app_state.http_client, &code, &device_code_proof.verifier).await?;
+        initialize_runtime(&state)?;
+        let previous_session = {
+            let runtime = state.runtime.lock().map_err(|error| error.to_string())?;
+            previous_session_to_revoke(
+                runtime.session.as_ref().map(|session| session.as_str()),
+                &claim.desktop_session,
+            )
+        };
+        if let Some(previous_session) = previous_session {
+            if let Err(error) = remote_logout(&app_state.http_client, &previous_session).await {
+                if !error.means_session_is_absent() {
+                    let _ = remote_logout(&app_state.http_client, &claim.desktop_session).await;
+                    return Err(format!(
+                        "Could not revoke the previous managed session: {error}"
+                    ));
+                }
+            }
+        }
         if let Err(error) = persist_pending_session(&state, &claim.desktop_session) {
             let _ = remote_logout(&app_state.http_client, &claim.desktop_session).await;
             return Err(error);

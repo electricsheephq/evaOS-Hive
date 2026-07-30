@@ -25,6 +25,13 @@ test("managed sign-in exposes only Electric OAuth recovery", () => {
   }
 });
 
+test("managed recovery keeps the action error after refreshing rolled-back status", () => {
+  assert.match(
+    authGate,
+    /const actionMessage =[\s\S]*await refresh\(\);[\s\S]*setError\(actionMessage\);/,
+  );
+});
+
 test("unmanaged native identity import remains available upstream", () => {
   assert.match(nativeImportForm, /Private key/);
   assert.match(nativeImportForm, /nsec/i);

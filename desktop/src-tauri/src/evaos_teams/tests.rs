@@ -332,6 +332,17 @@ fn managed_store_shape_allows_only_opaque_session_and_logout_marker() {
     assert!(runtime_from_entries(Some(forbidden)).is_err());
 }
 
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn entitlement_binding_requires_the_verified_public_key() {
+    let binding = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        public_key: None,
+    };
+
+    assert!(login_identity::binding_for_entitlement(&binding, &entitlement(None)).is_err());
+}
+
 #[test]
 fn newly_claimed_session_remains_logout_pending_until_login_commits() {
     let runtime =
@@ -340,6 +351,20 @@ fn newly_claimed_session_remains_logout_pending_until_login_commits() {
     assert!(runtime.session.is_some());
     assert!(runtime.logout_pending);
     assert!(!runtime.custody_checked);
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn reauthentication_revokes_only_a_distinct_previous_session() {
+    assert_eq!(
+        previous_session_to_revoke(Some("previous-session"), "claimed-session"),
+        Some("previous-session".to_string())
+    );
+    assert_eq!(
+        previous_session_to_revoke(Some("claimed-session"), "claimed-session"),
+        None
+    );
+    assert_eq!(previous_session_to_revoke(None, "claimed-session"), None);
 }
 
 #[test]

@@ -104,12 +104,12 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     try {
       setStatus(await action());
     } catch (actionError) {
-      setError(
+      const actionMessage =
         actionError instanceof Error
           ? actionError.message
-          : String(actionError),
-      );
+          : String(actionError);
       await refresh();
+      setError(actionMessage);
     } finally {
       setWorking(false);
     }
