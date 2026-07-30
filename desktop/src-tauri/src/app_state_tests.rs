@@ -922,8 +922,7 @@ fn signing_keys_returns_ok_when_normal() {
     let state = build_app_state();
     #[cfg(feature = "evaos-teams-managed")]
     {
-        *state.relay_url_override.lock().unwrap() =
-            Some("wss://relay.example.com".to_string());
+        *state.relay_url_override.lock().unwrap() = Some("wss://relay.example.com".to_string());
     }
     state
         .identity_lost

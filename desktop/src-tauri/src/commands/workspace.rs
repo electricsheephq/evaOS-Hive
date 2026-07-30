@@ -341,11 +341,8 @@ mod managed_tests {
             None,
         )
         .is_ok());
-        assert!(validate_managed_workspace_request(
-            None,
-            "wss://relay.example.com",
-            None,
-        )
-        .is_err());
+        assert!(
+            validate_managed_workspace_request(None, "wss://relay.example.com", None,).is_err()
+        );
     }
 }

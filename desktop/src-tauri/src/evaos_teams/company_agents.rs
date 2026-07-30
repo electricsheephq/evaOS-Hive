@@ -165,11 +165,7 @@ mod tests {
         invalid_id.agent_id = Some("tars/admin".to_string());
 
         assert_eq!(
-            sanitize_company_agent_authorizations(vec![
-                invalid_key,
-                invalid_runtime,
-                invalid_id,
-            ]),
+            sanitize_company_agent_authorizations(vec![invalid_key, invalid_runtime, invalid_id,]),
             vec![HiveCompanyAgentAuthorization {
                 public_key: "c".repeat(64),
                 agent_id: None,
@@ -197,8 +193,7 @@ mod tests {
 
         let projection: CollaborationProjection = serde_json::from_value(payload).unwrap();
         let serialized =
-            serde_json::to_value(sanitize_company_agent_authorizations(projection.agents))
-                .unwrap();
+            serde_json::to_value(sanitize_company_agent_authorizations(projection.agents)).unwrap();
         assert_eq!(
             serialized,
             serde_json::json!([{

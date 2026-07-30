@@ -21,11 +21,11 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{app_state::AppState, secret_store::SecretStore};
-pub(crate) use authorization::require_managed_authorization;
 use authorization::native_identity_for_managed_verification;
-use callback::{login_callback, LoginCallback};
+pub(crate) use authorization::require_managed_authorization;
 #[cfg(test)]
 use callback::callback_device_code;
+use callback::{login_callback, LoginCallback};
 #[cfg(test)]
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, DeviceCodeProof};
