@@ -42,6 +42,15 @@ test("refresh delay never outlives the managed entitlement", () => {
     evaosTeamsRefreshDelay(expiringStatus, Date.parse("2029-01-01T00:00:00Z")),
     20_000,
   );
+  expiringStatus.entitlement.expiresAt = "2029-01-01T00:00:00.500Z";
+  assert.equal(
+    evaosTeamsRefreshDelay(expiringStatus, Date.parse("2029-01-01T00:00:00Z")),
+    500,
+  );
+  assert.equal(
+    evaosTeamsRefreshDelay(expiringStatus, Date.parse("2029-01-01T00:00:01Z")),
+    0,
+  );
 });
 
 test("status copy distinguishes identity restoration from reauthentication", () => {

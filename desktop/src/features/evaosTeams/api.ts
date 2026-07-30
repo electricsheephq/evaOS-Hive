@@ -62,7 +62,7 @@ export function evaosTeamsRefreshDelay(
   if (!Number.isFinite(expiresAt)) {
     return refreshDelay;
   }
-  return Math.max(1_000, Math.min(refreshDelay, expiresAt - now));
+  return Math.max(0, Math.min(refreshDelay, expiresAt - now));
 }
 
 export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
