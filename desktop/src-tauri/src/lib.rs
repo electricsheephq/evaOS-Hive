@@ -76,21 +76,59 @@ use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
 const INITIAL_RENDER_READY_EVENT: &str = "initial-render-ready";
 
+static ACTIVE_PENDING_EVENT_PUBLISHER_STARTED: AtomicBool = AtomicBool::new(false);
+
+fn start_pending_event_publisher_once(started: &AtomicBool, start: impl FnOnce()) -> bool {
+    if started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    start();
+    true
+}
+
 pub(crate) fn spawn_active_pending_event_publisher(app_handle: tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        use std::time::Duration;
-        use tauri::Manager;
-        loop {
-            let state = app_handle.state::<AppState>();
-            if let Err(error) =
-                managed_agents::persona_events::flush_active_pending_events(&app_handle, &state)
-                    .await
-            {
-                eprintln!("buzz-desktop: event-flush: {error}");
+    start_pending_event_publisher_once(&ACTIVE_PENDING_EVENT_PUBLISHER_STARTED, || {
+        tauri::async_runtime::spawn(async move {
+            use std::time::Duration;
+            use tauri::Manager;
+            loop {
+                let state = app_handle.state::<AppState>();
+                if let Err(error) =
+                    managed_agents::persona_events::flush_active_pending_events(&app_handle, &state)
+                        .await
+                {
+                    eprintln!("buzz-desktop: event-flush: {error}");
+                }
+                tokio::time::sleep(Duration::from_secs(30)).await;
             }
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
+        });
     });
+}
+
+#[cfg(test)]
+mod pending_event_publisher_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn repeated_start_attempts_create_exactly_one_worker() {
+        let started = AtomicBool::new(false);
+        let workers = AtomicUsize::new(0);
+
+        let first = start_pending_event_publisher_once(&started, || {
+            workers.fetch_add(1, Ordering::SeqCst);
+        });
+        let second = start_pending_event_publisher_once(&started, || {
+            workers.fetch_add(1, Ordering::SeqCst);
+        });
+
+        assert!(first);
+        assert!(!second);
+        assert_eq!(workers.load(Ordering::SeqCst), 1);
+    }
 }
 
 fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
