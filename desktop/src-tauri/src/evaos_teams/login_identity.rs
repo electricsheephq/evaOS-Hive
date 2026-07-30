@@ -110,6 +110,12 @@ pub(super) async fn complete_login(
             canonical_public_key,
         )?;
         if let Some(keys) = legacy_candidate {
+            let expected_local_public_key = app_state
+                .keys
+                .lock()
+                .map_err(|error| error.to_string())?
+                .public_key()
+                .to_hex();
             let entitlement = bind_identity(
                 &app_state.http_client,
                 &desktop_session,
@@ -127,12 +133,6 @@ pub(super) async fn complete_login(
             )
             .await?;
             authorization::prepare_managed_identity_recovery(app, app_state)?;
-            let expected_local_public_key = app_state
-                .keys
-                .lock()
-                .map_err(|error| error.to_string())?
-                .public_key()
-                .to_hex();
             let data_dir = app
                 .path()
                 .app_data_dir()

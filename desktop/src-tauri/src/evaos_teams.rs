@@ -46,7 +46,9 @@ mod keychain_migration;
 #[cfg(feature = "evaos-teams-managed")]
 mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
-use keychain_migration::{preserve_legacy_identity_entries, validated_runtime_entries};
+use keychain_migration::{
+    pending_session_entries, preserve_legacy_identity_entries, validated_runtime_entries,
+};
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 // Keep the legacy internal service name so upgrades retain and can revoke the
@@ -667,13 +669,6 @@ async fn verify_key_challenge(
         return Err("Managed key verification did not activate access".to_string());
     }
     bind_verified_entitlement(verified.entitlement, challenge, &public_key)
-}
-
-fn pending_session_entries(session: &str) -> HashMap<String, String> {
-    HashMap::from([
-        (SESSION_KEY.to_string(), session.to_string()),
-        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
-    ])
 }
 
 #[cfg(feature = "evaos-teams-managed")]

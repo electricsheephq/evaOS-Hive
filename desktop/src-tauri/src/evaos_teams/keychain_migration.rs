@@ -40,6 +40,13 @@ pub(super) fn preserve_legacy_identity_entries(
     Ok(preserved)
 }
 
+pub(super) fn pending_session_entries(session: &str) -> HashMap<String, String> {
+    HashMap::from([
+        (SESSION_KEY.to_string(), session.to_string()),
+        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
+    ])
+}
+
 pub(super) fn select_legacy_identity_candidate(
     stored: &HashMap<String, String>,
     membership_id: &str,
