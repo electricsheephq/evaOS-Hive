@@ -21,8 +21,11 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{app_state::AppState, secret_store::SecretStore};
-use authorization::{disable_managed_access, native_identity_for_managed_verification};
-pub(crate) use authorization::{require_managed_authorization, require_managed_identity_recovery};
+use authorization::{
+    disable_managed_access, native_identity_for_managed_verification,
+    schedule_managed_access_expiry,
+};
+pub(crate) use authorization::{prepare_managed_identity_recovery, require_managed_authorization};
 #[cfg(test)]
 use callback::callback_device_code;
 use callback::{login_callback, LoginCallback};
@@ -488,6 +491,7 @@ fn install_entitlement(
     app_state
         .managed_agent_restore_pending
         .store(true, std::sync::atomic::Ordering::Release);
+    schedule_managed_access_expiry(app_state, expires_at);
     Ok(())
 }
 
