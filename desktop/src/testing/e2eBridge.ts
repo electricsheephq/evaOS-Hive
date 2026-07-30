@@ -183,6 +183,32 @@ type E2eConfig = {
       normalized_host?: string;
       archived_at?: string | null;
     };
+    /** Compile-time product variant used by Hive auth-gate E2E coverage. */
+    desktopProductManaged?: boolean;
+    /** Renderer-safe managed auth response; never seed session or key material. */
+    evaosTeamsAuthStatus?: {
+      managed: boolean;
+      phase:
+        | "native"
+        | "signed_out"
+        | "active"
+        | "keychain_locked"
+        | "reauth_required"
+        | "identity_restore_required"
+        | "logout_pending";
+      authenticated: boolean;
+      keychainAvailable: boolean;
+      message?: string;
+      entitlement?: {
+        communityId: string;
+        relayHost: string;
+        publicKey?: string;
+        role: string;
+        accessRevision: number;
+        expiresAt: string;
+        refreshAfterSeconds: number;
+      };
+    };
     acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
     /** Catalog returned after a successful mocked install. */
     acpRuntimesCatalogAfterInstall?: RawAcpRuntimeCatalogEntry[];
@@ -9681,18 +9707,60 @@ export function maybeInstallE2eTauriMocks() {
     switch (command) {
       case "get_desktop_product_policy":
         return {
-          managed: false,
-          productName: "Buzz",
-          version: "0.5.2",
-          bundleIdentifier: "xyz.block.buzz.app",
+          managed: activeConfig?.mock?.desktopProductManaged ?? false,
+          productName: activeConfig?.mock?.desktopProductManaged
+            ? "Hive"
+            : "Buzz",
+          version: activeConfig?.mock?.desktopProductManaged
+            ? "0.5.2-es.1"
+            : "0.5.2",
+          bundleIdentifier: activeConfig?.mock?.desktopProductManaged
+            ? "com.electricsheephq.evaos.teams"
+            : "xyz.block.buzz.app",
           deepLinkScheme: "buzz",
-          artifactName: "",
-          updateChannel: "upstream",
+          artifactName: activeConfig?.mock?.desktopProductManaged
+            ? "Hive-0.5.2-es.1-arm64.dmg"
+            : "",
+          updateChannel: activeConfig?.mock?.desktopProductManaged
+            ? "hive-internal"
+            : "upstream",
           updaterEnabled: false,
-          upstreamHostedServicesEnabled: true,
+          upstreamHostedServicesEnabled: !(
+            activeConfig?.mock?.desktopProductManaged ?? false
+          ),
           originAttribution:
             "Buzz by Block, licensed under the Apache License 2.0.",
         };
+      case "get_evaos_teams_auth_status":
+        return (
+          activeConfig?.mock?.evaosTeamsAuthStatus ?? {
+            managed: false,
+            phase: "native",
+            authenticated: false,
+            keychainAvailable: true,
+          }
+        );
+      case "start_evaos_teams_login":
+        return (
+          activeConfig?.mock?.evaosTeamsAuthStatus ?? {
+            managed: true,
+            phase: "signed_out",
+            authenticated: false,
+            keychainAvailable: true,
+          }
+        );
+      case "logout_evaos_teams": {
+        const signedOut = {
+          managed: true,
+          phase: "signed_out" as const,
+          authenticated: false,
+          keychainAvailable: true,
+        };
+        if (activeConfig?.mock) {
+          activeConfig.mock.evaosTeamsAuthStatus = signedOut;
+        }
+        return signedOut;
+      }
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {

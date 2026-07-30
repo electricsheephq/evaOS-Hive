@@ -292,7 +292,6 @@ impl AppState {
     }
 
     /// Return the active identity keys if they are in a signable state.
-    ///
     /// Returns `Err` when the identity is in a lost state (`identity_lost`
     /// — ephemeral key, user must re-import their nsec) or when the keyring
     /// is locked (`keyring_locked` — key is held in a keyring that is
@@ -300,6 +299,7 @@ impl AppState {
     /// this instead of locking `state.keys` directly, so that recovery mode
     /// blocks publishing under an invalid or inaccessible identity.
     pub fn signing_keys(&self) -> Result<Keys, String> {
+        crate::evaos_teams::require_managed_authorization(self)?;
         if self
             .identity_lost
             .load(std::sync::atomic::Ordering::Acquire)

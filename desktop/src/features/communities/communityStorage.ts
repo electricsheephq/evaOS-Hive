@@ -104,6 +104,35 @@ export function saveActiveCommunityId(id: string): boolean {
   return setLocalStorageItemWithRecovery(ACTIVE_COMMUNITY_KEY, id);
 }
 
+/**
+ * Persist the managed community list and active selection as one logical
+ * transaction. If the second write fails, restore the prior list before
+ * reporting failure so the auth gate never reveals a half-reconciled app.
+ */
+export function saveCommunitySelection(
+  communities: Community[],
+  activeId: string,
+): boolean {
+  const previousCommunities = localStorage.getItem(COMMUNITIES_KEY);
+  if (!saveCommunities(communities)) {
+    return false;
+  }
+  if (saveActiveCommunityId(activeId)) {
+    return true;
+  }
+  try {
+    if (previousCommunities === null) {
+      localStorage.removeItem(COMMUNITIES_KEY);
+    } else {
+      localStorage.setItem(COMMUNITIES_KEY, previousCommunities);
+    }
+  } catch {
+    // Best effort: persistence is already unavailable and the caller keeps the
+    // auth gate closed instead of applying in-memory state.
+  }
+  return false;
+}
+
 export function normalizeRelayUrl(url: string): string {
   if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
     return `wss://${url}`;

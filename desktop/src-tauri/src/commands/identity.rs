@@ -77,6 +77,9 @@ mod auto_connect_default_relay_tests {
 
 #[tauri::command]
 pub fn is_shared_identity() -> bool {
+    if cfg!(feature = "evaos-teams-managed") {
+        return false;
+    }
     std::env::var("BUZZ_SHARE_IDENTITY")
         .map(|v| v == "1")
         .unwrap_or(false)
@@ -188,6 +191,9 @@ pub fn build_observer_control_event(
 
 #[tauri::command]
 pub fn get_nsec(state: State<'_, AppState>) -> Result<String, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed identity export is disabled".to_string());
+    }
     let keys = state.signing_keys()?;
     keys.secret_key()
         .to_bech32()
@@ -340,6 +346,9 @@ pub async fn persist_current_identity(
 /// would be confusing.
 #[tauri::command]
 pub async fn sign_out(app: tauri::AppHandle) -> Result<(), String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Use Hive managed sign-out".to_string());
+    }
     if is_shared_identity() {
         return Err(
             "Sign out isn't available while BUZZ_SHARE_IDENTITY provides your identity. Unset BUZZ_SHARE_IDENTITY and BUZZ_PRIVATE_KEY, then relaunch to sign out."
@@ -413,6 +422,9 @@ pub async fn sign_nostr_identity_binding(
     expires_at: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    if cfg!(feature = "evaos-teams-managed") {
+        return Err("Managed identity authority cannot be changed by deep link".to_string());
+    }
     nostr_bind::validate_signing_request(
         &challenge_id,
         &nonce,

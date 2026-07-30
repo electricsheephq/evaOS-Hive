@@ -919,9 +919,12 @@ fn reachable_but_empty_with_marker_and_no_file_returns_lost_ephemeral_not_persis
 
 #[test]
 fn signing_keys_returns_ok_when_normal() {
-    // When neither identity_lost nor keyring_locked is set, signing_keys()
-    // must return the live keys and allow signing.
     let state = build_app_state();
+    #[cfg(feature = "evaos-teams-managed")]
+    {
+        *state.relay_url_override.lock().unwrap() =
+            Some("wss://relay.example.com".to_string());
+    }
     state
         .identity_lost
         .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -934,15 +937,12 @@ fn signing_keys_returns_ok_when_normal() {
         result.is_ok(),
         "signing_keys() must return Ok when neither flag is set"
     );
-    // The returned keys must match the stored keys.
     let expected = state.keys.lock().unwrap().clone();
     assert_key_eq(&result.unwrap(), &expected);
 }
 
 #[test]
 fn signing_keys_returns_err_when_identity_lost() {
-    // An ephemeral key is held when identity is lost — signing under it would
-    // publish events with a random identity the user does not own.
     let state = build_app_state();
     state
         .identity_lost

@@ -4,6 +4,7 @@ import {
   Archive,
   BellRing,
   Bot,
+  Building2,
   Check,
   ChevronDown,
   Cpu,
@@ -71,6 +72,7 @@ import {
 import { ChannelTemplatesSettingsCard } from "./ChannelTemplatesSettingsCard";
 import { HarnessesSettingsPanel } from "./HarnessesSettingsPanel";
 import { ExperimentalFeaturesCard } from "./ExperimentalFeaturesCard";
+import { ElectricSheepSettingsCard } from "./ElectricSheepSettingsCard";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MeshComputeSettingsCard } from "@/features/mesh-compute/ui/MeshComputeSettingsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
@@ -99,7 +101,8 @@ export type SettingsSection =
   | "custom-emoji"
   | "local-archive"
   | "mobile"
-  | "updates";
+  | "updates"
+  | "electric-sheep";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
@@ -119,6 +122,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "local-archive",
   "mobile",
   "updates",
+  "electric-sheep",
 ];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -134,6 +138,8 @@ export type SettingsSectionDescriptor = {
   icon: LucideIcon;
   /** If set, this section is only visible when the feature is enabled */
   featureGate?: string;
+  /** If set, this additive section is visible only in the managed Hive build. */
+  managedOnly?: boolean;
 };
 
 export type SettingsPanelProps = {
@@ -229,6 +235,12 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "updates",
     label: "Updates",
     icon: Download,
+  },
+  {
+    value: "electric-sheep",
+    label: "Electric Sheep",
+    icon: Building2,
+    managedOnly: true,
   },
 ];
 
@@ -841,6 +853,8 @@ export function renderSettingsSection(
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":
       return <UpdateChecker />;
+    case "electric-sheep":
+      return <ElectricSheepSettingsCard />;
     default: {
       const exhaustiveCheck: never = section;
       return exhaustiveCheck;

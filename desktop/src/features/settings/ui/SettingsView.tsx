@@ -14,6 +14,7 @@ import {
 } from "@/shared/features/useFeatureEnabled";
 import { topChromeBackdrop } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 import {
   Sidebar,
   SidebarContent,
@@ -69,7 +70,14 @@ const settingsNavGroups: Array<{
   },
   {
     label: "App",
-    sections: ["agents", "compute", "experimental", "mobile", "updates"],
+    sections: [
+      "electric-sheep",
+      "agents",
+      "compute",
+      "experimental",
+      "mobile",
+      "updates",
+    ],
   },
 ];
 
@@ -130,6 +138,9 @@ export function SettingsView({
   const featureState = useFeatureSnapshot();
   const visibleSections = React.useMemo(() => {
     return settingsSections.filter((s) => {
+      if (s.managedOnly && !desktopProductPolicy().managed) {
+        return false;
+      }
       // Feature gate check. Manifest is preview-only — if the gate id is in
       // the manifest, it's preview and needs an opt-in; if it's not, it's
       // stable and renders unconditionally (fail-open).

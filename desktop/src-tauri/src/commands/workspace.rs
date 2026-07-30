@@ -10,6 +10,23 @@ use crate::managed_agents::{
 };
 use crate::relay;
 
+#[cfg(any(test, feature = "evaos-teams-managed"))]
+fn validate_managed_workspace_request(
+    allowed_relay: Option<&str>,
+    requested_relay: &str,
+    nsec: Option<&str>,
+) -> Result<(), String> {
+    if nsec.is_some_and(|value| !value.trim().is_empty()) {
+        return Err("Managed workspaces cannot import a private key".to_string());
+    }
+    let allowed_relay =
+        allowed_relay.ok_or_else(|| "Managed workspace relay is unavailable".to_string())?;
+    if requested_relay.trim_end_matches('/') != allowed_relay.trim_end_matches('/') {
+        return Err("Managed workspace relay must come from the active entitlement".to_string());
+    }
+    Ok(())
+}
+
 /// Adopt the pre-scoping global retention database's pending rows into `scope`.
 ///
 /// Best-effort: a failure is logged and the boot proceeds. The migration's own
@@ -136,6 +153,19 @@ pub async fn apply_workspace(
         let state = app.state::<AppState>();
 
         // ── Validate before mutating ──────────────────────────────────────────
+        #[cfg(feature = "evaos-teams-managed")]
+        {
+            let allowed_relay = state
+                .relay_url_override
+                .lock()
+                .map_err(|error| error.to_string())?
+                .clone();
+            validate_managed_workspace_request(
+                allowed_relay.as_deref(),
+                &relay_url,
+                nsec.as_deref(),
+            )?;
+        }
         let parsed_keys = match nsec.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(nsec_trimmed) => {
                 Some(Keys::parse(nsec_trimmed).map_err(|e| format!("invalid nsec: {e}"))?)
@@ -281,4 +311,41 @@ pub async fn apply_workspace(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod managed_tests {
+    use super::validate_managed_workspace_request;
+
+    #[test]
+    fn managed_workspace_rejects_client_relay_and_private_key() {
+        assert!(validate_managed_workspace_request(
+            Some("wss://relay.example.com"),
+            "wss://attacker.example.com",
+            None,
+        )
+        .is_err());
+        assert!(validate_managed_workspace_request(
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com",
+            Some("nsec1secret"),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn managed_workspace_accepts_only_authorized_entitlement_relay() {
+        assert!(validate_managed_workspace_request(
+            Some("wss://relay.example.com"),
+            "wss://relay.example.com/",
+            None,
+        )
+        .is_ok());
+        assert!(validate_managed_workspace_request(
+            None,
+            "wss://relay.example.com",
+            None,
+        )
+        .is_err());
+    }
 }

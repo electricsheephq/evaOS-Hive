@@ -16,6 +16,8 @@ import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import { Input } from "@/shared/ui/input";
 import { Spinner } from "@/shared/ui/spinner";
+import { logoutEvaosTeams } from "@/features/evaosTeams/api";
+import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
 /**
  * The exact phrase the user must type before the destructive sign-out button
@@ -40,6 +42,14 @@ export const SIGNOUT_CONFIRM_PHRASE = "wipe all my data";
  * Only when both gates pass does "Delete My Data" become clickable.
  */
 export function SignOutSection() {
+  return desktopProductPolicy().managed ? (
+    <ManagedSignOutSection />
+  ) : (
+    <NativeSignOutSection />
+  );
+}
+
+function NativeSignOutSection() {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isPending, setIsPending] = React.useState(false);
 
@@ -262,6 +272,53 @@ export function SignOutSection() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+function ManagedSignOutSection() {
+  const [isPending, setIsPending] = React.useState(false);
+
+  async function handleManagedSignOut() {
+    setIsPending(true);
+    try {
+      const status = await logoutEvaosTeams();
+      if (status.phase !== "signed_out") {
+        throw new Error(status.message ?? "Hive sign-out is still pending.");
+      }
+      window.location.reload();
+    } catch (error) {
+      setIsPending(false);
+      toast.error(error instanceof Error ? error.message : "Sign out failed.");
+    }
+  }
+
+  return (
+    <div
+      className="mt-8 border-t border-border/60 pb-6 pt-5"
+      data-testid="settings-signout"
+    >
+      <div className="flex items-center justify-between gap-4 px-1">
+        <div className="min-w-0 space-y-1">
+          <h2 className="text-lg font-semibold tracking-tight">Sign out</h2>
+          <p className="text-sm text-muted-foreground">
+            Ends this device&apos;s Electric Sheep session. Your native Hive
+            identity and local collaboration data stay on this device.
+          </p>
+        </div>
+        <Button
+          className="shrink-0"
+          disabled={isPending}
+          onClick={() => void handleManagedSignOut()}
+          type="button"
+          variant="outline"
+        >
+          {isPending ? (
+            <Spinner aria-label="Signing out" className="h-4 w-4 border-2" />
+          ) : null}
+          {isPending ? "Signing out…" : "Sign Out"}
+        </Button>
+      </div>
     </div>
   );
 }

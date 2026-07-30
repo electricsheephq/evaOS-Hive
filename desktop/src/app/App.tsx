@@ -66,6 +66,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 import { ProductMark } from "@/shared/product/ProductMark";
 import { desktopProductPolicy } from "@/shared/product/productIdentity";
+import { EvaosTeamsAuthGate } from "@/features/evaosTeams/EvaosTeamsAuthGate";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
 import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
 import { FuzzyLogo } from "@/shared/ui/buzz-logo/FuzzyLogo";
@@ -732,7 +733,13 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <MachineBootstrap sharedIdentity={sharedIdentity} />
+      {desktopProductPolicy().managed ? (
+        <EvaosTeamsAuthGate>
+          <MachineBootstrap sharedIdentity={sharedIdentity} />
+        </EvaosTeamsAuthGate>
+      ) : (
+        <MachineBootstrap sharedIdentity={sharedIdentity} />
+      )}
     </QueryClientProvider>
   );
 }
