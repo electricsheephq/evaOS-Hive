@@ -617,9 +617,7 @@ pub(super) async fn recover_identity(
     std::fs::create_dir_all(&data_dir).map_err(|error| format!("create app data dir: {error}"))?;
     let key_path = data_dir.join("identity.key");
     let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
-    persist_managed_recovered_identity(
-        store, app_state, &keys, &key_path, &data_dir,
-    )?;
+    persist_managed_recovered_identity(store, app_state, &keys, &key_path, &data_dir)?;
     Ok((keys, entitlement))
 }
 

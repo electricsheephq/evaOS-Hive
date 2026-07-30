@@ -662,31 +662,6 @@ async fn verify_key_challenge(
 }
 
 #[cfg(feature = "evaos-teams-managed")]
-fn persist_active_session(
-    state: &EvaosTeamsState,
-    app_state: &AppState,
-    session: String,
-    keys: &Keys,
-    entitlement: EvaosTeamsEntitlement,
-) -> Result<EvaosTeamsAuthStatus, String> {
-    let replacement = HashMap::from([(SESSION_KEY.to_string(), session.clone())]);
-    managed_store()
-        .replace_all(&replacement)
-        .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
-    if managed_store().load_all_readonly()? != Some(replacement) {
-        return Err("Managed Keychain read-back verification failed".to_string());
-    }
-    install_entitlement(app_state, keys, &entitlement)?;
-    *state.runtime.lock().map_err(|error| error.to_string())? = ManagedRuntime {
-        initialized: true,
-        session: Some(Zeroizing::new(session)),
-        logout_pending: false,
-        custody_checked: true,
-    };
-    Ok(EvaosTeamsAuthStatus::active(entitlement))
-}
-
-#[cfg(feature = "evaos-teams-managed")]
 fn pending_session_entries(session: &str) -> HashMap<String, String> {
     HashMap::from([
         (SESSION_KEY.to_string(), session.to_string()),
@@ -947,10 +922,15 @@ pub(crate) async fn start_evaos_teams_login(
             let _ = remote_logout(&app_state.http_client, &claim.desktop_session).await;
             return Err(error);
         }
+        let rollback_session = claim.desktop_session.clone();
         let result =
             login_identity::complete_login(&app, &state, &app_state, claim.desktop_session).await;
-        if result.is_err() {
-            let _ = begin_managed_logout(&app, &state, &app_state).await;
+        if result.is_err()
+            && begin_managed_logout(&app, &state, &app_state)
+                .await
+                .is_err()
+        {
+            let _ = remote_logout(&app_state.http_client, &rollback_session).await;
         }
         result
     }

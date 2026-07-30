@@ -1,5 +1,28 @@
 use super::*;
 
+fn persist_active_session(
+    state: &EvaosTeamsState,
+    app_state: &AppState,
+    session: String,
+    keys: &Keys,
+    entitlement: EvaosTeamsEntitlement,
+) -> Result<EvaosTeamsAuthStatus, String> {
+    let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
+    install_entitlement(app_state, keys, &entitlement)?;
+    let replacement = HashMap::from([(SESSION_KEY.to_string(), session.clone())]);
+    if managed_store().replace_all(&replacement).is_err() {
+        disable_managed_access(app_state);
+        return Err("Could not commit managed access in macOS Keychain".to_string());
+    }
+    *runtime = ManagedRuntime {
+        initialized: true,
+        session: Some(Zeroizing::new(session)),
+        logout_pending: false,
+        custody_checked: true,
+    };
+    Ok(EvaosTeamsAuthStatus::active(entitlement))
+}
+
 pub(super) fn custody_checked(state: &EvaosTeamsState) -> Result<bool, String> {
     initialize_runtime(state)?;
     state
