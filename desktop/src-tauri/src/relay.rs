@@ -547,6 +547,8 @@ pub async fn submit_event_with_keys(
     keys: &Keys,
     auth_tag: Option<&str>,
 ) -> Result<SubmitEventResponse, String> {
+    crate::evaos_teams::require_managed_authorization(state)?;
+
     let event = builder
         .sign_with_keys(keys)
         .map_err(|e| format!("failed to sign event: {e}"))?;
@@ -560,6 +562,8 @@ pub async fn submit_signed_event_with_keys(
     keys: &Keys,
     auth_tag: Option<&str>,
 ) -> Result<SubmitEventResponse, String> {
+    crate::evaos_teams::require_managed_authorization(state)?;
+
     if event.pubkey != keys.public_key() {
         return Err("signed event does not match the publishing identity".to_string());
     }
