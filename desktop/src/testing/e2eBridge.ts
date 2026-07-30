@@ -9754,6 +9754,15 @@ export function maybeInstallE2eTauriMocks() {
             keychainAvailable: true,
           }
         );
+      case "replace_lost_evaos_teams_identity":
+        return (
+          activeConfig?.mock?.evaosTeamsAuthStatus ?? {
+            managed: true,
+            phase: "active",
+            authenticated: true,
+            keychainAvailable: true,
+          }
+        );
       case "logout_evaos_teams": {
         const signedOut = {
           managed: true,

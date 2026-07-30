@@ -39,6 +39,30 @@ pub(super) enum CustodyEnrollment {
     AlreadyPresent,
 }
 
+#[derive(Debug)]
+pub(super) enum IdentityRecoveryError {
+    NotAvailable,
+    Other(String),
+}
+
+fn classify_recovery_issue_error(error: ApiFailure) -> IdentityRecoveryError {
+    if error.status == reqwest::StatusCode::NOT_FOUND
+        && error.code == "identity_recovery_not_available"
+    {
+        IdentityRecoveryError::NotAvailable
+    } else {
+        IdentityRecoveryError::Other(format!(
+            "Managed identity recovery was not available: {error}"
+        ))
+    }
+}
+
+impl From<String> for IdentityRecoveryError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
 struct DeviceTransport {
     private_key: Zeroizing<Vec<u8>>,
     public_key: String,
@@ -551,7 +575,7 @@ pub(super) async fn recover_identity(
     client: &reqwest::Client,
     token: &str,
     binding: &IdentityBinding,
-) -> Result<(Keys, EvaosTeamsEntitlement), String> {
+) -> Result<(Keys, EvaosTeamsEntitlement), IdentityRecoveryError> {
     let canonical_public_key = binding.public_key.as_deref().ok_or_else(|| {
         "Managed identity recovery is not available for a new membership".to_string()
     })?;
@@ -563,7 +587,7 @@ pub(super) async fn recover_identity(
         .public_key()
         .to_hex();
     let device = DeviceTransport::generate()?;
-    let issued: RecoveryChallengeResponse = post_json(
+    let issued: RecoveryChallengeResponse = match post_json(
         client,
         "evaos-teams-access",
         Some(token),
@@ -573,9 +597,14 @@ pub(super) async fn recover_identity(
         }),
     )
     .await
-    .map_err(|error| format!("Managed identity recovery was not available: {error}"))?;
+    {
+        Ok(issued) => issued,
+        Err(error) => return Err(classify_recovery_issue_error(error)),
+    };
     if issued.status != "identity_recovery_challenge_issued" {
-        return Err("Managed identity recovery returned an invalid challenge".to_string());
+        return Err(IdentityRecoveryError::Other(
+            "Managed identity recovery returned an invalid challenge".to_string(),
+        ));
     }
     let recovery = issued.recovery;
     validate_recovery_challenge(&recovery, &device, binding)?;
@@ -588,7 +617,9 @@ pub(super) async fn recover_identity(
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     {
-        return Err("Managed identity recovery challenge is invalid".to_string());
+        return Err(IdentityRecoveryError::Other(
+            "Managed identity recovery challenge is invalid".to_string(),
+        ));
     }
     let completed: RecoveryCompletionResponse = post_json(
         client,
@@ -603,7 +634,9 @@ pub(super) async fn recover_identity(
     .await
     .map_err(|error| format!("Managed identity recovery was rejected: {error}"))?;
     if completed.status != "identity_recovery_authorized" {
-        return Err("Managed identity recovery did not authorize this device".to_string());
+        return Err(IdentityRecoveryError::Other(
+            "Managed identity recovery did not authorize this device".to_string(),
+        ));
     }
     let payload = completed.recovery;
     let key_challenge =
@@ -613,7 +646,9 @@ pub(super) async fn recover_identity(
     let data_key = device.open(&payload.sealed_data_key, &data_key_info)?;
     let keys = decrypt_secret_key(&payload, &data_key, &context)?;
     if keys.public_key().to_hex() != canonical_public_key {
-        return Err("Recovered Hive identity does not match this membership".to_string());
+        return Err(IdentityRecoveryError::Other(
+            "Recovered Hive identity does not match this membership".to_string(),
+        ));
     }
 
     let entitlement =
@@ -653,6 +688,36 @@ mod tests {
 
     fn fixture_expiry() -> String {
         (chrono::Utc::now() + chrono::Duration::minutes(1)).to_rfc3339()
+    }
+
+    #[test]
+    fn only_exact_missing_envelope_response_offers_identity_reset() {
+        assert!(matches!(
+            classify_recovery_issue_error(ApiFailure {
+                status: reqwest::StatusCode::NOT_FOUND,
+                code: "identity_recovery_not_available".to_string(),
+            }),
+            IdentityRecoveryError::NotAvailable
+        ));
+        for error in [
+            ApiFailure {
+                status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+                code: "network_error:true".to_string(),
+            },
+            ApiFailure {
+                status: reqwest::StatusCode::NOT_FOUND,
+                code: "other_missing_resource".to_string(),
+            },
+            ApiFailure {
+                status: reqwest::StatusCode::FORBIDDEN,
+                code: "identity_recovery_not_available".to_string(),
+            },
+        ] {
+            assert!(matches!(
+                classify_recovery_issue_error(error),
+                IdentityRecoveryError::Other(_)
+            ));
+        }
     }
 
     fn fixture_challenge(keys: &Keys) -> ChallengeResponse {

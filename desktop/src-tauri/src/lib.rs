@@ -654,6 +654,7 @@ pub fn run() {
             get_evaos_teams_auth_status,
             start_evaos_teams_login,
             submit_evaos_teams_login_code,
+            replace_lost_evaos_teams_identity,
             logout_evaos_teams,
             list_hive_company_agent_authorizations,
             get_desktop_product_policy,

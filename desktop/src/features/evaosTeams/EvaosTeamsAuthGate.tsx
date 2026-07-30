@@ -13,6 +13,7 @@ import {
   evaosTeamsRefreshDelay,
   evaosTeamsStatusCopy,
   getEvaosTeamsAuthStatus,
+  replaceLostEvaosTeamsIdentity,
   startEvaosTeamsLogin,
   submitEvaosTeamsLoginCode,
   type EvaosTeamsAuthStatus,
@@ -34,6 +35,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const [backupCode, setBackupCode] = useState("");
   const [backupCodeSent, setBackupCodeSent] = useState(false);
   const [submittingCode, setSubmittingCode] = useState(false);
+  const [lostIdentityConfirmed, setLostIdentityConfirmed] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -128,6 +130,7 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   }
 
   async function runLogin() {
+    setLostIdentityConfirmed(false);
     setLoginPending(true);
     setBackupCode("");
     setBackupCodeSent(false);
@@ -137,6 +140,22 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
       setLoginPending(false);
       setBackupCode("");
       setBackupCodeSent(false);
+    }
+  }
+
+  async function runIdentityReset() {
+    if (!lostIdentityConfirmed || working) return;
+    setWorking(true);
+    setError(null);
+    try {
+      setStatus(await replaceLostEvaosTeamsIdentity());
+      setLostIdentityConfirmed(false);
+    } catch (resetError) {
+      setError(
+        resetError instanceof Error ? resetError.message : String(resetError),
+      );
+    } finally {
+      setWorking(false);
     }
   }
 
@@ -259,6 +278,36 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
             >
               Try again
             </Button>
+          ) : null}
+          {status?.phase === "identity_reset_required" ? (
+            <div className="flex flex-col gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+              <p className="text-sm leading-6 text-foreground">
+                Replace the lost identity only if no authorized device retains
+                it. Messages encrypted only to the old key may not be
+                recoverable. This action assigns a new durable Hive identity to
+                this Electric Sheep account.
+              </p>
+              <label className="flex items-start gap-3 text-sm leading-5 text-foreground">
+                <input
+                  checked={lostIdentityConfirmed}
+                  className="mt-1"
+                  onChange={(event) =>
+                    setLostIdentityConfirmed(event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                I understand that the old Hive identity will be replaced.
+              </label>
+              <Button
+                disabled={!lostIdentityConfirmed || working}
+                onClick={() => void runIdentityReset()}
+                variant="destructive"
+              >
+                {working
+                  ? "Replacing identity…"
+                  : "Replace lost identity on this Mac"}
+              </Button>
+            </div>
           ) : null}
           {activeEntitlement && !managedCommunityReady ? (
             <Button

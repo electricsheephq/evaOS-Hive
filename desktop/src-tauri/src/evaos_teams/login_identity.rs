@@ -1,7 +1,7 @@
 use super::*;
 use tauri::Manager;
 
-fn persist_active_session(
+pub(super) fn persist_active_session(
     state: &EvaosTeamsState,
     app_state: &AppState,
     session: String,
@@ -31,6 +31,10 @@ fn persist_active_session(
         logout_pending: false,
         custody_checked: true,
     };
+    *state
+        .pending_identity_reset
+        .lock()
+        .map_err(|error| error.to_string())? = None;
     Ok(EvaosTeamsAuthStatus::active(entitlement))
 }
 
@@ -152,14 +156,37 @@ pub(super) async fn complete_login(
             )?;
             (keys, entitlement)
         } else {
-            identity_custody::recover_identity(
+            match identity_custody::recover_identity(
                 app,
                 app_state,
                 &app_state.http_client,
                 &desktop_session,
                 &binding,
             )
-            .await?
+            .await
+            {
+                Ok(recovered) => recovered,
+                Err(identity_custody::IdentityRecoveryError::NotAvailable) => {
+                    *state
+                        .pending_identity_reset
+                        .lock()
+                        .map_err(|error| error.to_string())? = Some(PendingIdentityReset {
+                        session: Zeroizing::new(desktop_session),
+                        membership_id: binding.membership_id,
+                        public_key: canonical_public_key.to_string(),
+                    });
+                    return Ok(EvaosTeamsAuthStatus::managed(
+                        "identity_reset_required",
+                        Some(
+                            "The prior Hive key is not available on this Mac or in managed recovery."
+                                .to_string(),
+                        ),
+                    ));
+                }
+                Err(identity_custody::IdentityRecoveryError::Other(error)) => {
+                    return Err(error);
+                }
+            }
         }
     } else {
         return Err(

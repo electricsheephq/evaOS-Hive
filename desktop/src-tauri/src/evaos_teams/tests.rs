@@ -1,4 +1,7 @@
-use super::keychain_migration::{active_session_entries, select_legacy_identity_candidate};
+use super::keychain_migration::{
+    active_session_entries, pending_identity_rotation_key, select_legacy_identity_candidate,
+    staged_identity_rotation_entries,
+};
 use super::*;
 use nostr::ToBech32;
 
@@ -410,6 +413,45 @@ fn pending_session_preserves_only_legacy_identity_material() {
     let signed_out = preserve_legacy_identity_entries(&stored).unwrap();
     assert!(!signed_out.contains_key(SESSION_KEY));
     assert!(signed_out.contains_key(&format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}")));
+}
+
+#[test]
+fn staged_identity_rotation_is_membership_scoped_durable_and_cleared_on_adoption() {
+    let membership_id = "10000000-0000-4000-8000-000000000002";
+    let other_membership_id = "10000000-0000-4000-8000-000000000003";
+    let (first, keys) =
+        staged_identity_rotation_entries(&HashMap::new(), membership_id).unwrap();
+    let (second, reused) = staged_identity_rotation_entries(&first, membership_id).unwrap();
+    let (with_other, other) =
+        staged_identity_rotation_entries(&second, other_membership_id).unwrap();
+
+    assert_eq!(keys.public_key(), reused.public_key());
+    assert_ne!(keys.public_key(), other.public_key());
+    assert!(with_other.contains_key(&pending_identity_rotation_key(membership_id).unwrap()));
+    assert!(with_other.contains_key(&pending_identity_rotation_key(other_membership_id).unwrap()));
+
+    let active = active_session_entries(
+        &with_other,
+        "active-session",
+        membership_id,
+        &keys.public_key().to_hex(),
+    )
+    .unwrap();
+    assert!(!active.contains_key(&pending_identity_rotation_key(membership_id).unwrap()));
+    assert!(active.contains_key(&pending_identity_rotation_key(other_membership_id).unwrap()));
+}
+
+#[test]
+fn identity_reset_status_exposes_no_credential_or_identity_material() {
+    let status = EvaosTeamsAuthStatus::managed(
+        "identity_reset_required",
+        Some("The prior Hive key is unavailable".to_string()),
+    );
+    let serialized = serde_json::to_string(&status).unwrap();
+    assert!(serialized.contains("identity_reset_required"));
+    for forbidden in ["session", "membership", "publicKey", "nsec", "private"] {
+        assert!(!serialized.contains(forbidden));
+    }
 }
 
 #[test]

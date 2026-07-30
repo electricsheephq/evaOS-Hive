@@ -42,10 +42,12 @@ mod device_code;
 mod http_api;
 #[cfg(feature = "evaos-teams-managed")]
 mod identity_custody;
+mod identity_rotation;
 mod keychain_migration;
 #[cfg(feature = "evaos-teams-managed")]
 mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
+pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
 use keychain_migration::{
     pending_session_entries, preserve_legacy_identity_entries, validated_runtime_entries,
 };
@@ -152,12 +154,20 @@ struct ManagedRuntime {
     custody_checked: bool,
 }
 
+#[derive(Clone)]
+struct PendingIdentityReset {
+    session: Zeroizing<String>,
+    membership_id: String,
+    public_key: String,
+}
+
 /// Backend-only managed session state.
 #[derive(Default)]
 pub(crate) struct EvaosTeamsState {
     runtime: Mutex<ManagedRuntime>,
     operation: tokio::sync::Mutex<()>,
     pending_login: Mutex<Option<std::sync::Arc<LoginCallback>>>,
+    pending_identity_reset: Mutex<Option<PendingIdentityReset>>,
 }
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 struct KeyBindingChallenge {
@@ -500,6 +510,10 @@ fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
         initialized: true,
         ..ManagedRuntime::default()
     };
+    *state
+        .pending_identity_reset
+        .lock()
+        .map_err(|error| error.to_string())? = None;
     Ok(())
 }
 
