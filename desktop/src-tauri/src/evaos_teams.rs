@@ -42,9 +42,11 @@ mod device_code;
 mod http_api;
 #[cfg(feature = "evaos-teams-managed")]
 mod identity_custody;
+mod keychain_migration;
 #[cfg(feature = "evaos-teams-managed")]
 mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
+use keychain_migration::normalized_runtime_entries;
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 // Keep the legacy internal service name so upgrades retain and can revoke the
@@ -52,6 +54,9 @@ const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 const KEYRING_SERVICE: &str = "evaos-teams-desktop";
 const SESSION_KEY: &str = "electric_desktop_session";
 const LOGOUT_PENDING_KEY: &str = "logout_pending";
+const LEGACY_IDENTITY_KEY: &str = "identity";
+const LEGACY_IDENTITY_KEY_PREFIX: &str = "identity:";
+const LEGACY_ACTIVE_MEMBERSHIP_KEY: &str = "active_membership_id";
 const KEY_BINDING_KIND: u16 = 27_235;
 const KEY_BINDING_SCHEMA: &str = "evaos.buzz_key_binding.v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -419,13 +424,7 @@ fn install_entitlement(
 }
 
 fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
-    let stored = stored.unwrap_or_default();
-    if stored
-        .keys()
-        .any(|key| key != SESSION_KEY && key != LOGOUT_PENDING_KEY)
-    {
-        return Err("managed Keychain contains unsupported credential material".to_string());
-    }
+    let (stored, _) = normalized_runtime_entries(stored)?;
     let session = stored
         .get(SESSION_KEY)
         .filter(|value| !value.trim().is_empty())
@@ -451,6 +450,9 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
     if runtime.initialized {
         return Ok(());
     }
+    managed_store().replace_all_checked(|fresh| {
+        normalized_runtime_entries(Some(fresh.clone())).map(|(normalized, _)| normalized)
+    })?;
     *runtime = runtime_from_entries(managed_store().load_all_readonly()?)?;
     Ok(())
 }
