@@ -496,10 +496,6 @@ async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiF
 #[cfg(feature = "evaos-teams-managed")]
 fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
     managed_store().replace_all_checked(preserve_legacy_identity_entries)?;
-    let replacement = managed_store().load_all_readonly()?.unwrap_or_default();
-    if managed_store().load_all_readonly()? != Some(replacement) {
-        return Err("managed session read-back verification failed".to_string());
-    }
     *state.runtime.lock().map_err(|error| error.to_string())? = ManagedRuntime {
         initialized: true,
         ..ManagedRuntime::default()
@@ -552,10 +548,6 @@ async fn begin_managed_logout(
             Ok(pending)
         })
         .map_err(|_| "Could not record durable managed logout".to_string())?;
-    let pending = managed_store().load_all_readonly()?.unwrap_or_default();
-    if managed_store().load_all_readonly()? != Some(pending) {
-        return Err("Could not verify durable managed logout".to_string());
-    }
     if let Ok(mut runtime) = state.runtime.lock() {
         runtime.logout_pending = true;
     }
@@ -680,10 +672,6 @@ fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(),
             Ok(replacement)
         })
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
-    let replacement = managed_store().load_all_readonly()?.unwrap_or_default();
-    if managed_store().load_all_readonly()? != Some(replacement) {
-        return Err("Managed Keychain read-back verification failed".to_string());
-    }
     *state.runtime.lock().map_err(|error| error.to_string())? = ManagedRuntime {
         initialized: true,
         session: Some(Zeroizing::new(session.to_string())),
