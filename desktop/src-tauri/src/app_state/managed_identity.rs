@@ -48,8 +48,12 @@ pub(super) fn persist_managed_identity_to_keyring(
     Ok(())
 }
 
-/// Install an OAuth-recovered canonical identity into the OS keyring and the
+/// Install an OAuth-authorized canonical identity into the OS keyring and the
 /// in-process signer without exposing private material to the renderer.
+///
+/// The identity may come from the recovery envelope or from the legacy managed
+/// Keychain after its public key matches the server binding. Both paths replace
+/// only the exact native identity observed before their asynchronous proof.
 #[cfg(feature = "evaos-teams-managed")]
 pub(crate) fn persist_managed_recovered_identity(
     store: &crate::secret_store::SecretStore,
