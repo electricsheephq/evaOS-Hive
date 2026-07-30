@@ -4,6 +4,24 @@ use nostr::Keys;
 
 use crate::app_state::AppState;
 
+pub(super) fn disable_managed_access(app_state: &AppState) {
+    if let Ok(mut relay) = app_state.relay_url_override.lock() {
+        app_state
+            .managed_entitlement_expires_at_unix
+            .store(0, Ordering::Release);
+        *relay = None;
+    }
+}
+
+pub(super) fn revoke_managed_access(
+    app: &tauri::AppHandle,
+    app_state: &AppState,
+) -> Result<(), String> {
+    disable_managed_access(app_state);
+    crate::shutdown::shutdown_managed_agents(app)
+        .map_err(|error| format!("a local agent could not be stopped: {error}"))
+}
+
 fn managed_authorization_active(app_state: &AppState) -> Result<bool, String> {
     let mut relay = app_state
         .relay_url_override
@@ -18,10 +36,10 @@ fn managed_authorization_active(app_state: &AppState) -> Result<bool, String> {
     if expires_at > chrono::Utc::now().timestamp() {
         return Ok(true);
     }
-    *relay = None;
     app_state
         .managed_entitlement_expires_at_unix
         .store(0, Ordering::Release);
+    *relay = None;
     Ok(false)
 }
 

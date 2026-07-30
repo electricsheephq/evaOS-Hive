@@ -21,7 +21,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{app_state::AppState, secret_store::SecretStore};
-use authorization::native_identity_for_managed_verification;
+use authorization::{disable_managed_access, native_identity_for_managed_verification};
 pub(crate) use authorization::{require_managed_authorization, require_managed_identity_recovery};
 #[cfg(test)]
 use callback::callback_device_code;
@@ -453,14 +453,6 @@ fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Re
         );
     }
     Ok(true)
-}
-fn disable_managed_access(app_state: &AppState) {
-    if let Ok(mut relay) = app_state.relay_url_override.lock() {
-        app_state
-            .managed_entitlement_expires_at_unix
-            .store(0, std::sync::atomic::Ordering::Release);
-        *relay = None;
-    }
 }
 fn install_entitlement(
     app_state: &AppState,
@@ -979,19 +971,23 @@ pub(crate) async fn start_evaos_teams_login(
 /// remains untouched so offline messages keep their durable recipient.
 #[tauri::command]
 pub(crate) async fn logout_evaos_teams(
+    app: tauri::AppHandle,
     state: State<'_, EvaosTeamsState>,
     app_state: State<'_, AppState>,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     #[cfg(not(feature = "evaos-teams-managed"))]
     {
-        let _ = (&state, &app_state);
+        let _ = (&app, &state, &app_state);
         Err("Hive managed login is not enabled in this build".to_string())
     }
 
     #[cfg(feature = "evaos-teams-managed")]
     {
         let _operation = state.operation.lock().await;
-        begin_managed_logout(&state, &app_state).await
+        let revocation = authorization::revoke_managed_access(&app, &app_state);
+        let status = begin_managed_logout(&state, &app_state).await?;
+        revocation?;
+        Ok(status)
     }
 }
 
