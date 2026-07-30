@@ -1,5 +1,11 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { useCommunities } from "@/features/communities/useCommunities";
@@ -8,11 +14,13 @@ import {
   evaosTeamsStatusCopy,
   getEvaosTeamsAuthStatus,
   startEvaosTeamsLogin,
+  submitEvaosTeamsLoginCode,
   type EvaosTeamsAuthStatus,
 } from "@/features/evaosTeams/api";
 import { isManagedCommunityStateReady } from "@/features/evaosTeams/managedCommunity";
 import { ProductMark } from "@/shared/product/ProductMark";
 import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 
 export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
@@ -22,6 +30,10 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<EvaosTeamsAuthStatus | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loginPending, setLoginPending] = useState(false);
+  const [backupCode, setBackupCode] = useState("");
+  const [backupCodeSent, setBackupCodeSent] = useState(false);
+  const [submittingCode, setSubmittingCode] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -115,6 +127,38 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
     }
   }
 
+  async function runLogin() {
+    setLoginPending(true);
+    setBackupCode("");
+    setBackupCodeSent(false);
+    try {
+      await run(startEvaosTeamsLogin);
+    } finally {
+      setLoginPending(false);
+      setBackupCode("");
+      setBackupCodeSent(false);
+    }
+  }
+
+  async function submitBackupCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!backupCode.trim() || submittingCode || backupCodeSent) return;
+    setSubmittingCode(true);
+    setError(null);
+    try {
+      await submitEvaosTeamsLoginCode(backupCode);
+      setBackupCodeSent(true);
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : String(submitError),
+      );
+    } finally {
+      setSubmittingCode(false);
+    }
+  }
+
   if (
     !tauri ||
     (status && !status.managed) ||
@@ -168,14 +212,44 @@ export function EvaosTeamsAuthGate({ children }: { children: ReactNode }) {
 
         <div className="mt-6 flex flex-col gap-3">
           {maySignIn ? (
-            <Button
-              disabled={working}
-              onClick={() => void run(startEvaosTeamsLogin)}
-            >
+            <Button disabled={working} onClick={() => void runLogin()}>
               {working
                 ? "Waiting for browser sign-in…"
                 : "Sign in with Electric Sheep"}
             </Button>
+          ) : null}
+          {loginPending ? (
+            <form className="flex flex-col gap-2" onSubmit={submitBackupCode}>
+              <Input
+                aria-label="Hive backup code"
+                autoCapitalize="characters"
+                autoComplete="one-time-code"
+                disabled={backupCodeSent}
+                inputMode="text"
+                onChange={(event) => setBackupCode(event.target.value)}
+                placeholder="Enter backup code"
+                spellCheck={false}
+                value={backupCode}
+              />
+              <Button
+                disabled={
+                  !backupCode.trim() || submittingCode || backupCodeSent
+                }
+                type="submit"
+                variant="outline"
+              >
+                {backupCodeSent
+                  ? "Code sent — finishing sign-in…"
+                  : submittingCode
+                    ? "Checking code…"
+                    : "Use backup code"}
+              </Button>
+              <p className="text-xs leading-5 text-muted-foreground">
+                If the browser does not return here automatically, copy the
+                one-time code shown on the Electric Sheep page. It works only
+                for this sign-in attempt.
+              </p>
+            </form>
           ) : null}
           {mayRetry ? (
             <Button
