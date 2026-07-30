@@ -1,10 +1,10 @@
 use super::*;
+#[path = "app_state_tests/managed_identity_tests.rs"]
+mod managed_identity_tests;
 
 fn assert_key_eq(a: &Keys, b: &Keys) {
     assert_eq!(a.public_key().to_hex(), b.public_key().to_hex());
 }
-/// `BUZZ_PRIVATE_KEY` is process-global; serialize the env-mutating tests
-/// so they don't race each other under the parallel test runner.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Run `body` with `BUZZ_PRIVATE_KEY` set to `value` (or unset when `None`),

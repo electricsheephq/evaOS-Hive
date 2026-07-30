@@ -18,7 +18,6 @@ export type EvaosTeamsAuthStatus = {
     | "active"
     | "keychain_locked"
     | "reauth_required"
-    | "identity_restore_required"
     | "logout_pending";
   authenticated: boolean;
   keychainAvailable: boolean;
@@ -74,13 +73,6 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
           status.message ??
           "Hive cannot read its Electric Sheep session. Unlock Keychain and try again.",
       };
-    case "identity_restore_required":
-      return {
-        title: "Restore your Hive identity",
-        body:
-          status.message ??
-          "This device does not hold the canonical Hive identity for your membership.",
-      };
     case "logout_pending":
       return {
         title: "Finishing sign-out",
@@ -113,12 +105,4 @@ export function evaosTeamsGateBypassed(
   status: EvaosTeamsAuthStatus | null,
 ): boolean {
   return !productManaged || status?.managed === false;
-}
-
-export function evaosTeamsNeedsNativeIdentityRecovery(
-  status: EvaosTeamsAuthStatus | null,
-): boolean {
-  return (
-    status?.managed === true && status.phase === "identity_restore_required"
-  );
 }

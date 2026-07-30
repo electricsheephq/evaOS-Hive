@@ -194,7 +194,6 @@ type E2eConfig = {
         | "active"
         | "keychain_locked"
         | "reauth_required"
-        | "identity_restore_required"
         | "logout_pending";
       authenticated: boolean;
       keychainAvailable: boolean;

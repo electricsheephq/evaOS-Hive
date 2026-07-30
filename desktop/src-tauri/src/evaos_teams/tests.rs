@@ -291,7 +291,7 @@ fn entitlement_install_rejects_a_stale_verification_identity() {
 }
 
 #[test]
-fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_restore() {
+fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_recovery() {
     let keys = Keys::generate();
     let state = crate::app_state::build_app_state();
     *state.keys.lock().unwrap() = keys.clone();
@@ -309,8 +309,8 @@ fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_restore() {
         public_key: Some(Keys::generate().public_key().to_hex()),
     };
     let error = verify_existing_native_identity(&mismatched, &keys).unwrap_err();
-    let status = EvaosTeamsAuthStatus::identity_restore_required(error);
-    assert_eq!(status.phase, "identity_restore_required");
+    let status = EvaosTeamsAuthStatus::managed("reauth_required", Some(error));
+    assert_eq!(status.phase, "reauth_required");
     assert!(!status.authenticated);
 
     assert_eq!(state.keys.lock().unwrap().public_key(), before_key);
@@ -332,9 +332,47 @@ fn managed_store_shape_allows_only_opaque_session_and_logout_marker() {
     assert!(runtime_from_entries(Some(forbidden)).is_err());
 }
 
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn entitlement_binding_requires_the_verified_public_key() {
+    let binding = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        public_key: None,
+    };
+
+    assert!(login_identity::binding_for_entitlement(&binding, &entitlement(None)).is_err());
+}
+
+#[test]
+fn newly_claimed_session_remains_logout_pending_until_login_commits() {
+    let runtime =
+        runtime_from_entries(Some(pending_session_entries("opaque-session-value"))).unwrap();
+
+    assert!(runtime.session.is_some());
+    assert!(runtime.logout_pending);
+    assert!(!runtime.custody_checked);
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn reauthentication_revokes_only_a_distinct_previous_session() {
+    assert_eq!(
+        previous_session_to_revoke(Some("previous-session"), "claimed-session"),
+        Some("previous-session".to_string())
+    );
+    assert_eq!(
+        previous_session_to_revoke(Some("claimed-session"), "claimed-session"),
+        None
+    );
+    assert_eq!(previous_session_to_revoke(None, "claimed-session"), None);
+}
+
 #[test]
 fn public_status_never_serializes_backend_proof_or_credentials() {
-    let status = EvaosTeamsAuthStatus::identity_restore_required("Restore identity");
+    let status = EvaosTeamsAuthStatus::managed(
+        "reauth_required",
+        Some("Sign in again to recover this device".to_string()),
+    );
     let json = serde_json::to_string(&status).unwrap();
     for forbidden in [
         "desktop_session",
@@ -343,6 +381,9 @@ fn public_status_never_serializes_backend_proof_or_credentials() {
         "verifier",
         "challenge",
         "private_key",
+        "payload_ciphertext",
+        "sealed_data_key",
+        "wrapped_data_key",
     ] {
         assert!(!json.contains(forbidden), "{forbidden}");
     }
