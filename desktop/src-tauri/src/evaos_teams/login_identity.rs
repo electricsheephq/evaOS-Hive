@@ -83,6 +83,7 @@ pub(super) async fn complete_login(
             &app_state.http_client,
             &desktop_session,
             &verified_binding,
+            &entitlement,
             &keys,
         )
         .await?;

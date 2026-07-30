@@ -1,5 +1,7 @@
 use super::*;
-use crate::app_state::managed_identity::persist_managed_identity_to_keyring;
+use crate::app_state::managed_identity::{
+    ensure_managed_identity_unchanged, persist_managed_identity_to_keyring,
+};
 
 #[test]
 fn managed_recovery_requires_keyring_and_never_creates_plaintext_fallback() {
@@ -41,4 +43,30 @@ fn managed_recovery_verifies_keyring_before_removing_old_identity_file() {
             .map(String::as_str),
         Some(recovered.secret_key().to_bech32().unwrap().as_str())
     );
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn managed_boot_keeps_verified_keyring_identity_over_stale_plaintext_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy_path = dir.path().join("identity.key");
+    let stale = Keys::generate();
+    save_key_file(&legacy_path, &stale).unwrap();
+    let recovered = Keys::generate();
+    let store = FakeIdentityStore::present_with(&recovered.secret_key().to_bech32().unwrap());
+
+    let resolved = resolve_identity_with_store(&store, &legacy_path, dir.path()).unwrap();
+
+    assert_key_eq(&resolved.keys, &recovered);
+    assert!(!legacy_path.exists());
+}
+
+#[test]
+fn managed_recovery_rejects_an_identity_changed_during_network_exchange() {
+    let before = Keys::generate();
+    let replacement = Keys::generate();
+    let expected = before.public_key().to_hex();
+
+    ensure_managed_identity_unchanged(&before, &expected).unwrap();
+    assert!(ensure_managed_identity_unchanged(&replacement, &expected).is_err());
 }

@@ -783,6 +783,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
                         &app_state.http_client,
                         &session,
                         &verified_binding,
+                        &entitlement,
                         &keys,
                     )
                     .await

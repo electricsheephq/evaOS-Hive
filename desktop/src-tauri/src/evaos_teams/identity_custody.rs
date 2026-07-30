@@ -379,11 +379,15 @@ fn signed_enrollment_event(
 fn validate_enrollment(
     enrollment: &EnrollmentChallenge,
     binding: &IdentityBinding,
+    entitlement: &EvaosTeamsEntitlement,
     keys: &Keys,
 ) -> Result<String, String> {
     if enrollment.schema_version != ENVELOPE_SCHEMA
         || enrollment.membership_id != binding.membership_id
         || binding.public_key.as_deref() != Some(enrollment.public_key.as_str())
+        || entitlement.public_key.as_deref() != Some(enrollment.public_key.as_str())
+        || enrollment.community_id != entitlement.community_id
+        || enrollment.access_revision != entitlement.access_revision
         || enrollment.public_key != keys.public_key().to_hex()
         || enrollment.access_revision == 0
     {
@@ -484,6 +488,7 @@ pub(super) async fn ensure_enrollment(
     client: &reqwest::Client,
     token: &str,
     binding: &IdentityBinding,
+    entitlement: &EvaosTeamsEntitlement,
     keys: &Keys,
 ) -> Result<CustodyEnrollment, String> {
     let device = DeviceTransport::generate()?;
@@ -515,7 +520,7 @@ pub(super) async fn ensure_enrollment(
         return Err("Managed identity recovery setup returned an invalid response".to_string());
     }
     let enrollment = response.enrollment;
-    let context = validate_enrollment(&enrollment, binding, keys)?;
+    let context = validate_enrollment(&enrollment, binding, entitlement, keys)?;
     let info = format!("{ENROLLMENT_DEK_INFO}:{}", enrollment.challenge_id);
     let data_key = device.open(&enrollment.sealed_data_key, &info)?;
     let (payload_ciphertext, payload_nonce, payload_sha256) =
@@ -551,6 +556,12 @@ pub(super) async fn recover_identity(
         "Managed identity recovery is not available for a new membership".to_string()
     })?;
     validate_hex_64(canonical_public_key, "public key")?;
+    let expected_local_public_key = app_state
+        .keys
+        .lock()
+        .map_err(|error| error.to_string())?
+        .public_key()
+        .to_hex();
     let device = DeviceTransport::generate()?;
     let issued: RecoveryChallengeResponse = post_json(
         client,
@@ -617,7 +628,14 @@ pub(super) async fn recover_identity(
     std::fs::create_dir_all(&data_dir).map_err(|error| format!("create app data dir: {error}"))?;
     let key_path = data_dir.join("identity.key");
     let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
-    persist_managed_recovered_identity(store, app_state, &keys, &key_path, &data_dir)?;
+    persist_managed_recovered_identity(
+        store,
+        app_state,
+        &keys,
+        &expected_local_public_key,
+        &key_path,
+        &data_dir,
+    )?;
     Ok((keys, entitlement))
 }
 
@@ -873,10 +891,27 @@ mod tests {
             membership_id: membership_id.to_string(),
             public_key: Some(keys.public_key().to_hex()),
         };
+        let entitlement = EvaosTeamsEntitlement {
+            community_id: community_id.to_string(),
+            relay_host: "https://relay.example.com".to_string(),
+            public_key: Some(keys.public_key().to_hex()),
+            role: "member".to_string(),
+            access_revision: 7,
+            expires_at: fixture_expiry(),
+            refresh_after_seconds: 300,
+        };
         assert_eq!(
-            validate_enrollment(&enrollment, &binding, &keys).unwrap(),
+            validate_enrollment(&enrollment, &binding, &entitlement, &keys).unwrap(),
             context
         );
+
+        let mut wrong_community = entitlement.clone();
+        wrong_community.community_id = "10000000-0000-4000-8000-000000000099".to_string();
+        assert!(validate_enrollment(&enrollment, &binding, &wrong_community, &keys).is_err());
+
+        let mut stale_revision = entitlement;
+        stale_revision.access_revision += 1;
+        assert!(validate_enrollment(&enrollment, &binding, &stale_revision, &keys).is_err());
 
         let payload_sha256 = "a".repeat(64);
         let event = signed_enrollment_event(&enrollment, &payload_sha256, &keys).unwrap();

@@ -502,33 +502,42 @@ fn resolve_identity_with_store(
                                 Ok(file_keys)
                                     if file_keys.public_key() != keyring_keys.public_key() =>
                                 {
-                                    eprintln!(
-                                        "buzz-desktop: identity.key differs from keyring; \
-                                         adopting imported key {}",
-                                        file_keys.public_key().to_hex()
-                                    );
-                                    // Delegate the store→read-back-verify→marker→delete
-                                    // sequence to `persist_identity_to_keyring`, which owns
-                                    // the marker-before-delete invariant and the fallback
-                                    // logic that keeps identity.key when the marker write
-                                    // fails. A transient keyring failure must not abort
-                                    // boot — the file key is safe and adoption retries next
-                                    // boot when the keyring is reachable again.
-                                    if let Err(e) = persist_identity_to_keyring(
-                                        store,
-                                        &file_keys,
-                                        legacy_path,
-                                        data_dir,
-                                    ) {
+                                    if cfg!(feature = "evaos-teams-managed") {
                                         eprintln!(
-                                            "buzz-desktop: keyring adoption of identity.key \
-                                             failed ({e}); using file key, will retry next boot"
+                                            "buzz-desktop: managed identity.key differs from \
+                                             verified keyring identity; keeping the keyring \
+                                             authoritative and removing the stale file"
                                         );
+                                        ensure_marker_then_cleanup(data_dir, legacy_path);
+                                    } else {
+                                        eprintln!(
+                                            "buzz-desktop: identity.key differs from keyring; \
+                                         adopting imported key {}",
+                                            file_keys.public_key().to_hex()
+                                        );
+                                        // Delegate the store→read-back-verify→marker→delete
+                                        // sequence to `persist_identity_to_keyring`, which owns
+                                        // the marker-before-delete invariant and the fallback
+                                        // logic that keeps identity.key when the marker write
+                                        // fails. A transient keyring failure must not abort
+                                        // boot — the file key is safe and adoption retries next
+                                        // boot when the keyring is reachable again.
+                                        if let Err(e) = persist_identity_to_keyring(
+                                            store,
+                                            &file_keys,
+                                            legacy_path,
+                                            data_dir,
+                                        ) {
+                                            eprintln!(
+                                                "buzz-desktop: keyring adoption of identity.key \
+                                             failed ({e}); using file key, will retry next boot"
+                                            );
+                                        }
+                                        return Ok(ResolvedIdentity {
+                                            keys: file_keys,
+                                            recovery: RecoveryState::None,
+                                        });
                                     }
-                                    return Ok(ResolvedIdentity {
-                                        keys: file_keys,
-                                        recovery: RecoveryState::None,
-                                    });
                                 }
                                 // Corrupt file — keyring is authoritative. Log before
                                 // cleanup so there is a diagnostic for the lost data.

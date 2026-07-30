@@ -3,6 +3,16 @@ use zeroize::Zeroizing;
 
 use super::{migration_marker_path, write_migration_marker, IdentityKeyStore, IDENTITY_KEY_NAME};
 
+pub(super) fn ensure_managed_identity_unchanged(
+    current: &Keys,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    if current.public_key().to_hex() != expected_public_key {
+        return Err("Native identity changed during managed recovery".to_string());
+    }
+    Ok(())
+}
+
 /// Persist a managed OAuth-recovered identity to the OS keyring without ever
 /// creating a plaintext file fallback.
 ///
@@ -45,6 +55,7 @@ pub(crate) fn persist_managed_recovered_identity(
     store: &crate::secret_store::SecretStore,
     state: &super::AppState,
     keys: &Keys,
+    expected_public_key: &str,
     legacy_path: &std::path::Path,
     data_dir: &std::path::Path,
 ) -> Result<(), String> {
@@ -52,6 +63,9 @@ pub(crate) fn persist_managed_recovered_identity(
         .identity_mutation
         .lock()
         .map_err(|error| error.to_string())?;
+    let current = state.keys.lock().map_err(|error| error.to_string())?;
+    ensure_managed_identity_unchanged(&current, expected_public_key)?;
+    drop(current);
     persist_managed_identity_to_keyring(store, keys, legacy_path, data_dir)?;
     *state.keys.lock().map_err(|error| error.to_string())? = keys.clone();
     state
