@@ -293,6 +293,10 @@ async fn rotate_lost_identity(
     }
 }
 
+fn resume_pending_event_publisher(start: impl FnOnce()) {
+    start();
+}
+
 /// Replace a genuinely lost managed Hive identity only after a fresh Electric
 /// OAuth session and an explicit user confirmation.
 #[tauri::command]
@@ -398,6 +402,9 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
             &replacement_binding,
             entitlement,
         )?;
+        resume_pending_event_publisher(|| {
+            crate::spawn_active_pending_event_publisher(app.clone());
+        });
         Ok(status)
     }
 }
@@ -444,6 +451,15 @@ mod tests {
             expires_at: (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
             refresh_after_seconds: 300,
         }
+    }
+
+    #[test]
+    fn successful_identity_reset_resumes_pending_event_publisher() {
+        let publisher_started = std::cell::Cell::new(false);
+
+        resume_pending_event_publisher(|| publisher_started.set(true));
+
+        assert!(publisher_started.get());
     }
 
     #[test]

@@ -1,6 +1,23 @@
 use super::*;
 use tauri::Manager;
 
+fn identity_reset_required_status() -> EvaosTeamsAuthStatus {
+    EvaosTeamsAuthStatus::managed(
+        "identity_reset_required",
+        Some("The prior Hive key is not available on this Mac or in managed recovery.".to_string()),
+    )
+}
+
+pub(super) fn pending_identity_reset_status(
+    state: &EvaosTeamsState,
+) -> Result<Option<EvaosTeamsAuthStatus>, String> {
+    let pending = state
+        .pending_identity_reset
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(pending.as_ref().map(|_| identity_reset_required_status()))
+}
+
 pub(super) fn persist_active_session(
     state: &EvaosTeamsState,
     app_state: &AppState,
@@ -211,13 +228,7 @@ pub(super) async fn complete_login(
                         relay_host: binding.relay_host.clone(),
                         public_key: canonical_public_key.to_string(),
                     });
-                    return Ok(EvaosTeamsAuthStatus::managed(
-                        "identity_reset_required",
-                        Some(
-                            "The prior Hive key is not available on this Mac or in managed recovery."
-                                .to_string(),
-                        ),
-                    ));
+                    return Ok(identity_reset_required_status());
                 }
                 Err(identity_custody::IdentityRecoveryError::Other(error)) => {
                     return Err(error);
@@ -245,4 +256,33 @@ pub(super) async fn complete_login(
         &verified_binding,
         entitlement,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_reset_confirmation_takes_precedence_over_pending_logout() {
+        let state = EvaosTeamsState::default();
+        *state.runtime.lock().unwrap() = ManagedRuntime {
+            initialized: true,
+            session: Some(Zeroizing::new("desktop-session".to_string())),
+            logout_pending: true,
+            custody_checked: false,
+        };
+        *state.pending_identity_reset.lock().unwrap() = Some(PendingIdentityReset {
+            session: Zeroizing::new("desktop-session".to_string()),
+            membership_id: "membership".to_string(),
+            community_id: "community".to_string(),
+            relay_host: "https://relay.example.com".to_string(),
+            public_key: "a".repeat(64),
+        });
+
+        let status = pending_identity_reset_status(&state).unwrap().unwrap();
+
+        assert_eq!(status.phase, "identity_reset_required");
+        assert!(state.runtime.lock().unwrap().logout_pending);
+        assert!(state.pending_identity_reset.lock().unwrap().is_some());
+    }
 }

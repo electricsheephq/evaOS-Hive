@@ -76,6 +76,23 @@ use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
 const INITIAL_RENDER_READY_EVENT: &str = "initial-render-ready";
 
+pub(crate) fn spawn_active_pending_event_publisher(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        use std::time::Duration;
+        use tauri::Manager;
+        loop {
+            let state = app_handle.state::<AppState>();
+            if let Err(error) =
+                managed_agents::persona_events::flush_active_pending_events(&app_handle, &state)
+                    .await
+            {
+                eprintln!("buzz-desktop: event-flush: {error}");
+            }
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+}
+
 fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
     if let Err(error) = window.show() {
         eprintln!("buzz-desktop: failed to reveal main window: {error}");
@@ -623,23 +640,7 @@ pub fn run() {
             // Skipped in recovery mode — flushing under an ephemeral key would
             // publish events attributed to an identity the user doesn't own.
             if !recovery_mode {
-                let flush_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    use std::time::Duration;
-                    use tauri::Manager;
-                    loop {
-                        let state = flush_handle.state::<AppState>();
-                        if let Err(e) = managed_agents::persona_events::flush_active_pending_events(
-                            &flush_handle,
-                            &state,
-                        )
-                        .await
-                        {
-                            eprintln!("buzz-desktop: event-flush: {e}");
-                        }
-                        tokio::time::sleep(Duration::from_secs(30)).await;
-                    }
-                });
+                spawn_active_pending_event_publisher(app.handle().clone());
             }
 
             Ok(())

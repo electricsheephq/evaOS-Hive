@@ -666,8 +666,7 @@ fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(),
     Ok(())
 }
 
-/// Return current managed-auth status and perform one bounded entitlement
-/// refresh. Unmanaged builds retain the native bypass.
+/// Return managed-auth status with one bounded refresh; unmanaged builds bypass it.
 #[tauri::command]
 pub(crate) async fn get_evaos_teams_auth_status(
     app: tauri::AppHandle,
@@ -697,6 +696,9 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 return Ok(EvaosTeamsAuthStatus::managed("signed_out", None));
             }
         };
+        if let Some(status) = login_identity::pending_identity_reset_status(&state)? {
+            return Ok(status);
+        }
         if logout_pending {
             return Ok(retry_pending_logout(
                 &app,
@@ -869,8 +871,7 @@ async fn claim_device_code(
     Ok(response)
 }
 
-/// Start proof-bound browser OAuth, verify the already-resolved native identity,
-/// and install only the server-selected entitlement.
+/// Start proof-bound OAuth and install only the server-selected entitlement.
 #[tauri::command]
 pub(crate) async fn start_evaos_teams_login(
     app: tauri::AppHandle,
@@ -974,8 +975,7 @@ pub(crate) async fn start_evaos_teams_login(
     }
 }
 
-/// Revoke only the opaque Electric device session. The native Buzz identity
-/// remains untouched so offline messages keep their durable recipient.
+/// Revoke only the opaque Electric session, preserving the native Buzz identity.
 #[tauri::command]
 pub(crate) async fn logout_evaos_teams(
     app: tauri::AppHandle,
