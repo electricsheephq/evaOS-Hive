@@ -146,6 +146,30 @@ fn validate_rotated_entitlement(
     Ok(entitlement)
 }
 
+#[derive(Debug, PartialEq)]
+enum IdentityRotationProgress {
+    Rotate,
+    Resume,
+}
+
+fn identity_rotation_progress(
+    current_public_key: Option<&str>,
+    pending_public_key: &str,
+    replacement_public_key: &str,
+) -> Result<IdentityRotationProgress, String> {
+    match current_public_key {
+        Some(public_key) if public_key == replacement_public_key => {
+            Ok(IdentityRotationProgress::Resume)
+        }
+        Some(public_key)
+            if public_key == pending_public_key && replacement_public_key != pending_public_key =>
+        {
+            Ok(IdentityRotationProgress::Rotate)
+        }
+        _ => Err("Managed identity changed before replacement could be confirmed".to_string()),
+    }
+}
+
 #[cfg(feature = "evaos-teams-managed")]
 async fn recover_completed_identity_rotation(
     client: &reqwest::Client,
@@ -252,17 +276,18 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
             .to_hex();
         let keys = stage_identity_rotation_key(&pending.membership_id)?;
         let replacement_public_key = keys.public_key().to_hex();
-        if replacement_public_key == pending.public_key {
-            return Err("Replacement identity must differ from the lost identity".to_string());
-        }
 
         let current_binding =
             get_identity_binding(&app_state.http_client, pending.session.as_str()).await?;
         if current_binding.membership_id != pending.membership_id {
             return Err("Managed identity replacement changed the selected membership".to_string());
         }
-        let entitlement = match current_binding.public_key.as_deref() {
-            Some(public_key) if public_key == replacement_public_key => {
+        let entitlement = match identity_rotation_progress(
+            current_binding.public_key.as_deref(),
+            &pending.public_key,
+            &replacement_public_key,
+        )? {
+            IdentityRotationProgress::Resume => {
                 recover_completed_identity_rotation(
                     &app_state.http_client,
                     pending.session.as_str(),
@@ -271,7 +296,7 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
                 )
                 .await?
             }
-            Some(public_key) if public_key == pending.public_key => {
+            IdentityRotationProgress::Rotate => {
                 rotate_lost_identity(
                     &app_state.http_client,
                     pending.session.as_str(),
@@ -279,11 +304,6 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
                     &pending.membership_id,
                 )
                 .await?
-            }
-            _ => {
-                return Err(
-                    "Managed identity changed before replacement could be confirmed".to_string(),
-                );
             }
         };
 
@@ -385,5 +405,34 @@ mod tests {
             "10000000-0000-4000-8000-000000000003",
         )
         .is_err());
+    }
+
+    #[test]
+    fn completed_rotation_resumes_when_pending_state_was_rebuilt_after_restart() {
+        let replacement_public_key = Keys::generate().public_key().to_hex();
+        assert_eq!(
+            identity_rotation_progress(
+                Some(&replacement_public_key),
+                &replacement_public_key,
+                &replacement_public_key,
+            )
+            .unwrap(),
+            IdentityRotationProgress::Resume
+        );
+    }
+
+    #[test]
+    fn unrotated_binding_selects_a_distinct_replacement_identity() {
+        let lost_public_key = Keys::generate().public_key().to_hex();
+        let replacement_public_key = Keys::generate().public_key().to_hex();
+        assert_eq!(
+            identity_rotation_progress(
+                Some(&lost_public_key),
+                &lost_public_key,
+                &replacement_public_key,
+            )
+            .unwrap(),
+            IdentityRotationProgress::Rotate
+        );
     }
 }

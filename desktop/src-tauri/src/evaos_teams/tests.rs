@@ -419,8 +419,7 @@ fn pending_session_preserves_only_legacy_identity_material() {
 fn staged_identity_rotation_is_membership_scoped_durable_and_cleared_on_adoption() {
     let membership_id = "10000000-0000-4000-8000-000000000002";
     let other_membership_id = "10000000-0000-4000-8000-000000000003";
-    let (first, keys) =
-        staged_identity_rotation_entries(&HashMap::new(), membership_id).unwrap();
+    let (first, keys) = staged_identity_rotation_entries(&HashMap::new(), membership_id).unwrap();
     let (second, reused) = staged_identity_rotation_entries(&first, membership_id).unwrap();
     let (with_other, other) =
         staged_identity_rotation_entries(&second, other_membership_id).unwrap();
