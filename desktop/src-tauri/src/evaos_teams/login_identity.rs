@@ -67,6 +67,8 @@ pub(super) fn binding_for_entitlement(
         .ok_or_else(|| "Managed entitlement did not include the verified identity".to_string())?;
     Ok(IdentityBinding {
         membership_id: binding.membership_id.clone(),
+        community_id: binding.community_id.clone(),
+        relay_host: binding.relay_host.clone(),
         public_key: Some(public_key),
     })
 }

@@ -160,6 +160,29 @@ fn server_snake_case_decodes_and_renderer_camel_case_encodes() {
 }
 
 #[test]
+fn identity_binding_requires_authoritative_scope_fields() {
+    let response = serde_json::json!({
+        "status": "active",
+        "binding": {
+            "membership_id": "10000000-0000-4000-8000-000000000002",
+            "community_id": "10000000-0000-4000-8000-000000000003",
+            "relay_host": "https://relay.example.com",
+            "public_key": null
+        }
+    });
+    assert!(serde_json::from_value::<IdentityBindingResponse>(response.clone()).is_ok());
+
+    for missing_field in ["community_id", "relay_host"] {
+        let mut incomplete = response.clone();
+        incomplete["binding"]
+            .as_object_mut()
+            .unwrap()
+            .remove(missing_field);
+        assert!(serde_json::from_value::<IdentityBindingResponse>(incomplete).is_err());
+    }
+}
+
+#[test]
 fn challenge_signature_uses_exact_server_template_and_rejects_tampering() {
     let keys = Keys::generate();
     let response = challenge(&keys);
@@ -272,6 +295,8 @@ fn existing_native_key_activates_without_replacing_identity() {
     let keys = Keys::generate();
     let binding = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: Some(keys.public_key().to_hex()),
     };
     assert!(verify_existing_native_identity(&binding, &keys).unwrap());
@@ -330,12 +355,16 @@ fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_recovery() {
 
     let unbound = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: None,
     };
     assert!(!verify_existing_native_identity(&unbound, &keys).unwrap());
 
     let mismatched = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: Some(Keys::generate().public_key().to_hex()),
     };
     let error = verify_existing_native_identity(&mismatched, &keys).unwrap_err();
@@ -586,6 +615,8 @@ fn managed_store_shape_still_rejects_unknown_material() {
 fn entitlement_binding_requires_the_verified_public_key() {
     let binding = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: None,
     };
 

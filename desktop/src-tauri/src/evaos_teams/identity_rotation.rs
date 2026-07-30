@@ -136,14 +136,39 @@ fn stage_identity_rotation_key(membership_id: &str) -> Result<Keys, String> {
 
 fn validate_rotated_entitlement(
     entitlement: EvaosTeamsEntitlement,
+    expected_community: &str,
     expected_relay: &str,
     expected_public_key: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
+    if entitlement.community_id != expected_community {
+        return Err(
+            "Managed identity replacement changed the server-selected community".to_string(),
+        );
+    }
     if entitlement.relay_host != expected_relay {
         return Err("Managed identity replacement changed the server-selected relay".to_string());
     }
     validate_entitlement(&entitlement, expected_public_key)?;
     Ok(entitlement)
+}
+
+fn validate_completed_identity_rotation(
+    binding: &IdentityBinding,
+    entitlement: EvaosTeamsEntitlement,
+    expected_membership_id: &str,
+    expected_public_key: &str,
+) -> Result<EvaosTeamsEntitlement, String> {
+    if binding.membership_id != expected_membership_id
+        || binding.public_key.as_deref() != Some(expected_public_key)
+    {
+        return Err("managed identity replacement was not completed".to_string());
+    }
+    validate_rotated_entitlement(
+        entitlement,
+        &binding.community_id,
+        &binding.relay_host,
+        expected_public_key,
+    )
 }
 
 #[derive(Debug, PartialEq)]
@@ -179,16 +204,10 @@ async fn recover_completed_identity_rotation(
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
     let binding = get_identity_binding(client, token).await?;
-    if binding.membership_id != expected_membership_id
-        || binding.public_key.as_deref() != Some(public_key.as_str())
-    {
-        return Err("managed identity replacement was not completed".to_string());
-    }
     let entitlement = get_remote_entitlement(client, token)
         .await
         .map_err(|_| "managed identity replacement entitlement was not available".to_string())?;
-    validate_entitlement(&entitlement, &public_key)?;
-    Ok(entitlement)
+    validate_completed_identity_rotation(&binding, entitlement, expected_membership_id, &public_key)
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -231,6 +250,7 @@ async fn rotate_lost_identity(
     match verified {
         Ok(response) if response.status == "active" => validate_rotated_entitlement(
             response.entitlement,
+            &challenge.challenge.community_id,
             &challenge.relay_host,
             &public_key,
         ),
@@ -309,6 +329,8 @@ pub(crate) async fn replace_lost_evaos_teams_identity(
 
         let replacement_binding = IdentityBinding {
             membership_id: pending.membership_id.clone(),
+            community_id: entitlement.community_id.clone(),
+            relay_host: entitlement.relay_host.clone(),
             public_key: Some(replacement_public_key),
         };
         identity_custody::ensure_enrollment(
@@ -381,6 +403,18 @@ mod tests {
         }
     }
 
+    fn fixture_entitlement(keys: &Keys) -> EvaosTeamsEntitlement {
+        EvaosTeamsEntitlement {
+            community_id: "10000000-0000-4000-8000-000000000004".to_string(),
+            relay_host: "https://relay.example.com".to_string(),
+            public_key: Some(keys.public_key().to_hex()),
+            role: "member".to_string(),
+            access_revision: 7,
+            expires_at: (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
+            refresh_after_seconds: 300,
+        }
+    }
+
     #[test]
     fn rotation_signature_uses_only_the_exact_server_template() {
         let keys = Keys::generate();
@@ -405,6 +439,93 @@ mod tests {
             "10000000-0000-4000-8000-000000000003",
         )
         .is_err());
+    }
+
+    #[test]
+    fn rotated_entitlement_requires_exact_challenge_binding() {
+        let keys = Keys::generate();
+        let entitlement = fixture_entitlement(&keys);
+        let public_key = keys.public_key().to_hex();
+        assert!(validate_rotated_entitlement(
+            entitlement.clone(),
+            "10000000-0000-4000-8000-000000000004",
+            "https://relay.example.com",
+            &public_key,
+        )
+        .is_ok());
+
+        let mut wrong_community = entitlement.clone();
+        wrong_community.community_id = "10000000-0000-4000-8000-000000000099".to_string();
+        assert!(validate_rotated_entitlement(
+            wrong_community,
+            "10000000-0000-4000-8000-000000000004",
+            "https://relay.example.com",
+            &public_key,
+        )
+        .is_err());
+
+        let mut wrong_relay = entitlement.clone();
+        wrong_relay.relay_host = "https://other.example.com".to_string();
+        assert!(validate_rotated_entitlement(
+            wrong_relay,
+            "10000000-0000-4000-8000-000000000004",
+            "https://relay.example.com",
+            &public_key,
+        )
+        .is_err());
+
+        let mut wrong_key = entitlement;
+        wrong_key.public_key = Some(Keys::generate().public_key().to_hex());
+        assert!(validate_rotated_entitlement(
+            wrong_key,
+            "10000000-0000-4000-8000-000000000004",
+            "https://relay.example.com",
+            &public_key,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn completed_rotation_requires_exact_authoritative_binding() {
+        let keys = Keys::generate();
+        let public_key = keys.public_key().to_hex();
+        let binding = IdentityBinding {
+            membership_id: "10000000-0000-4000-8000-000000000003".to_string(),
+            community_id: "10000000-0000-4000-8000-000000000004".to_string(),
+            relay_host: "https://relay.example.com".to_string(),
+            public_key: Some(public_key.clone()),
+        };
+        let entitlement = fixture_entitlement(&keys);
+        assert!(validate_completed_identity_rotation(
+            &binding,
+            entitlement.clone(),
+            &binding.membership_id,
+            &public_key,
+        )
+        .is_ok());
+
+        for mismatched in [
+            EvaosTeamsEntitlement {
+                community_id: "10000000-0000-4000-8000-000000000099".to_string(),
+                ..entitlement.clone()
+            },
+            EvaosTeamsEntitlement {
+                relay_host: "https://other.example.com".to_string(),
+                ..entitlement.clone()
+            },
+            EvaosTeamsEntitlement {
+                public_key: Some(Keys::generate().public_key().to_hex()),
+                ..entitlement
+            },
+        ] {
+            assert!(validate_completed_identity_rotation(
+                &binding,
+                mismatched,
+                &binding.membership_id,
+                &public_key,
+            )
+            .is_err());
+        }
     }
 
     #[test]

@@ -206,6 +206,8 @@ struct EntitlementResponse {
 #[derive(Debug, Deserialize, PartialEq)]
 struct IdentityBinding {
     membership_id: String,
+    community_id: String,
+    relay_host: String,
     public_key: Option<String>,
 }
 
@@ -608,6 +610,10 @@ async fn get_identity_binding(
     }
     uuid::Uuid::parse_str(&response.binding.membership_id)
         .map_err(|_| "Managed identity selection returned an invalid membership".to_string())?;
+    uuid::Uuid::parse_str(&response.binding.community_id)
+        .map_err(|_| "Managed identity selection returned an invalid community".to_string())?;
+    relay_websocket_url(&response.binding.relay_host)
+        .map_err(|_| "Managed identity selection returned an invalid relay".to_string())?;
     Ok(response.binding)
 }
 

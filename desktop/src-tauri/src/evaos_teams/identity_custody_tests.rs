@@ -195,9 +195,11 @@ fn envelope_decryption_fails_for_wrong_context_key_and_digest() {
 #[test]
 fn recovery_scope_and_revision_validation_fail_closed() {
     let keys = Keys::generate();
-    let (_, membership_id, _) = fixture_ids();
+    let (_, membership_id, community_id) = fixture_ids();
     let binding = IdentityBinding {
         membership_id: membership_id.to_string(),
+        community_id: community_id.to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: Some(keys.public_key().to_hex()),
     };
     let challenge = fixture_challenge(&keys);
@@ -218,6 +220,8 @@ fn recovery_scope_and_revision_validation_fail_closed() {
 
     let wrong_membership = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000099".to_string(),
+        community_id: binding.community_id.clone(),
+        relay_host: binding.relay_host.clone(),
         public_key: binding.public_key.clone(),
     };
     assert!(validate_recovery_payload(&payload, &recovery, &wrong_membership, &challenge).is_err());
@@ -237,6 +241,8 @@ fn recovery_challenge_binds_device_and_rejects_expiry() {
     let (_, membership_id, _) = fixture_ids();
     let binding = IdentityBinding {
         membership_id: membership_id.to_string(),
+        community_id: fixture_challenge(&keys).challenge.community_id,
+        relay_host: "https://relay.example.com".to_string(),
         public_key: Some(keys.public_key().to_hex()),
     };
     let device = DeviceTransport::generate().unwrap();
@@ -272,6 +278,8 @@ fn enrollment_event_is_native_signed_and_canonical() {
     };
     let binding = IdentityBinding {
         membership_id: membership_id.to_string(),
+        community_id: community_id.to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: Some(keys.public_key().to_hex()),
     };
     let entitlement = EvaosTeamsEntitlement {
