@@ -9679,6 +9679,20 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
+      case "get_desktop_product_policy":
+        return {
+          managed: false,
+          productName: "Buzz",
+          version: "0.5.2",
+          bundleIdentifier: "xyz.block.buzz.app",
+          deepLinkScheme: "buzz",
+          artifactName: "",
+          updateChannel: "upstream",
+          updaterEnabled: false,
+          upstreamHostedServicesEnabled: true,
+          originAttribution:
+            "Buzz by Block, licensed under the Apache License 2.0.",
+        };
       case "get_builderlab_auth":
         return activeConfig?.mock?.builderlabAuth ?? null;
       case "start_builderlab_login": {

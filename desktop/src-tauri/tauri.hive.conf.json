@@ -1,0 +1,31 @@
+{
+  "productName": "Hive",
+  "mainBinaryName": "Hive",
+  "version": "0.5.2-es.1",
+  "identifier": "com.electricsheephq.evaos.teams",
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["buzz"]
+      }
+    }
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "targets": ["app", "dmg"],
+    "icon": ["hive/icon.png", "hive/icon.icns"],
+    "resources": {
+      "../../LICENSE": "licenses/Buzz-Apache-2.0.txt",
+      "hive/NOTICE.txt": "licenses/Hive-NOTICE.txt"
+    },
+    "macOS": {
+      "infoPlist": "hive/Info.plist",
+      "dmg": {
+        "background": "hive/dmg-background.png"
+      }
+    }
+  }
+}

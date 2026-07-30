@@ -21,6 +21,8 @@ mod native_websocket;
 mod nostr_bind;
 pub mod nostr_convert;
 mod prevent_sleep;
+mod product_contract;
+mod product_policy;
 mod ptt_shortcut;
 mod relay;
 mod relay_admission;
@@ -56,6 +58,7 @@ use managed_agents::{
 };
 #[cfg(not(feature = "mesh-llm"))]
 use mesh_llm_stubs::*;
+use product_policy::get_desktop_product_policy;
 #[cfg(all(feature = "mesh-llm", target_os = "macos"))]
 use shutdown::{hard_exit_after_mesh_shutdown, relaunch_after_mesh_shutdown};
 use shutdown::{is_restart_request, shut_down_app};
@@ -645,6 +648,7 @@ pub fn run() {
             cancel_builderlab_login,
             get_builderlab_auth,
             clear_builderlab_auth,
+            get_desktop_product_policy,
             get_builderlab_nostr_identity,
             bind_builderlab_nostr_identity,
             delete_builderlab_nostr_identity,

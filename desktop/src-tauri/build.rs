@@ -4,11 +4,44 @@ include!("src/commands/reconnect_hook_config.rs");
 
 use base64::Engine as _;
 
+#[allow(dead_code)]
+#[path = "src/product_contract.rs"]
+mod product_contract;
+
+fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                merge_json(base.entry(key).or_insert(serde_json::Value::Null), value);
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+fn configure_hive_product(updater_public_key: Option<&str>) {
+    let mut config = std::env::var("TAURI_CONFIG")
+        .ok()
+        .map(|value| {
+            serde_json::from_str(&value)
+                .unwrap_or_else(|error| panic!("TAURI_CONFIG is not valid JSON: {error}"))
+        })
+        .unwrap_or_else(|| serde_json::json!({}));
+    merge_json(
+        &mut config,
+        product_contract::managed_tauri_overlay(updater_public_key),
+    );
+    let config = config.to_string();
+    std::env::set_var("TAURI_CONFIG", &config);
+    println!("cargo:rustc-env=TAURI_CONFIG={config}");
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_URL");
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_HTTP");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_ENDPOINT");
+    println!("cargo:rerun-if-env-changed=HIVE_UPDATER_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_PROVIDER");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_BUZZ_AGENT_MODEL");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AGENT_ENV");
@@ -97,16 +130,31 @@ fn main() {
         println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_AUTO_CONNECT_DEFAULT_RELAY=1");
     }
 
-    let updater_public_key = std::env::var("BUZZ_UPDATER_PUBLIC_KEY")
+    let buzz_updater_public_key = std::env::var("BUZZ_UPDATER_PUBLIC_KEY")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let updater_endpoint = std::env::var("BUZZ_UPDATER_ENDPOINT")
+    let buzz_updater_endpoint = std::env::var("BUZZ_UPDATER_ENDPOINT")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    if updater_public_key.is_some() && updater_endpoint.is_some() {
+    let managed = std::env::var_os("CARGO_FEATURE_EVAOS_TEAMS_MANAGED").is_some();
+    let updater_enabled = if managed {
+        if buzz_updater_public_key.is_some() || buzz_updater_endpoint.is_some() {
+            panic!("Hive builds reject the upstream Buzz updater configuration");
+        }
+        let hive_public_key = std::env::var("HIVE_UPDATER_PUBLIC_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        configure_hive_product(hive_public_key.as_deref());
+        hive_public_key.is_some()
+    } else {
+        buzz_updater_public_key.is_some() && buzz_updater_endpoint.is_some()
+    };
+
+    if updater_enabled {
         println!("cargo:rustc-cfg=buzz_updater_enabled");
     }
 
