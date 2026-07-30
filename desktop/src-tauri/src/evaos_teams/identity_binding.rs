@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 #[cfg(feature = "evaos-teams-managed")]
 use super::{http_api::post_json, relay_websocket_url};
-use super::{validate_entitlement, EvaosTeamsEntitlement};
+use super::{validate_challenge, validate_entitlement, ChallengeResponse, EvaosTeamsEntitlement};
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub(super) struct IdentityBinding {
@@ -33,6 +33,29 @@ pub(super) fn validate_identity_binding(
         return Err("Managed identity selection changed the server-selected scope".to_string());
     }
     Ok(())
+}
+
+pub(super) fn validate_challenge_for_binding(
+    response: &ChallengeResponse,
+    binding: &IdentityBinding,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    validate_challenge(response, expected_public_key, &binding.membership_id)?;
+    if binding.public_key.is_some() {
+        validate_identity_binding(
+            binding,
+            &response.challenge.membership_id,
+            &response.challenge.community_id,
+            &response.relay_host,
+            expected_public_key,
+        )
+    } else if binding.community_id != response.challenge.community_id
+        || binding.relay_host != response.relay_host
+    {
+        Err("managed key challenge changed the server-selected scope".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) fn validate_entitlement_for_binding(

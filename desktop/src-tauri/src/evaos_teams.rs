@@ -50,10 +50,9 @@ mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
 #[cfg(feature = "evaos-teams-managed")]
 use identity_binding::get_identity_binding;
-use identity_binding::validate_entitlement_for_binding;
-use identity_binding::IdentityBinding;
 #[cfg(test)]
 use identity_binding::IdentityBindingResponse;
+use identity_binding::{validate_challenge_for_binding, IdentityBinding};
 pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
 use keychain_migration::{
     pending_session_entries, preserve_legacy_identity_entries, validated_runtime_entries,
@@ -342,29 +341,6 @@ fn validate_challenge(
     Ok(())
 }
 
-fn validate_challenge_for_binding(
-    response: &ChallengeResponse,
-    binding: &IdentityBinding,
-    expected_public_key: &str,
-) -> Result<(), String> {
-    validate_challenge(response, expected_public_key, &binding.membership_id)?;
-    if binding.public_key.is_some() {
-        identity_binding::validate_identity_binding(
-            binding,
-            &response.challenge.membership_id,
-            &response.challenge.community_id,
-            &response.relay_host,
-            expected_public_key,
-        )
-    } else if binding.community_id != response.challenge.community_id
-        || binding.relay_host != response.relay_host
-    {
-        Err("managed key challenge changed the server-selected scope".to_string())
-    } else {
-        Ok(())
-    }
-}
-
 fn signed_challenge(
     response: &ChallengeResponse,
     keys: &Keys,
@@ -431,7 +407,7 @@ fn install_entitlement(
     if active_public_key != keys.public_key().to_hex() {
         return Err("Native identity changed during managed verification".to_string());
     }
-    validate_entitlement_for_binding(
+    identity_binding::validate_entitlement_for_binding(
         binding,
         entitlement,
         expected_membership_id,
@@ -791,7 +767,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
         };
         match entitlement {
             Ok(entitlement) => {
-                if let Err(error) = validate_entitlement_for_binding(
+                if let Err(error) = identity_binding::validate_entitlement_for_binding(
                     &binding,
                     &entitlement,
                     &binding.membership_id,

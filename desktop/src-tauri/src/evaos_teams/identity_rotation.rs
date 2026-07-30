@@ -167,7 +167,7 @@ fn validate_completed_identity_rotation(
     expected_membership_id: &str,
     expected_public_key: &str,
 ) -> Result<EvaosTeamsEntitlement, String> {
-    validate_entitlement_for_binding(
+    identity_binding::validate_entitlement_for_binding(
         binding,
         &entitlement,
         expected_membership_id,

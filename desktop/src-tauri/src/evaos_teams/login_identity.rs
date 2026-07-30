@@ -197,7 +197,7 @@ pub(super) async fn complete_login(
         );
     };
     let verified_binding = get_identity_binding(&app_state.http_client, &desktop_session).await?;
-    validate_entitlement_for_binding(
+    identity_binding::validate_entitlement_for_binding(
         &verified_binding,
         &entitlement,
         &binding.membership_id,
