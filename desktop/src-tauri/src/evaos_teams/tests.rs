@@ -1,4 +1,6 @@
+use super::keychain_migration::{active_session_entries, select_legacy_identity_candidate};
 use super::*;
+use nostr::ToBech32;
 
 #[test]
 fn managed_session_keyring_service_remains_upgrade_compatible() {
@@ -343,7 +345,7 @@ fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_recovery() {
 }
 
 #[test]
-fn managed_store_shape_migrates_only_known_legacy_identity_entries() {
+fn managed_store_shape_preserves_known_legacy_identity_entries() {
     let session_only =
         HashMap::from([(SESSION_KEY.to_string(), "opaque-session-value".to_string())]);
     let runtime = runtime_from_entries(Some(session_only)).unwrap();
@@ -363,18 +365,168 @@ fn managed_store_shape_migrates_only_known_legacy_identity_entries() {
             "nsec1forbidden".to_string(),
         ),
     ]);
-    let (normalized, removed_legacy_identity) = normalized_runtime_entries(Some(legacy)).unwrap();
-    assert!(removed_legacy_identity);
-    assert_eq!(
-        normalized,
-        HashMap::from([
-            (SESSION_KEY.to_string(), "opaque-session-value".to_string()),
-            (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
-        ])
-    );
-    let runtime = runtime_from_entries(Some(normalized)).unwrap();
+    let validated = validated_runtime_entries(Some(legacy.clone())).unwrap();
+    assert_eq!(validated, legacy);
+    let runtime = runtime_from_entries(Some(validated)).unwrap();
     assert!(runtime.session.is_some());
     assert!(runtime.logout_pending);
+}
+
+#[test]
+fn pending_session_preserves_only_legacy_identity_material() {
+    let keys = Keys::generate();
+    let membership_id = "10000000-0000-4000-8000-000000000002";
+    let mut stored = HashMap::from([
+        (
+            format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}"),
+            keys.secret_key().to_bech32().unwrap(),
+        ),
+        (
+            LEGACY_ACTIVE_MEMBERSHIP_KEY.to_string(),
+            membership_id.to_string(),
+        ),
+    ]);
+    let mut pending = preserve_legacy_identity_entries(&stored).unwrap();
+    pending.extend(pending_session_entries("new-session"));
+
+    assert_eq!(
+        pending.get(&format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}")),
+        stored.get(&format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}"))
+    );
+    assert_eq!(
+        pending.get(LEGACY_ACTIVE_MEMBERSHIP_KEY),
+        Some(&membership_id.to_string())
+    );
+    assert_eq!(
+        pending.get(SESSION_KEY).map(String::as_str),
+        Some("new-session")
+    );
+    assert_eq!(
+        pending.get(LOGOUT_PENDING_KEY).map(String::as_str),
+        Some("1")
+    );
+
+    stored.insert(SESSION_KEY.to_string(), "old-session".to_string());
+    let signed_out = preserve_legacy_identity_entries(&stored).unwrap();
+    assert!(!signed_out.contains_key(SESSION_KEY));
+    assert!(signed_out.contains_key(&format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}")));
+}
+
+#[test]
+fn legacy_identity_candidate_requires_canonical_membership_match() {
+    let matching = Keys::generate();
+    let other = Keys::generate();
+    let membership_id = "10000000-0000-4000-8000-000000000002";
+    let other_membership_id = "10000000-0000-4000-8000-000000000003";
+    let stored = HashMap::from([
+        (
+            format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}"),
+            matching.secret_key().to_bech32().unwrap(),
+        ),
+        (
+            format!("{LEGACY_IDENTITY_KEY_PREFIX}{other_membership_id}"),
+            other.secret_key().to_bech32().unwrap(),
+        ),
+    ]);
+
+    let candidate =
+        select_legacy_identity_candidate(&stored, membership_id, &matching.public_key().to_hex())
+            .unwrap()
+            .unwrap();
+    assert_eq!(candidate.public_key(), matching.public_key());
+    assert!(
+        select_legacy_identity_candidate(&stored, membership_id, &other.public_key().to_hex())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn legacy_identity_candidate_deduplicates_same_unscoped_key() {
+    let keys = Keys::generate();
+    let membership_id = "10000000-0000-4000-8000-000000000002";
+    let encoded = keys.secret_key().to_bech32().unwrap();
+    let stored = HashMap::from([
+        (
+            format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}"),
+            encoded.clone(),
+        ),
+        (LEGACY_IDENTITY_KEY.to_string(), encoded),
+    ]);
+
+    let candidate =
+        select_legacy_identity_candidate(&stored, membership_id, &keys.public_key().to_hex())
+            .unwrap()
+            .unwrap();
+    assert_eq!(candidate.public_key(), keys.public_key());
+}
+
+#[test]
+fn malformed_legacy_identity_fails_without_normalizing_it_away() {
+    let membership_id = "10000000-0000-4000-8000-000000000002";
+    let stored = HashMap::from([(
+        format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}"),
+        "not-a-private-key".to_string(),
+    )]);
+
+    assert!(select_legacy_identity_candidate(
+        &stored,
+        membership_id,
+        &Keys::generate().public_key().to_hex(),
+    )
+    .unwrap()
+    .is_none());
+    assert_eq!(
+        validated_runtime_entries(Some(stored.clone())).unwrap(),
+        stored
+    );
+}
+
+#[test]
+fn active_session_removes_only_the_adopted_legacy_identity() {
+    let adopted = Keys::generate();
+    let other = Keys::generate();
+    let membership_id = "10000000-0000-4000-8000-000000000002";
+    let other_membership_id = "10000000-0000-4000-8000-000000000003";
+    let adopted_key = format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}");
+    let other_key = format!("{LEGACY_IDENTITY_KEY_PREFIX}{other_membership_id}");
+    let stored = HashMap::from([
+        (
+            adopted_key.clone(),
+            adopted.secret_key().to_bech32().unwrap(),
+        ),
+        (other_key.clone(), other.secret_key().to_bech32().unwrap()),
+        (
+            LEGACY_IDENTITY_KEY.to_string(),
+            "malformed-preserved-value".to_string(),
+        ),
+        (
+            LEGACY_ACTIVE_MEMBERSHIP_KEY.to_string(),
+            membership_id.to_string(),
+        ),
+        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
+    ]);
+
+    let replacement = active_session_entries(
+        &stored,
+        "active-session",
+        membership_id,
+        &adopted.public_key().to_hex(),
+    )
+    .unwrap();
+
+    assert!(!replacement.contains_key(&adopted_key));
+    assert_eq!(replacement.get(&other_key), stored.get(&other_key));
+    assert_eq!(
+        replacement.get(LEGACY_IDENTITY_KEY),
+        Some(&"malformed-preserved-value".to_string())
+    );
+    assert!(!replacement.contains_key(LEGACY_ACTIVE_MEMBERSHIP_KEY));
+    assert!(!replacement.contains_key(LOGOUT_PENDING_KEY));
+    assert_eq!(
+        replacement.get(SESSION_KEY).map(String::as_str),
+        Some("active-session")
+    );
 }
 
 #[test]

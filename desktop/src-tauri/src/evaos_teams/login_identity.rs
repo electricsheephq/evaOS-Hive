@@ -1,16 +1,27 @@
 use super::*;
+use tauri::Manager;
 
 fn persist_active_session(
     state: &EvaosTeamsState,
     app_state: &AppState,
     session: String,
     keys: &Keys,
+    membership_id: &str,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
     install_entitlement(app_state, keys, &entitlement)?;
-    let replacement = HashMap::from([(SESSION_KEY.to_string(), session.clone())]);
-    if managed_store().replace_all(&replacement).is_err() {
+    if managed_store()
+        .replace_all_checked(|fresh| {
+            keychain_migration::active_session_entries(
+                fresh,
+                &session,
+                membership_id,
+                &keys.public_key().to_hex(),
+            )
+        })
+        .is_err()
+    {
         disable_managed_access(app_state);
         return Err("Could not commit managed access in macOS Keychain".to_string());
     }
@@ -89,18 +100,78 @@ pub(super) async fn complete_login(
         .await?;
         (keys, entitlement)
     } else if binding.public_key.is_some() {
-        identity_custody::recover_identity(
-            app,
-            app_state,
-            &app_state.http_client,
-            &desktop_session,
-            &binding,
-        )
-        .await?
+        let canonical_public_key = binding
+            .public_key
+            .as_deref()
+            .ok_or_else(|| "Managed identity binding is missing".to_string())?;
+        let legacy_candidate = keychain_migration::select_legacy_identity_candidate(
+            &managed_store().load_all_readonly()?.unwrap_or_default(),
+            &binding.membership_id,
+            canonical_public_key,
+        )?;
+        if let Some(keys) = legacy_candidate {
+            let entitlement = bind_identity(
+                &app_state.http_client,
+                &desktop_session,
+                &keys,
+                &binding.membership_id,
+            )
+            .await?;
+            let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
+            identity_custody::ensure_enrollment(
+                &app_state.http_client,
+                &desktop_session,
+                &verified_binding,
+                &entitlement,
+                &keys,
+            )
+            .await?;
+            authorization::prepare_managed_identity_recovery(app, app_state)?;
+            let expected_local_public_key = app_state
+                .keys
+                .lock()
+                .map_err(|error| error.to_string())?
+                .public_key()
+                .to_hex();
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("app data dir: {error}"))?;
+            std::fs::create_dir_all(&data_dir)
+                .map_err(|error| format!("create app data dir: {error}"))?;
+            let key_path = data_dir.join("identity.key");
+            let store =
+                crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
+            crate::app_state::managed_identity::persist_managed_recovered_identity(
+                store,
+                app_state,
+                &keys,
+                &expected_local_public_key,
+                &key_path,
+                &data_dir,
+            )?;
+            (keys, entitlement)
+        } else {
+            identity_custody::recover_identity(
+                app,
+                app_state,
+                &app_state.http_client,
+                &desktop_session,
+                &binding,
+            )
+            .await?
+        }
     } else {
         return Err(
             "Hive could not establish a native identity for this new membership".to_string(),
         );
     };
-    persist_active_session(state, app_state, desktop_session, &keys, entitlement)
+    persist_active_session(
+        state,
+        app_state,
+        desktop_session,
+        &keys,
+        &binding.membership_id,
+        entitlement,
+    )
 }

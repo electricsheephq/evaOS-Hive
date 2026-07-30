@@ -46,7 +46,7 @@ mod keychain_migration;
 #[cfg(feature = "evaos-teams-managed")]
 mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
-use keychain_migration::normalized_runtime_entries;
+use keychain_migration::{preserve_legacy_identity_entries, validated_runtime_entries};
 
 const DASHBOARD_ORIGIN: &str = "https://www.electricsheephq.com";
 // Keep the legacy internal service name so upgrades retain and can revoke the
@@ -424,7 +424,7 @@ fn install_entitlement(
 }
 
 fn runtime_from_entries(stored: Option<HashMap<String, String>>) -> Result<ManagedRuntime, String> {
-    let (stored, _) = normalized_runtime_entries(stored)?;
+    let stored = validated_runtime_entries(stored)?;
     let session = stored
         .get(SESSION_KEY)
         .filter(|value| !value.trim().is_empty())
@@ -450,9 +450,6 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
     if runtime.initialized {
         return Ok(());
     }
-    managed_store().replace_all_checked(|fresh| {
-        normalized_runtime_entries(Some(fresh.clone())).map(|(normalized, _)| normalized)
-    })?;
     *runtime = runtime_from_entries(managed_store().load_all_readonly()?)?;
     Ok(())
 }
@@ -496,8 +493,8 @@ async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiF
 
 #[cfg(feature = "evaos-teams-managed")]
 fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
-    let replacement = HashMap::new();
-    managed_store().replace_all(&replacement)?;
+    managed_store().replace_all_checked(preserve_legacy_identity_entries)?;
+    let replacement = managed_store().load_all_readonly()?.unwrap_or_default();
     if managed_store().load_all_readonly()? != Some(replacement) {
         return Err("managed session read-back verification failed".to_string());
     }
@@ -545,13 +542,15 @@ async fn begin_managed_logout(
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let (session, _) = current_session(state)?;
     disable_managed_access(app_state);
-    let pending = HashMap::from([
-        (SESSION_KEY.to_string(), session.to_string()),
-        (LOGOUT_PENDING_KEY.to_string(), "1".to_string()),
-    ]);
     managed_store()
-        .replace_all(&pending)
+        .replace_all_checked(|fresh| {
+            let mut pending = preserve_legacy_identity_entries(fresh)?;
+            pending.insert(SESSION_KEY.to_string(), session.to_string());
+            pending.insert(LOGOUT_PENDING_KEY.to_string(), "1".to_string());
+            Ok(pending)
+        })
         .map_err(|_| "Could not record durable managed logout".to_string())?;
+    let pending = managed_store().load_all_readonly()?.unwrap_or_default();
     if managed_store().load_all_readonly()? != Some(pending) {
         return Err("Could not verify durable managed logout".to_string());
     }
@@ -679,10 +678,14 @@ fn pending_session_entries(session: &str) -> HashMap<String, String> {
 
 #[cfg(feature = "evaos-teams-managed")]
 fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(), String> {
-    let replacement = pending_session_entries(session);
     managed_store()
-        .replace_all(&replacement)
+        .replace_all_checked(|fresh| {
+            let mut replacement = preserve_legacy_identity_entries(fresh)?;
+            replacement.extend(pending_session_entries(session));
+            Ok(replacement)
+        })
         .map_err(|_| "Could not save managed access in macOS Keychain".to_string())?;
+    let replacement = managed_store().load_all_readonly()?.unwrap_or_default();
     if managed_store().load_all_readonly()? != Some(replacement) {
         return Err("Managed Keychain read-back verification failed".to_string());
     }
