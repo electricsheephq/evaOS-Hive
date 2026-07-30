@@ -61,6 +61,16 @@ export function intersectAuthorizedCompanyAgents(
   });
 }
 
+export function resolveCompanyVmAgents(
+  relayAgents: RelayAgent[],
+  authorizations: HiveCompanyAgentAuthorization[],
+  hasQueryError: boolean,
+) {
+  return hasQueryError
+    ? []
+    : intersectAuthorizedCompanyAgents(relayAgents, authorizations);
+}
+
 export function hasCanonicalCompanyWelcomeAgents(
   companyAgents: CompanyVmAgent[],
 ) {
@@ -91,9 +101,7 @@ export function filterBuiltinWelcomeAgents(
     ? agents.filter(
         (agent) =>
           !(
-            (agent.personaId &&
-              BUILTIN_WELCOME_PERSONA_IDS.has(agent.personaId)) ||
-            agent.teamId === BUILTIN_WELCOME_TEAM_ID
+            agent.personaId && BUILTIN_WELCOME_PERSONA_IDS.has(agent.personaId)
           ),
       )
     : agents;

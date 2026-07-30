@@ -7,6 +7,7 @@ import {
   filterBuiltinWelcomeTeams,
   hasCanonicalCompanyWelcomeAgents,
   intersectAuthorizedCompanyAgents,
+  resolveCompanyVmAgents,
 } from "./companyAgentCatalog.ts";
 
 const PUBKEYS = {
@@ -68,6 +69,19 @@ test("never synthesizes a catalog-only company agent", () => {
   );
 });
 
+test("failed catalog or relay refresh drops stale company authorization", () => {
+  const relayAgents = [relayAgent(PUBKEYS.tars, "Native TARS")];
+  const authorizations = [authorization(PUBKEYS.tars, "tars")];
+  assert.equal(
+    resolveCompanyVmAgents(relayAgents, authorizations, false).length,
+    1,
+  );
+  assert.deepEqual(
+    resolveCompanyVmAgents(relayAgents, authorizations, true),
+    [],
+  );
+});
+
 test("drops invalid and duplicate authorization records", () => {
   assert.deepEqual(
     intersectAuthorizedCompanyAgents(
@@ -114,7 +128,11 @@ test("managed presentation filtering preserves custom local records", () => {
   const agents = [
     { pubkey: PUBKEYS.tars, personaId: "builtin:fizz", teamId: null },
     { pubkey: PUBKEYS.atris, personaId: "custom:tars", teamId: null },
-    { pubkey: PUBKEYS.foreign, personaId: null, teamId: "custom-team" },
+    {
+      pubkey: PUBKEYS.foreign,
+      personaId: "custom:welcome-member",
+      teamId: "builtin-team:welcome",
+    },
   ];
   const teams = [{ id: "builtin-team:welcome" }, { id: "custom-team" }];
 

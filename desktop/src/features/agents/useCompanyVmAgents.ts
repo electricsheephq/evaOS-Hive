@@ -2,7 +2,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useRelayAgentsQuery } from "@/features/agents/hooks";
-import { intersectAuthorizedCompanyAgents } from "@/features/agents/lib/companyAgentCatalog";
+import { resolveCompanyVmAgents } from "@/features/agents/lib/companyAgentCatalog";
 import { listHiveCompanyAgentAuthorizations } from "@/features/evaosTeams/api";
 import { desktopProductPolicy } from "@/shared/product/productIdentity";
 
@@ -24,12 +24,19 @@ export function useCompanyVmAgents() {
   const data = React.useMemo(
     () =>
       managed
-        ? intersectAuthorizedCompanyAgents(
+        ? resolveCompanyVmAgents(
             relayAgentsQuery.data ?? [],
             authorizationsQuery.data ?? [],
+            Boolean(authorizationsQuery.error || relayAgentsQuery.error),
           )
         : [],
-    [authorizationsQuery.data, managed, relayAgentsQuery.data],
+    [
+      authorizationsQuery.data,
+      authorizationsQuery.error,
+      managed,
+      relayAgentsQuery.data,
+      relayAgentsQuery.error,
+    ],
   );
 
   return {
