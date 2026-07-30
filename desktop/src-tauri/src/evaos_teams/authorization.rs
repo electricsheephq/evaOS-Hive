@@ -90,9 +90,8 @@ fn managed_authorization_active(app_state: &AppState) -> Result<bool, String> {
     if expires_at > chrono::Utc::now().timestamp() {
         return Ok(true);
     }
-    app_state
-        .managed_entitlement_expires_at_unix
-        .store(0, Ordering::Release);
+    // Preserve the expired value until the scheduled cleanup consumes it.
+    // A renewed entitlement replaces this value, which invalidates that task.
     app_state
         .managed_agent_restore_pending
         .store(false, Ordering::Release);
@@ -188,11 +187,11 @@ mod tests {
 
         assert!(require_managed_authorization(&state).is_err());
         assert!(state.relay_url_override.lock().unwrap().is_none());
-        assert_eq!(
+        assert!(
             state
                 .managed_entitlement_expires_at_unix
-                .load(Ordering::Acquire),
-            0
+                .load(Ordering::Acquire)
+                < chrono::Utc::now().timestamp()
         );
     }
 
