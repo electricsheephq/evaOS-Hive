@@ -29,12 +29,12 @@ use authorization::{
 pub(crate) use authorization::{prepare_managed_identity_recovery, require_managed_authorization};
 #[cfg(test)]
 use callback::callback_device_code;
-use callback::{login_callback, LoginCallback};
+pub(crate) use callback::submit_evaos_teams_login_code;
+use callback::{login_callback, register_pending_login, LoginCallback};
 #[cfg(test)]
 use device_code::device_code_challenge;
 use device_code::{dashboard_login_url, DeviceCodeProof};
 use http_api::{post_json, ApiFailure};
-
 mod authorization;
 mod callback;
 mod company_agents;
@@ -155,8 +155,8 @@ struct ManagedRuntime {
 pub(crate) struct EvaosTeamsState {
     runtime: Mutex<ManagedRuntime>,
     operation: tokio::sync::Mutex<()>,
+    pending_login: Mutex<Option<std::sync::Arc<LoginCallback>>>,
 }
-
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 struct KeyBindingChallenge {
     schema_version: String,
@@ -906,6 +906,7 @@ pub(crate) async fn start_evaos_teams_login(
             expected_state: auth_state,
             sender: Mutex::new(Some(sender)),
         });
+        let pending_login = register_pending_login(&state, callback_state.clone())?;
         let router = Router::new()
             .route("/auth/callback", get(login_callback))
             .with_state(callback_state);
@@ -933,6 +934,7 @@ pub(crate) async fn start_evaos_teams_login(
             }
         };
         server.abort();
+        drop(pending_login);
 
         let claim =
             claim_device_code(&app_state.http_client, &code, &device_code_proof.verifier).await?;

@@ -103,6 +103,31 @@ fn callback_requires_exact_state_and_server_code_shape() {
     assert!(callback_device_code(&invalid_code, expected_state).is_err());
 }
 
+#[tokio::test]
+async fn manual_backup_code_completes_only_the_current_pending_login() {
+    let state = EvaosTeamsState::default();
+    let (sender, receiver) = oneshot::channel();
+    let callback = std::sync::Arc::new(LoginCallback {
+        expected_state: "state-12345678".to_string(),
+        sender: Mutex::new(Some(sender)),
+    });
+    let registration = register_pending_login(&state, callback).unwrap();
+
+    callback::submit_pending_login_code(&state, "aabb-ccdd-eeff-0011").unwrap();
+    assert_eq!(receiver.await.unwrap().unwrap(), "AABBCCDDEEFF0011");
+    assert!(callback::submit_pending_login_code(&state, "aabb-ccdd-eeff-0011").is_err());
+
+    drop(registration);
+    assert!(callback::submit_pending_login_code(&state, "aabb-ccdd-eeff-0011").is_err());
+}
+
+#[test]
+fn manual_backup_code_rejects_invalid_or_unpaired_input() {
+    let state = EvaosTeamsState::default();
+    assert!(callback::submit_pending_login_code(&state, "short").is_err());
+    assert!(callback::submit_pending_login_code(&state, "aabb-ccdd-eeff-0011").is_err());
+}
+
 #[test]
 fn server_snake_case_decodes_and_renderer_camel_case_encodes() {
     let response: EntitlementResponse = serde_json::from_value(serde_json::json!({
