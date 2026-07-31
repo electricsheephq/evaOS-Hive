@@ -781,6 +781,40 @@ fn newly_claimed_session_remains_logout_pending_until_login_commits() {
 
 #[cfg(feature = "evaos-teams-managed")]
 #[test]
+fn failed_explicit_logout_stays_in_retry_mode_and_disables_identity_reset() {
+    let state = EvaosTeamsState::default();
+    *state.runtime.lock().unwrap() = ManagedRuntime {
+        initialized: true,
+        session: Some(Zeroizing::new("opaque-session-value".to_string())),
+        logout_pending: false,
+        custody_checked: false,
+    };
+    *state.pending_identity_reset.lock().unwrap() = Some(PendingIdentityReset {
+        session: Zeroizing::new("opaque-session-value".to_string()),
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: "a".repeat(64),
+    });
+
+    clear_pending_identity_reset_for_logout(&state).unwrap();
+    state.runtime.lock().unwrap().logout_pending = true;
+
+    let (_, logout_pending) = current_session(&state).unwrap();
+    assert!(logout_pending);
+    assert!(login_identity::pending_identity_reset_status(&state)
+        .unwrap()
+        .is_none());
+    assert!(state.pending_identity_reset.lock().unwrap().is_none());
+
+    let restarted =
+        runtime_from_entries(Some(pending_session_entries("opaque-session-value"))).unwrap();
+    assert!(restarted.session.is_some());
+    assert!(restarted.logout_pending);
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
 fn reauthentication_revokes_only_a_distinct_previous_session() {
     assert_eq!(
         previous_session_to_revoke(Some("previous-session"), "claimed-session"),

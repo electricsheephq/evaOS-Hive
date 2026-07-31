@@ -457,7 +457,6 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
     *runtime = runtime_from_entries(managed_store().load_all_readonly()?)?;
     Ok(())
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 fn current_session(state: &EvaosTeamsState) -> Result<(Zeroizing<String>, bool), String> {
     initialize_runtime(state)?;
@@ -468,14 +467,12 @@ fn current_session(state: &EvaosTeamsState) -> Result<(Zeroizing<String>, bool),
         .ok_or_else(|| "Sign in to Hive first".to_string())?;
     Ok((session, runtime.logout_pending))
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 fn previous_session_to_revoke(current: Option<&str>, claimed: &str) -> Option<String> {
     current
         .filter(|session| *session != claimed)
         .map(str::to_string)
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiFailure> {
     let response: LogoutResponse = post_json(
@@ -494,7 +491,6 @@ async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiF
         })
     }
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
     managed_store().replace_all_checked(preserve_legacy_identity_entries)?;
@@ -508,7 +504,6 @@ fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
         .map_err(|error| error.to_string())? = None;
     Ok(())
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 async fn retry_pending_logout(
     app: &tauri::AppHandle,
@@ -537,13 +532,19 @@ async fn retry_pending_logout(
         Err(error) => EvaosTeamsAuthStatus::managed("keychain_locked", Some(error)),
     }
 }
-
+#[cfg(feature = "evaos-teams-managed")]
+fn clear_pending_identity_reset_for_logout(state: &EvaosTeamsState) -> Result<(), String> {
+    let pending = &state.pending_identity_reset;
+    pending.lock().map_err(|e| e.to_string())?.take();
+    Ok(())
+}
 #[cfg(feature = "evaos-teams-managed")]
 async fn begin_managed_logout(
     app: &tauri::AppHandle,
     state: &EvaosTeamsState,
     app_state: &AppState,
 ) -> Result<EvaosTeamsAuthStatus, String> {
+    clear_pending_identity_reset_for_logout(state)?;
     let (session, _) = current_session(state)?;
     disable_managed_access(app_state);
     managed_store()
@@ -559,7 +560,6 @@ async fn begin_managed_logout(
     }
     Ok(retry_pending_logout(app, &app_state.http_client, state, app_state, &session).await)
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 async fn get_remote_entitlement(
     client: &reqwest::Client,
