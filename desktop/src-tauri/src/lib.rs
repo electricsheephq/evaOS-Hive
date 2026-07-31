@@ -108,29 +108,6 @@ pub(crate) fn spawn_active_pending_event_publisher(app_handle: tauri::AppHandle)
     });
 }
 
-#[cfg(test)]
-mod pending_event_publisher_tests {
-    use super::*;
-    use std::sync::atomic::AtomicUsize;
-
-    #[test]
-    fn repeated_start_attempts_create_exactly_one_worker() {
-        let started = AtomicBool::new(false);
-        let workers = AtomicUsize::new(0);
-
-        let first = start_pending_event_publisher_once(&started, || {
-            workers.fetch_add(1, Ordering::SeqCst);
-        });
-        let second = start_pending_event_publisher_once(&started, || {
-            workers.fetch_add(1, Ordering::SeqCst);
-        });
-
-        assert!(first);
-        assert!(!second);
-        assert_eq!(workers.load(Ordering::SeqCst), 1);
-    }
-}
-
 fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
     if let Err(error) = window.show() {
         eprintln!("buzz-desktop: failed to reveal main window: {error}");
@@ -984,4 +961,27 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod pending_event_publisher_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn repeated_start_attempts_create_exactly_one_worker() {
+        let started = AtomicBool::new(false);
+        let workers = AtomicUsize::new(0);
+
+        let first = start_pending_event_publisher_once(&started, || {
+            workers.fetch_add(1, Ordering::SeqCst);
+        });
+        let second = start_pending_event_publisher_once(&started, || {
+            workers.fetch_add(1, Ordering::SeqCst);
+        });
+
+        assert!(first);
+        assert!(!second);
+        assert_eq!(workers.load(Ordering::SeqCst), 1);
+    }
 }
