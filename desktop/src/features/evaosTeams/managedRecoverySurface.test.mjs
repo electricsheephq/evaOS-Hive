@@ -10,6 +10,7 @@ const nativeImportForm = readFileSync(
   new URL("../onboarding/ui/NostrKeyImportForm.tsx", import.meta.url),
   "utf8",
 );
+const api = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
 
 test("managed sign-in exposes only Electric OAuth recovery", () => {
   assert.match(authGate, /Sign in with Electric Sheep/);
@@ -30,6 +31,28 @@ test("managed recovery keeps the action error after refreshing rolled-back statu
     authGate,
     /const actionMessage =[\s\S]*await refresh\(\);[\s\S]*setError\(actionMessage\);/,
   );
+});
+
+test("identity reset uses the shared recovery runner and offers safe sign-out", () => {
+  assert.match(
+    authGate,
+    /const succeeded = await run\(\(\) => replaceLostEvaosTeamsIdentity\(\)\);/,
+  );
+  assert.match(authGate, /await refresh\(\);[\s\S]*setError\(actionMessage\);/);
+  assert.match(authGate, /await run\(\(\) => logoutEvaosTeams\(\)\);/);
+  assert.match(authGate, /Sign out without replacing identity/);
+});
+
+test("lost identity replacement is explicit, consequential, and command backed", () => {
+  assert.match(authGate, /status\?\.phase === "identity_reset_required"/);
+  assert.match(authGate, /lostIdentityConfirmed/);
+  assert.match(
+    authGate,
+    /Messages encrypted only to the old key may not be\s+recoverable/,
+  );
+  assert.match(authGate, /Replace lost identity on this Mac/);
+  assert.match(authGate, /replaceLostEvaosTeamsIdentity\(\)/);
+  assert.match(api, /replace_lost_evaos_teams_identity/);
 });
 
 test("unmanaged native identity import remains available upstream", () => {

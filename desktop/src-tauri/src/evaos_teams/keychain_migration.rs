@@ -1,17 +1,30 @@
 use std::collections::HashMap;
 
-use nostr::Keys;
+use nostr::{Keys, ToBech32};
 
 use super::{
     LEGACY_ACTIVE_MEMBERSHIP_KEY, LEGACY_IDENTITY_KEY, LEGACY_IDENTITY_KEY_PREFIX,
     LOGOUT_PENDING_KEY, SESSION_KEY,
 };
 
+const IDENTITY_ROTATION_KEY_PREFIX: &str = "pending_identity_rotation:";
+
 fn is_legacy_identity_key(key: &str) -> bool {
     key == LEGACY_IDENTITY_KEY
         || key
             .strip_prefix(LEGACY_IDENTITY_KEY_PREFIX)
             .is_some_and(|membership_id| uuid::Uuid::parse_str(membership_id).is_ok())
+}
+
+fn pending_identity_rotation_membership(key: &str) -> Option<&str> {
+    key.strip_prefix(IDENTITY_ROTATION_KEY_PREFIX)
+        .filter(|membership_id| uuid::Uuid::parse_str(membership_id).is_ok())
+}
+
+pub(super) fn pending_identity_rotation_key(membership_id: &str) -> Result<String, String> {
+    uuid::Uuid::parse_str(membership_id)
+        .map_err(|_| "managed membership identity is invalid".to_string())?;
+    Ok(format!("{IDENTITY_ROTATION_KEY_PREFIX}{membership_id}"))
 }
 
 pub(super) fn validated_runtime_entries(
@@ -23,6 +36,7 @@ pub(super) fn validated_runtime_entries(
             && key != LOGOUT_PENDING_KEY
             && key != LEGACY_ACTIVE_MEMBERSHIP_KEY
             && !is_legacy_identity_key(key.as_str())
+            && pending_identity_rotation_membership(key.as_str()).is_none()
     });
     if has_unsupported {
         return Err("managed Keychain contains unsupported credential material".to_string());
@@ -35,9 +49,33 @@ pub(super) fn preserve_legacy_identity_entries(
 ) -> Result<HashMap<String, String>, String> {
     let mut preserved = validated_runtime_entries(Some(stored.clone()))?;
     preserved.retain(|key, _| {
-        key == LEGACY_ACTIVE_MEMBERSHIP_KEY || is_legacy_identity_key(key.as_str())
+        key == LEGACY_ACTIVE_MEMBERSHIP_KEY
+            || is_legacy_identity_key(key.as_str())
+            || pending_identity_rotation_membership(key.as_str()).is_some()
     });
     Ok(preserved)
+}
+
+pub(super) fn staged_identity_rotation_entries(
+    stored: &HashMap<String, String>,
+    membership_id: &str,
+) -> Result<(HashMap<String, String>, Keys), String> {
+    let mut replacement = validated_runtime_entries(Some(stored.clone()))?;
+    let staging_key = pending_identity_rotation_key(membership_id)?;
+    let keys = replacement
+        .get(&staging_key)
+        .map(|value| {
+            Keys::parse(value.trim())
+                .map_err(|_| "staged Hive identity in Keychain is invalid".to_string())
+        })
+        .transpose()?
+        .unwrap_or_else(Keys::generate);
+    let encoded = keys
+        .secret_key()
+        .to_bech32()
+        .map_err(|error| format!("could not encode replacement identity: {error}"))?;
+    replacement.insert(staging_key, encoded);
+    Ok((replacement, keys))
 }
 
 pub(super) fn pending_session_entries(session: &str) -> HashMap<String, String> {
@@ -111,6 +149,14 @@ pub(super) fn active_session_entries(
             .is_some_and(|active| active == membership_id)
     {
         replacement.remove(LEGACY_ACTIVE_MEMBERSHIP_KEY);
+    }
+    let rotation_key = pending_identity_rotation_key(membership_id)?;
+    if replacement
+        .get(&rotation_key)
+        .and_then(|value| Keys::parse(value.trim()).ok())
+        .is_some_and(|keys| keys.public_key().to_hex() == adopted_public_key)
+    {
+        replacement.remove(&rotation_key);
     }
     replacement.remove(LOGOUT_PENDING_KEY);
     replacement.insert(SESSION_KEY.to_string(), session.to_string());

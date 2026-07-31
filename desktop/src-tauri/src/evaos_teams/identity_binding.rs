@@ -1,0 +1,114 @@
+use serde::Deserialize;
+
+#[cfg(feature = "evaos-teams-managed")]
+use super::{http_api::post_json, relay_websocket_url};
+use super::{validate_challenge, validate_entitlement, ChallengeResponse, EvaosTeamsEntitlement};
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct IdentityBinding {
+    pub(super) membership_id: String,
+    pub(super) community_id: String,
+    pub(super) relay_host: String,
+    pub(super) public_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct IdentityBindingResponse {
+    pub(super) status: String,
+    pub(super) binding: IdentityBinding,
+}
+
+pub(super) fn validate_identity_binding(
+    binding: &IdentityBinding,
+    expected_membership_id: &str,
+    expected_community_id: &str,
+    expected_relay_host: &str,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    if binding.membership_id != expected_membership_id
+        || binding.community_id != expected_community_id
+        || binding.relay_host != expected_relay_host
+        || binding.public_key.as_deref() != Some(expected_public_key)
+    {
+        return Err("Managed identity selection changed the server-selected scope".to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn validate_refresh(
+    binding: &IdentityBinding,
+    expected: &IdentityBinding,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    validate_identity_binding(
+        binding,
+        &expected.membership_id,
+        &expected.community_id,
+        &expected.relay_host,
+        expected_public_key,
+    )
+}
+
+pub(super) fn validate_challenge_for_binding(
+    response: &ChallengeResponse,
+    binding: &IdentityBinding,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    validate_challenge(response, expected_public_key, &binding.membership_id)?;
+    if binding.public_key.is_some() {
+        validate_identity_binding(
+            binding,
+            &response.challenge.membership_id,
+            &response.challenge.community_id,
+            &response.relay_host,
+            expected_public_key,
+        )
+    } else if binding.community_id != response.challenge.community_id
+        || binding.relay_host != response.relay_host
+    {
+        Err("managed key challenge changed the server-selected scope".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn validate_entitlement_for_binding(
+    binding: &IdentityBinding,
+    entitlement: &EvaosTeamsEntitlement,
+    expected_membership_id: &str,
+    expected_public_key: &str,
+) -> Result<(), String> {
+    validate_identity_binding(
+        binding,
+        expected_membership_id,
+        &entitlement.community_id,
+        &entitlement.relay_host,
+        expected_public_key,
+    )?;
+    validate_entitlement(entitlement, expected_public_key).map(|_| ())
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+pub(super) async fn get_identity_binding(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<IdentityBinding, String> {
+    let response: IdentityBindingResponse = post_json(
+        client,
+        "evaos-teams-access",
+        Some(token),
+        serde_json::json!({ "action": "get_identity_binding" }),
+    )
+    .await
+    .map_err(|error| format!("Managed identity selection was not available: {error}"))?;
+    if response.status != "active" {
+        return Err("Managed identity selection is not active".to_string());
+    }
+    uuid::Uuid::parse_str(&response.binding.membership_id)
+        .map_err(|_| "Managed identity selection returned an invalid membership".to_string())?;
+    uuid::Uuid::parse_str(&response.binding.community_id)
+        .map_err(|_| "Managed identity selection returned an invalid community".to_string())?;
+    relay_websocket_url(&response.binding.relay_host)
+        .map_err(|_| "Managed identity selection returned an invalid relay".to_string())?;
+    Ok(response.binding)
+}

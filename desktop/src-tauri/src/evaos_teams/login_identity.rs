@@ -1,16 +1,34 @@
 use super::*;
 use tauri::Manager;
 
-fn persist_active_session(
+fn identity_reset_required_status() -> EvaosTeamsAuthStatus {
+    EvaosTeamsAuthStatus::managed(
+        "identity_reset_required",
+        Some("The prior Hive key is not available on this Mac or in managed recovery.".to_string()),
+    )
+}
+
+pub(super) fn pending_identity_reset_status(
+    state: &EvaosTeamsState,
+) -> Result<Option<EvaosTeamsAuthStatus>, String> {
+    let pending = state
+        .pending_identity_reset
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(pending.as_ref().map(|_| identity_reset_required_status()))
+}
+
+pub(super) fn persist_active_session(
     state: &EvaosTeamsState,
     app_state: &AppState,
     session: String,
     keys: &Keys,
     membership_id: &str,
+    binding: &IdentityBinding,
     entitlement: EvaosTeamsEntitlement,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let mut runtime = state.runtime.lock().map_err(|error| error.to_string())?;
-    install_entitlement(app_state, keys, &entitlement)?;
+    install_entitlement(app_state, keys, binding, membership_id, &entitlement)?;
     if managed_store()
         .replace_all_checked(|fresh| {
             keychain_migration::active_session_entries(
@@ -31,6 +49,10 @@ fn persist_active_session(
         logout_pending: false,
         custody_checked: true,
     };
+    *state
+        .pending_identity_reset
+        .lock()
+        .map_err(|error| error.to_string())? = None;
     Ok(EvaosTeamsAuthStatus::active(entitlement))
 }
 
@@ -61,10 +83,52 @@ pub(super) fn binding_for_entitlement(
         .public_key
         .clone()
         .ok_or_else(|| "Managed entitlement did not include the verified identity".to_string())?;
+    if entitlement.community_id != binding.community_id
+        || entitlement.relay_host != binding.relay_host
+        || binding
+            .public_key
+            .as_deref()
+            .is_some_and(|canonical| canonical != public_key)
+    {
+        return Err("Managed entitlement changed the server-selected identity scope".to_string());
+    }
+    validate_entitlement(entitlement, &public_key)?;
     Ok(IdentityBinding {
         membership_id: binding.membership_id.clone(),
+        community_id: binding.community_id.clone(),
+        relay_host: binding.relay_host.clone(),
         public_key: Some(public_key),
     })
+}
+
+pub(super) fn require_genuine_native_identity_loss(
+    identity_lost: bool,
+    keyring_locked: bool,
+) -> Result<(), String> {
+    if identity_lost && !keyring_locked {
+        return Ok(());
+    }
+    if keyring_locked {
+        return Err(
+            "Unlock macOS Keychain before signing in; Hive will not replace an identity while Keychain is locked."
+                .to_string(),
+        );
+    }
+    Err(
+        "Hive could not verify the native Buzz identity; restore native identity access before signing in."
+            .to_string(),
+    )
+}
+
+pub(super) fn local_identity_ready_for_login(
+    binding: &IdentityBinding,
+    local_keys: Option<&Keys>,
+) -> Result<bool, String> {
+    let Some(keys) = local_keys else {
+        return Ok(false);
+    };
+    verify_existing_native_identity(binding, keys)?;
+    Ok(true)
 }
 
 pub(super) async fn complete_login(
@@ -74,21 +138,26 @@ pub(super) async fn complete_login(
     desktop_session: String,
 ) -> Result<EvaosTeamsAuthStatus, String> {
     let binding = get_identity_binding(&app_state.http_client, &desktop_session).await?;
-    let local_keys = native_identity_for_managed_verification(app_state);
-    let local_identity_matches = local_keys
-        .as_ref()
-        .ok()
-        .and_then(|keys| verify_existing_native_identity(&binding, keys).ok());
-    let (keys, entitlement) = if local_identity_matches.is_some() {
+    let local_keys = match native_identity_for_managed_verification(app_state) {
+        Ok(keys) => Some(keys),
+        Err(_) => {
+            require_genuine_native_identity_loss(
+                app_state
+                    .identity_lost
+                    .load(std::sync::atomic::Ordering::Acquire),
+                app_state
+                    .keyring_locked
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+            None
+        }
+    };
+    let local_identity_ready = local_identity_ready_for_login(&binding, local_keys.as_ref())?;
+    let (keys, entitlement) = if local_identity_ready {
         let keys = local_keys
-            .map_err(|error| format!("The local Hive identity could not be verified: {error}"))?;
-        let entitlement = bind_identity(
-            &app_state.http_client,
-            &desktop_session,
-            &keys,
-            &binding.membership_id,
-        )
-        .await?;
+            .ok_or_else(|| "The local Hive identity could not be verified".to_string())?;
+        let entitlement =
+            bind_identity(&app_state.http_client, &desktop_session, &keys, &binding).await?;
         let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
         identity_custody::ensure_enrollment(
             &app_state.http_client,
@@ -116,13 +185,8 @@ pub(super) async fn complete_login(
                 .map_err(|error| error.to_string())?
                 .public_key()
                 .to_hex();
-            let entitlement = bind_identity(
-                &app_state.http_client,
-                &desktop_session,
-                &keys,
-                &binding.membership_id,
-            )
-            .await?;
+            let entitlement =
+                bind_identity(&app_state.http_client, &desktop_session, &keys, &binding).await?;
             let verified_binding = binding_for_entitlement(&binding, &entitlement)?;
             identity_custody::ensure_enrollment(
                 &app_state.http_client,
@@ -152,26 +216,82 @@ pub(super) async fn complete_login(
             )?;
             (keys, entitlement)
         } else {
-            identity_custody::recover_identity(
+            match identity_custody::recover_identity(
                 app,
                 app_state,
                 &app_state.http_client,
                 &desktop_session,
                 &binding,
             )
-            .await?
+            .await
+            {
+                Ok(recovered) => recovered,
+                Err(identity_custody::IdentityRecoveryError::NotAvailable) => {
+                    *state
+                        .pending_identity_reset
+                        .lock()
+                        .map_err(|error| error.to_string())? = Some(PendingIdentityReset {
+                        session: Zeroizing::new(desktop_session),
+                        membership_id: binding.membership_id.clone(),
+                        community_id: binding.community_id.clone(),
+                        relay_host: binding.relay_host.clone(),
+                        public_key: canonical_public_key.to_string(),
+                    });
+                    return Ok(identity_reset_required_status());
+                }
+                Err(identity_custody::IdentityRecoveryError::Other(error)) => {
+                    return Err(error);
+                }
+            }
         }
     } else {
         return Err(
             "Hive could not establish a native identity for this new membership".to_string(),
         );
     };
+    let verified_binding = get_identity_binding(&app_state.http_client, &desktop_session).await?;
+    identity_binding::validate_entitlement_for_binding(
+        &verified_binding,
+        &entitlement,
+        &binding.membership_id,
+        &keys.public_key().to_hex(),
+    )?;
     persist_active_session(
         state,
         app_state,
         desktop_session,
         &keys,
         &binding.membership_id,
+        &verified_binding,
         entitlement,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_reset_confirmation_takes_precedence_over_pending_logout() {
+        let state = EvaosTeamsState::default();
+        *state.runtime.lock().unwrap() = ManagedRuntime {
+            initialized: true,
+            session: Some(Zeroizing::new("desktop-session".to_string())),
+            logout_pending: true,
+            custody_checked: false,
+        };
+        *state.pending_identity_reset.lock().unwrap() = Some(PendingIdentityReset {
+            session: Zeroizing::new("desktop-session".to_string()),
+            membership_id: "membership".to_string(),
+            community_id: "community".to_string(),
+            relay_host: "https://relay.example.com".to_string(),
+            public_key: "a".repeat(64),
+        });
+
+        let status = pending_identity_reset_status(&state).unwrap().unwrap();
+
+        assert_eq!(status.phase, "identity_reset_required");
+        assert!(state.runtime.lock().unwrap().logout_pending);
+        assert!(state.pending_identity_reset.lock().unwrap().is_some());
+    }
 }

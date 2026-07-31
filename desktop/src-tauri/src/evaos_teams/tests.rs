@@ -1,4 +1,9 @@
-use super::keychain_migration::{active_session_entries, select_legacy_identity_candidate};
+use super::keychain_migration::{
+    active_session_entries, pending_identity_rotation_key, select_legacy_identity_candidate,
+    staged_identity_rotation_entries,
+};
+#[cfg(feature = "evaos-teams-managed")]
+use super::login_identity::require_genuine_native_identity_loss;
 use super::*;
 use nostr::ToBech32;
 
@@ -44,6 +49,15 @@ fn entitlement(public_key: Option<String>) -> EvaosTeamsEntitlement {
         access_revision: 7,
         expires_at: (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339(),
         refresh_after_seconds: 300,
+    }
+}
+
+fn authoritative_binding(public_key: Option<String>) -> IdentityBinding {
+    IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key,
     }
 }
 
@@ -157,10 +171,90 @@ fn server_snake_case_decodes_and_renderer_camel_case_encodes() {
 }
 
 #[test]
+fn identity_binding_requires_authoritative_scope_fields() {
+    let response = serde_json::json!({
+        "status": "active",
+        "binding": {
+            "membership_id": "10000000-0000-4000-8000-000000000002",
+            "community_id": "10000000-0000-4000-8000-000000000003",
+            "relay_host": "https://relay.example.com",
+            "public_key": null
+        }
+    });
+    assert!(serde_json::from_value::<IdentityBindingResponse>(response.clone()).is_ok());
+
+    for missing_field in ["community_id", "relay_host"] {
+        let mut incomplete = response.clone();
+        incomplete["binding"]
+            .as_object_mut()
+            .unwrap()
+            .remove(missing_field);
+        assert!(serde_json::from_value::<IdentityBindingResponse>(incomplete).is_err());
+    }
+}
+
+#[test]
+fn identity_binding_validator_requires_every_authoritative_field() {
+    let public_key = Keys::generate().public_key().to_hex();
+    let binding = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(public_key.clone()),
+    };
+    assert!(identity_binding::validate_identity_binding(
+        &binding,
+        &binding.membership_id,
+        &binding.community_id,
+        &binding.relay_host,
+        &public_key,
+    )
+    .is_ok());
+
+    let mismatches = [
+        (
+            "20000000-0000-4000-8000-000000000002",
+            binding.community_id.as_str(),
+            binding.relay_host.as_str(),
+            public_key.as_str(),
+        ),
+        (
+            binding.membership_id.as_str(),
+            "20000000-0000-4000-8000-000000000003",
+            binding.relay_host.as_str(),
+            public_key.as_str(),
+        ),
+        (
+            binding.membership_id.as_str(),
+            binding.community_id.as_str(),
+            "https://other.example.com",
+            public_key.as_str(),
+        ),
+        (
+            binding.membership_id.as_str(),
+            binding.community_id.as_str(),
+            binding.relay_host.as_str(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+    ];
+    for (membership_id, community_id, relay_host, expected_public_key) in mismatches {
+        assert!(identity_binding::validate_identity_binding(
+            &binding,
+            membership_id,
+            community_id,
+            relay_host,
+            expected_public_key,
+        )
+        .is_err());
+    }
+}
+
+#[test]
 fn challenge_signature_uses_exact_server_template_and_rejects_tampering() {
     let keys = Keys::generate();
     let response = challenge(&keys);
-    let event = signed_challenge(&response, &keys, "10000000-0000-4000-8000-000000000002").unwrap();
+    let binding = authoritative_binding(None);
+    let event = signed_challenge(&response, &keys, &binding).unwrap();
     assert_eq!(event["kind"], KEY_BINDING_KIND);
     assert_eq!(event["content"], response.event_template.content);
     assert_eq!(
@@ -174,15 +268,25 @@ fn challenge_signature_uses_exact_server_template_and_rejects_tampering() {
         "community".to_string(),
         altered.challenge.community_id.clone(),
     ]);
-    assert!(signed_challenge(&altered, &keys, "10000000-0000-4000-8000-000000000002").is_err());
+    assert!(signed_challenge(&altered, &keys, &binding).is_err());
 
-    let wrong_membership = challenge(&keys);
-    assert!(signed_challenge(
-        &wrong_membership,
-        &keys,
-        "20000000-0000-4000-8000-000000000002"
-    )
-    .is_err());
+    let mut wrong_membership = authoritative_binding(None);
+    wrong_membership.membership_id = "20000000-0000-4000-8000-000000000002".to_string();
+    assert!(signed_challenge(&response, &keys, &wrong_membership).is_err());
+}
+
+#[test]
+fn ordinary_challenge_signing_rejects_authoritative_community_or_relay_mismatch() {
+    let keys = Keys::generate();
+    let response = challenge(&keys);
+
+    let mut wrong_community = authoritative_binding(None);
+    wrong_community.community_id = "20000000-0000-4000-8000-000000000003".to_string();
+    assert!(signed_challenge(&response, &keys, &wrong_community).is_err());
+
+    let mut wrong_relay = authoritative_binding(None);
+    wrong_relay.relay_host = "https://other.example.com".to_string();
+    assert!(signed_challenge(&response, &keys, &wrong_relay).is_err());
 }
 
 #[test]
@@ -269,6 +373,8 @@ fn existing_native_key_activates_without_replacing_identity() {
     let keys = Keys::generate();
     let binding = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: Some(keys.public_key().to_hex()),
     };
     assert!(verify_existing_native_identity(&binding, &keys).unwrap());
@@ -278,6 +384,8 @@ fn existing_native_key_activates_without_replacing_identity() {
     install_entitlement(
         &state,
         &keys,
+        &binding,
+        &binding.membership_id,
         &entitlement(Some(keys.public_key().to_hex())),
     )
     .unwrap();
@@ -300,10 +408,18 @@ fn entitlement_install_rejects_a_stale_verification_identity() {
     let verified_keys = Keys::generate();
     let state = crate::app_state::build_app_state();
     *state.keys.lock().unwrap() = Keys::generate();
+    let binding = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(verified_keys.public_key().to_hex()),
+    };
 
     let result = install_entitlement(
         &state,
         &verified_keys,
+        &binding,
+        &binding.membership_id,
         &entitlement(Some(verified_keys.public_key().to_hex())),
     );
 
@@ -318,6 +434,36 @@ fn entitlement_install_rejects_a_stale_verification_identity() {
 }
 
 #[test]
+fn entitlement_install_rejects_authoritative_scope_mismatch() {
+    let keys = Keys::generate();
+    let state = crate::app_state::build_app_state();
+    *state.keys.lock().unwrap() = keys.clone();
+    let binding = IdentityBinding {
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(keys.public_key().to_hex()),
+    };
+
+    for mismatched in [
+        EvaosTeamsEntitlement {
+            community_id: "20000000-0000-4000-8000-000000000003".to_string(),
+            ..entitlement(Some(keys.public_key().to_hex()))
+        },
+        EvaosTeamsEntitlement {
+            relay_host: "https://other.example.com".to_string(),
+            ..entitlement(Some(keys.public_key().to_hex()))
+        },
+    ] {
+        assert!(
+            install_entitlement(&state, &keys, &binding, &binding.membership_id, &mismatched,)
+                .is_err()
+        );
+        assert!(state.relay_url_override.lock().unwrap().is_none());
+    }
+}
+
+#[test]
 fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_recovery() {
     let keys = Keys::generate();
     let state = crate::app_state::build_app_state();
@@ -327,12 +473,16 @@ fn unbound_membership_enrolls_but_mismatched_canonical_key_requires_recovery() {
 
     let unbound = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: None,
     };
     assert!(!verify_existing_native_identity(&unbound, &keys).unwrap());
 
     let mismatched = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
         public_key: Some(Keys::generate().public_key().to_hex()),
     };
     let error = verify_existing_native_identity(&mismatched, &keys).unwrap_err();
@@ -410,6 +560,80 @@ fn pending_session_preserves_only_legacy_identity_material() {
     let signed_out = preserve_legacy_identity_entries(&stored).unwrap();
     assert!(!signed_out.contains_key(SESSION_KEY));
     assert!(signed_out.contains_key(&format!("{LEGACY_IDENTITY_KEY_PREFIX}{membership_id}")));
+}
+
+#[test]
+fn staged_identity_rotation_is_membership_scoped_durable_and_cleared_on_adoption() {
+    let membership_id = "10000000-0000-4000-8000-000000000002";
+    let other_membership_id = "10000000-0000-4000-8000-000000000003";
+    let (first, keys) = staged_identity_rotation_entries(&HashMap::new(), membership_id).unwrap();
+    let (second, reused) = staged_identity_rotation_entries(&first, membership_id).unwrap();
+    let (with_other, other) =
+        staged_identity_rotation_entries(&second, other_membership_id).unwrap();
+
+    assert_eq!(keys.public_key(), reused.public_key());
+    assert_ne!(keys.public_key(), other.public_key());
+    assert!(with_other.contains_key(&pending_identity_rotation_key(membership_id).unwrap()));
+    assert!(with_other.contains_key(&pending_identity_rotation_key(other_membership_id).unwrap()));
+
+    let active = active_session_entries(
+        &with_other,
+        "active-session",
+        membership_id,
+        &keys.public_key().to_hex(),
+    )
+    .unwrap();
+    assert!(!active.contains_key(&pending_identity_rotation_key(membership_id).unwrap()));
+    assert!(active.contains_key(&pending_identity_rotation_key(other_membership_id).unwrap()));
+}
+
+#[test]
+fn identity_reset_status_exposes_no_credential_or_identity_material() {
+    let status = EvaosTeamsAuthStatus::managed(
+        "identity_reset_required",
+        Some("The prior Hive key is unavailable".to_string()),
+    );
+    let serialized = serde_json::to_string(&status).unwrap();
+    assert!(serialized.contains("identity_reset_required"));
+    for forbidden in ["session", "membership", "publicKey", "nsec", "private"] {
+        assert!(!serialized.contains(forbidden));
+    }
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn identity_reset_requires_genuine_native_identity_loss() {
+    assert!(require_genuine_native_identity_loss(true, false).is_ok());
+    assert!(require_genuine_native_identity_loss(false, true).is_err());
+    assert!(require_genuine_native_identity_loss(false, false).is_err());
+    assert!(require_genuine_native_identity_loss(true, true).is_err());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn healthy_mismatched_native_identity_is_rejected_without_reset() {
+    let local_keys = Keys::generate();
+    let canonical_keys = Keys::generate();
+    let binding = authoritative_binding(Some(canonical_keys.public_key().to_hex()));
+    let state = EvaosTeamsState::default();
+    let before_key = local_keys.public_key();
+
+    assert!(login_identity::local_identity_ready_for_login(&binding, Some(&local_keys)).is_err());
+    assert_eq!(local_keys.public_key(), before_key);
+    assert!(state.pending_identity_reset.lock().unwrap().is_none());
+    assert!(require_genuine_native_identity_loss(false, false).is_err());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn genuine_identity_loss_remains_reset_eligible_without_local_keys() {
+    let binding = authoritative_binding(Some(Keys::generate().public_key().to_hex()));
+
+    assert!(require_genuine_native_identity_loss(true, false).is_ok());
+    assert_eq!(
+        login_identity::local_identity_ready_for_login(&binding, None).unwrap(),
+        false
+    );
 }
 
 #[test]
@@ -543,12 +767,33 @@ fn managed_store_shape_still_rejects_unknown_material() {
 #[cfg(feature = "evaos-teams-managed")]
 #[test]
 fn entitlement_binding_requires_the_verified_public_key() {
+    let keys = Keys::generate();
     let binding = IdentityBinding {
         membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
-        public_key: None,
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: Some(keys.public_key().to_hex()),
     };
+    let verified_entitlement = entitlement(Some(keys.public_key().to_hex()));
 
+    assert!(login_identity::binding_for_entitlement(&binding, &verified_entitlement).is_ok());
     assert!(login_identity::binding_for_entitlement(&binding, &entitlement(None)).is_err());
+    assert!(login_identity::binding_for_entitlement(
+        &binding,
+        &EvaosTeamsEntitlement {
+            community_id: "20000000-0000-4000-8000-000000000003".to_string(),
+            ..verified_entitlement.clone()
+        },
+    )
+    .is_err());
+    assert!(login_identity::binding_for_entitlement(
+        &binding,
+        &EvaosTeamsEntitlement {
+            relay_host: "https://other.example.com".to_string(),
+            ..verified_entitlement
+        },
+    )
+    .is_err());
 }
 
 #[test]
@@ -559,6 +804,40 @@ fn newly_claimed_session_remains_logout_pending_until_login_commits() {
     assert!(runtime.session.is_some());
     assert!(runtime.logout_pending);
     assert!(!runtime.custody_checked);
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn failed_explicit_logout_stays_in_retry_mode_and_disables_identity_reset() {
+    let state = EvaosTeamsState::default();
+    *state.runtime.lock().unwrap() = ManagedRuntime {
+        initialized: true,
+        session: Some(Zeroizing::new("opaque-session-value".to_string())),
+        logout_pending: false,
+        custody_checked: false,
+    };
+    *state.pending_identity_reset.lock().unwrap() = Some(PendingIdentityReset {
+        session: Zeroizing::new("opaque-session-value".to_string()),
+        membership_id: "10000000-0000-4000-8000-000000000002".to_string(),
+        community_id: "10000000-0000-4000-8000-000000000003".to_string(),
+        relay_host: "https://relay.example.com".to_string(),
+        public_key: "a".repeat(64),
+    });
+
+    clear_pending_identity_reset_for_logout(&state).unwrap();
+    state.runtime.lock().unwrap().logout_pending = true;
+
+    let (_, logout_pending) = current_session(&state).unwrap();
+    assert!(logout_pending);
+    assert!(login_identity::pending_identity_reset_status(&state)
+        .unwrap()
+        .is_none());
+    assert!(state.pending_identity_reset.lock().unwrap().is_none());
+
+    let restarted =
+        runtime_from_entries(Some(pending_session_entries("opaque-session-value"))).unwrap();
+    assert!(restarted.session.is_some());
+    assert!(restarted.logout_pending);
 }
 
 #[cfg(feature = "evaos-teams-managed")]

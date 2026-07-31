@@ -18,6 +18,7 @@ export type EvaosTeamsAuthStatus = {
     | "active"
     | "keychain_locked"
     | "reauth_required"
+    | "identity_reset_required"
     | "logout_pending";
   authenticated: boolean;
   keychainAvailable: boolean;
@@ -41,6 +42,10 @@ export function startEvaosTeamsLogin() {
 
 export function submitEvaosTeamsLoginCode(deviceCode: string) {
   return invoke<void>("submit_evaos_teams_login_code", { deviceCode });
+}
+
+export function replaceLostEvaosTeamsIdentity() {
+  return invoke<EvaosTeamsAuthStatus>("replace_lost_evaos_teams_identity");
 }
 
 export function logoutEvaosTeams() {
@@ -90,6 +95,13 @@ export function evaosTeamsStatusCopy(status: EvaosTeamsAuthStatus) {
         body:
           status.message ??
           "Your managed access could not be refreshed. Hive remains disconnected.",
+      };
+    case "identity_reset_required":
+      return {
+        title: "Your prior Hive key is unavailable",
+        body:
+          status.message ??
+          "Hive cannot recover the identity previously assigned to this account.",
       };
     case "active":
       return {

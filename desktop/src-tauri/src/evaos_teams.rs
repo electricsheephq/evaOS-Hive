@@ -40,12 +40,21 @@ mod callback;
 mod company_agents;
 mod device_code;
 mod http_api;
+mod identity_binding;
 #[cfg(feature = "evaos-teams-managed")]
 mod identity_custody;
+mod identity_rotation;
 mod keychain_migration;
 #[cfg(feature = "evaos-teams-managed")]
 mod login_identity;
 pub(crate) use company_agents::list_hive_company_agent_authorizations;
+#[cfg(feature = "evaos-teams-managed")]
+use identity_binding::get_identity_binding;
+#[cfg(test)]
+use identity_binding::IdentityBindingResponse;
+use identity_binding::{validate_challenge_for_binding, validate_refresh, IdentityBinding};
+pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
+use identity_rotation::PendingIdentityReset;
 use keychain_migration::{
     pending_session_entries, preserve_legacy_identity_entries, validated_runtime_entries,
 };
@@ -158,6 +167,7 @@ pub(crate) struct EvaosTeamsState {
     runtime: Mutex<ManagedRuntime>,
     operation: tokio::sync::Mutex<()>,
     pending_login: Mutex<Option<std::sync::Arc<LoginCallback>>>,
+    pending_identity_reset: Mutex<Option<PendingIdentityReset>>,
 }
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 struct KeyBindingChallenge {
@@ -191,18 +201,6 @@ struct ChallengeResponse {
 struct EntitlementResponse {
     status: String,
     entitlement: EvaosTeamsEntitlement,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-struct IdentityBinding {
-    membership_id: String,
-    public_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct IdentityBindingResponse {
-    status: String,
-    binding: IdentityBinding,
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,13 +338,9 @@ fn validate_challenge(
 fn signed_challenge(
     response: &ChallengeResponse,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<serde_json::Value, String> {
-    validate_challenge(
-        response,
-        &keys.public_key().to_hex(),
-        expected_membership_id,
-    )?;
+    validate_challenge_for_binding(response, binding, &keys.public_key().to_hex())?;
     let tags = response
         .event_template
         .tags
@@ -390,6 +384,8 @@ fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Re
 fn install_entitlement(
     app_state: &AppState,
     keys: &Keys,
+    binding: &IdentityBinding,
+    expected_membership_id: &str,
     entitlement: &EvaosTeamsEntitlement,
 ) -> Result<(), String> {
     let _identity_guard = app_state
@@ -405,7 +401,13 @@ fn install_entitlement(
     if active_public_key != keys.public_key().to_hex() {
         return Err("Native identity changed during managed verification".to_string());
     }
-    let relay = validate_entitlement(entitlement, &active_public_key)?;
+    identity_binding::validate_entitlement_for_binding(
+        binding,
+        entitlement,
+        expected_membership_id,
+        &active_public_key,
+    )?;
+    let relay = relay_websocket_url(&entitlement.relay_host)?;
     let expires_at = chrono::DateTime::parse_from_rfc3339(&entitlement.expires_at)
         .map_err(|_| "managed entitlement expiry is invalid".to_string())?
         .timestamp();
@@ -455,7 +457,6 @@ fn initialize_runtime(state: &EvaosTeamsState) -> Result<(), String> {
     *runtime = runtime_from_entries(managed_store().load_all_readonly()?)?;
     Ok(())
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 fn current_session(state: &EvaosTeamsState) -> Result<(Zeroizing<String>, bool), String> {
     initialize_runtime(state)?;
@@ -466,14 +467,12 @@ fn current_session(state: &EvaosTeamsState) -> Result<(Zeroizing<String>, bool),
         .ok_or_else(|| "Sign in to Hive first".to_string())?;
     Ok((session, runtime.logout_pending))
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 fn previous_session_to_revoke(current: Option<&str>, claimed: &str) -> Option<String> {
     current
         .filter(|session| *session != claimed)
         .map(str::to_string)
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiFailure> {
     let response: LogoutResponse = post_json(
@@ -492,7 +491,6 @@ async fn remote_logout(client: &reqwest::Client, token: &str) -> Result<(), ApiF
         })
     }
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
     managed_store().replace_all_checked(preserve_legacy_identity_entries)?;
@@ -500,9 +498,12 @@ fn persist_signed_out(state: &EvaosTeamsState) -> Result<(), String> {
         initialized: true,
         ..ManagedRuntime::default()
     };
+    *state
+        .pending_identity_reset
+        .lock()
+        .map_err(|error| error.to_string())? = None;
     Ok(())
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 async fn retry_pending_logout(
     app: &tauri::AppHandle,
@@ -531,13 +532,19 @@ async fn retry_pending_logout(
         Err(error) => EvaosTeamsAuthStatus::managed("keychain_locked", Some(error)),
     }
 }
-
+#[cfg(feature = "evaos-teams-managed")]
+fn clear_pending_identity_reset_for_logout(state: &EvaosTeamsState) -> Result<(), String> {
+    let pending = &state.pending_identity_reset;
+    pending.lock().map_err(|e| e.to_string())?.take();
+    Ok(())
+}
 #[cfg(feature = "evaos-teams-managed")]
 async fn begin_managed_logout(
     app: &tauri::AppHandle,
     state: &EvaosTeamsState,
     app_state: &AppState,
 ) -> Result<EvaosTeamsAuthStatus, String> {
+    clear_pending_identity_reset_for_logout(state)?;
     let (session, _) = current_session(state)?;
     disable_managed_access(app_state);
     managed_store()
@@ -553,7 +560,6 @@ async fn begin_managed_logout(
     }
     Ok(retry_pending_logout(app, &app_state.http_client, state, app_state, &session).await)
 }
-
 #[cfg(feature = "evaos-teams-managed")]
 async fn get_remote_entitlement(
     client: &reqwest::Client,
@@ -577,36 +583,15 @@ async fn get_remote_entitlement(
 }
 
 #[cfg(feature = "evaos-teams-managed")]
-async fn get_identity_binding(
-    client: &reqwest::Client,
-    token: &str,
-) -> Result<IdentityBinding, String> {
-    let response: IdentityBindingResponse = post_json(
-        client,
-        "evaos-teams-access",
-        Some(token),
-        serde_json::json!({ "action": "get_identity_binding" }),
-    )
-    .await
-    .map_err(|error| format!("Managed identity selection was not available: {error}"))?;
-    if response.status != "active" {
-        return Err("Managed identity selection is not active".to_string());
-    }
-    uuid::Uuid::parse_str(&response.binding.membership_id)
-        .map_err(|_| "Managed identity selection returned an invalid membership".to_string())?;
-    Ok(response.binding)
-}
-
-#[cfg(feature = "evaos-teams-managed")]
 async fn bind_identity(
     client: &reqwest::Client,
     token: &str,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
-    let challenge = issue_key_challenge(client, token, &public_key, expected_membership_id).await?;
-    verify_key_challenge(client, token, &challenge, keys, expected_membership_id).await
+    let challenge = issue_key_challenge(client, token, &public_key, binding).await?;
+    verify_key_challenge(client, token, &challenge, keys, binding).await
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -614,7 +599,7 @@ async fn issue_key_challenge(
     client: &reqwest::Client,
     token: &str,
     public_key: &str,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<ChallengeResponse, String> {
     let challenge: ChallengeResponse = post_json(
         client,
@@ -632,7 +617,7 @@ async fn issue_key_challenge(
     )
     .await
     .map_err(|error| format!("Managed key challenge was not available: {error}"))?;
-    validate_challenge(&challenge, public_key, expected_membership_id)?;
+    validate_challenge_for_binding(&challenge, binding, public_key)?;
     Ok(challenge)
 }
 
@@ -642,10 +627,10 @@ async fn verify_key_challenge(
     token: &str,
     challenge: &ChallengeResponse,
     keys: &Keys,
-    expected_membership_id: &str,
+    binding: &IdentityBinding,
 ) -> Result<EvaosTeamsEntitlement, String> {
     let public_key = keys.public_key().to_hex();
-    let signed_event = signed_challenge(challenge, keys, expected_membership_id)?;
+    let signed_event = signed_challenge(challenge, keys, binding)?;
     let verified: EntitlementResponse = post_json(
         client,
         "evaos-teams-access",
@@ -681,8 +666,7 @@ fn persist_pending_session(state: &EvaosTeamsState, session: &str) -> Result<(),
     Ok(())
 }
 
-/// Return current managed-auth status and perform one bounded entitlement
-/// refresh. Unmanaged builds retain the native bypass.
+/// Return managed-auth status with one bounded refresh; unmanaged builds bypass it.
 #[tauri::command]
 pub(crate) async fn get_evaos_teams_auth_status(
     app: tauri::AppHandle,
@@ -712,6 +696,9 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 return Ok(EvaosTeamsAuthStatus::managed("signed_out", None));
             }
         };
+        if let Some(status) = login_identity::pending_identity_reset_status(&state)? {
+            return Ok(status);
+        }
         if logout_pending {
             return Ok(retry_pending_logout(
                 &app,
@@ -734,7 +721,7 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 ));
             }
         };
-        let binding = match get_identity_binding(&app_state.http_client, &session).await {
+        let mut binding = match get_identity_binding(&app_state.http_client, &session).await {
             Ok(binding) => binding,
             Err(error) => {
                 disable_managed_access(&app_state);
@@ -756,21 +743,44 @@ pub(crate) async fn get_evaos_teams_auth_status(
                 ));
             }
         };
+        let expected_binding = binding.clone();
         let entitlement = match get_remote_entitlement(&app_state.http_client, &session).await {
             Ok(entitlement) => Ok(entitlement),
             Err(error) if error.status == reqwest::StatusCode::NOT_FOUND => {
-                bind_identity(
-                    &app_state.http_client,
-                    &session,
-                    &keys,
-                    &binding.membership_id,
-                )
-                .await
+                match bind_identity(&app_state.http_client, &session, &keys, &binding).await {
+                    Ok(entitlement) => {
+                        match get_identity_binding(&app_state.http_client, &session).await {
+                            Ok(verified_binding) => validate_refresh(
+                                &verified_binding,
+                                &expected_binding,
+                                &keys.public_key().to_hex(),
+                            )
+                            .map(|()| {
+                                binding = verified_binding;
+                                entitlement
+                            }),
+                            Err(error) => Err(error),
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
             }
             Err(error) => Err(format!("Managed access could not be refreshed: {error}")),
         };
         match entitlement {
             Ok(entitlement) => {
+                if let Err(error) = identity_binding::validate_entitlement_for_binding(
+                    &binding,
+                    &entitlement,
+                    &expected_binding.membership_id,
+                    &keys.public_key().to_hex(),
+                ) {
+                    disable_managed_access(&app_state);
+                    return Ok(EvaosTeamsAuthStatus::managed(
+                        "reauth_required",
+                        Some(error),
+                    ));
+                }
                 if !login_identity::custody_checked(&state)? {
                     let verified_binding =
                         match login_identity::binding_for_entitlement(&binding, &entitlement) {
@@ -800,7 +810,13 @@ pub(crate) async fn get_evaos_teams_auth_status(
                     }
                     login_identity::mark_custody_checked(&state)?;
                 }
-                match install_entitlement(&app_state, &keys, &entitlement) {
+                match install_entitlement(
+                    &app_state,
+                    &keys,
+                    &binding,
+                    &binding.membership_id,
+                    &entitlement,
+                ) {
                     Ok(()) => Ok(EvaosTeamsAuthStatus::active(entitlement)),
                     Err(error) => {
                         disable_managed_access(&app_state);
@@ -855,8 +871,7 @@ async fn claim_device_code(
     Ok(response)
 }
 
-/// Start proof-bound browser OAuth, verify the already-resolved native identity,
-/// and install only the server-selected entitlement.
+/// Start proof-bound OAuth and install only the server-selected entitlement.
 #[tauri::command]
 pub(crate) async fn start_evaos_teams_login(
     app: tauri::AppHandle,
@@ -960,8 +975,7 @@ pub(crate) async fn start_evaos_teams_login(
     }
 }
 
-/// Revoke only the opaque Electric device session. The native Buzz identity
-/// remains untouched so offline messages keep their durable recipient.
+/// Revoke only the opaque Electric session, preserving the native Buzz identity.
 #[tauri::command]
 pub(crate) async fn logout_evaos_teams(
     app: tauri::AppHandle,

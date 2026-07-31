@@ -76,6 +76,38 @@ use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
 const INITIAL_RENDER_READY_EVENT: &str = "initial-render-ready";
 
+static ACTIVE_PENDING_EVENT_PUBLISHER_STARTED: AtomicBool = AtomicBool::new(false);
+
+fn start_pending_event_publisher_once(started: &AtomicBool, start: impl FnOnce()) -> bool {
+    if started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    start();
+    true
+}
+
+pub(crate) fn spawn_active_pending_event_publisher(app_handle: tauri::AppHandle) {
+    start_pending_event_publisher_once(&ACTIVE_PENDING_EVENT_PUBLISHER_STARTED, || {
+        tauri::async_runtime::spawn(async move {
+            use std::time::Duration;
+            use tauri::Manager;
+            loop {
+                let state = app_handle.state::<AppState>();
+                if let Err(error) =
+                    managed_agents::persona_events::flush_active_pending_events(&app_handle, &state)
+                        .await
+                {
+                    eprintln!("buzz-desktop: event-flush: {error}");
+                }
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+        });
+    });
+}
+
 fn reveal_initial_window<R: tauri::Runtime>(window: &tauri::Window<R>) {
     if let Err(error) = window.show() {
         eprintln!("buzz-desktop: failed to reveal main window: {error}");
@@ -623,23 +655,7 @@ pub fn run() {
             // Skipped in recovery mode — flushing under an ephemeral key would
             // publish events attributed to an identity the user doesn't own.
             if !recovery_mode {
-                let flush_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    use std::time::Duration;
-                    use tauri::Manager;
-                    loop {
-                        let state = flush_handle.state::<AppState>();
-                        if let Err(e) = managed_agents::persona_events::flush_active_pending_events(
-                            &flush_handle,
-                            &state,
-                        )
-                        .await
-                        {
-                            eprintln!("buzz-desktop: event-flush: {e}");
-                        }
-                        tokio::time::sleep(Duration::from_secs(30)).await;
-                    }
-                });
+                spawn_active_pending_event_publisher(app.handle().clone());
             }
 
             Ok(())
@@ -654,6 +670,7 @@ pub fn run() {
             get_evaos_teams_auth_status,
             start_evaos_teams_login,
             submit_evaos_teams_login_code,
+            replace_lost_evaos_teams_identity,
             logout_evaos_teams,
             list_hive_company_agent_authorizations,
             get_desktop_product_policy,
@@ -944,4 +961,27 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod pending_event_publisher_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn repeated_start_attempts_create_exactly_one_worker() {
+        let started = AtomicBool::new(false);
+        let workers = AtomicUsize::new(0);
+
+        let first = start_pending_event_publisher_once(&started, || {
+            workers.fetch_add(1, Ordering::SeqCst);
+        });
+        let second = start_pending_event_publisher_once(&started, || {
+            workers.fetch_add(1, Ordering::SeqCst);
+        });
+
+        assert!(first);
+        assert!(!second);
+        assert_eq!(workers.load(Ordering::SeqCst), 1);
+    }
 }
