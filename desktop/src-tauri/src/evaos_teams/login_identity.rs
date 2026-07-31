@@ -120,6 +120,17 @@ pub(super) fn require_genuine_native_identity_loss(
     )
 }
 
+pub(super) fn local_identity_ready_for_login(
+    binding: &IdentityBinding,
+    local_keys: Option<&Keys>,
+) -> Result<bool, String> {
+    let Some(keys) = local_keys else {
+        return Ok(false);
+    };
+    verify_existing_native_identity(binding, keys)?;
+    Ok(true)
+}
+
 pub(super) async fn complete_login(
     app: &tauri::AppHandle,
     state: &EvaosTeamsState,
@@ -141,10 +152,8 @@ pub(super) async fn complete_login(
             None
         }
     };
-    let local_identity_matches = local_keys
-        .as_ref()
-        .and_then(|keys| verify_existing_native_identity(&binding, keys).ok());
-    let (keys, entitlement) = if local_identity_matches.is_some() {
+    let local_identity_ready = local_identity_ready_for_login(&binding, local_keys.as_ref())?;
+    let (keys, entitlement) = if local_identity_ready {
         let keys = local_keys
             .ok_or_else(|| "The local Hive identity could not be verified".to_string())?;
         let entitlement =

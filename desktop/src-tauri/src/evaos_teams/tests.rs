@@ -609,6 +609,33 @@ fn identity_reset_requires_genuine_native_identity_loss() {
     assert!(require_genuine_native_identity_loss(true, true).is_err());
 }
 
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn healthy_mismatched_native_identity_is_rejected_without_reset() {
+    let local_keys = Keys::generate();
+    let canonical_keys = Keys::generate();
+    let binding = authoritative_binding(Some(canonical_keys.public_key().to_hex()));
+    let state = EvaosTeamsState::default();
+    let before_key = local_keys.public_key();
+
+    assert!(login_identity::local_identity_ready_for_login(&binding, Some(&local_keys)).is_err());
+    assert_eq!(local_keys.public_key(), before_key);
+    assert!(state.pending_identity_reset.lock().unwrap().is_none());
+    assert!(require_genuine_native_identity_loss(false, false).is_err());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn genuine_identity_loss_remains_reset_eligible_without_local_keys() {
+    let binding = authoritative_binding(Some(Keys::generate().public_key().to_hex()));
+
+    assert!(require_genuine_native_identity_loss(true, false).is_ok());
+    assert_eq!(
+        login_identity::local_identity_ready_for_login(&binding, None).unwrap(),
+        false
+    );
+}
+
 #[test]
 fn legacy_identity_candidate_requires_canonical_membership_match() {
     let matching = Keys::generate();
