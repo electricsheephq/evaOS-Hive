@@ -421,6 +421,8 @@ mod tests {
     #[test]
     fn deferred_profile_signer_is_captured_and_rejects_wrong_identity() {
         let state = crate::app_state::build_app_state();
+        #[cfg(feature = "evaos-teams-managed")]
+        crate::app_state::tests::authorize_managed_signing_test(&state);
         let original = state.signing_keys().expect("signable identity");
         let original_pubkey = original.public_key().to_hex();
 

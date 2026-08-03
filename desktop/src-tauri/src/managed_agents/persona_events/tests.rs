@@ -852,6 +852,8 @@ mod flush_barrier {
         .sign_with_keys(&keys)
         .unwrap();
         let state = build_app_state();
+        #[cfg(feature = "evaos-teams-managed")]
+        crate::app_state::tests::authorize_managed_signing_test(&state);
         *state.keys.lock().unwrap() = keys;
 
         let fresh = resign_with_fresh_timestamp(&stale, &state).unwrap();
@@ -911,6 +913,8 @@ mod flush_barrier {
         }
 
         let state = build_app_state();
+        #[cfg(feature = "evaos-teams-managed")]
+        crate::app_state::tests::authorize_managed_signing_test(&state);
         *state.keys.lock().unwrap() = keys;
         *state.relay_url_override.lock().unwrap() = Some(spawn_stub_relay().await);
 

@@ -585,14 +585,8 @@ fn import_persists_to_keyring_reboot_resolves_imported_pubkey() {
 
 #[test]
 fn present_keyring_with_mismatched_file_adopts_file_key() {
-    // (b) Present + mismatched identity.key → file's key adopted into
-    // keyring, no data loss, file removed.
-    //
-    // This auto-heals installs already stuck in the re-onboarding loop:
-    // the keyring holds the shadow key generated at first launch, while
-    // identity.key holds the user's imported key from a subsequent import
-    // that only reached the file (pre-fix bug). Resolution must adopt the
-    // file's key as the user's explicit intent.
+    // Unmanaged adoption auto-heals the re-onboarding loop: keyring holds the
+    // first-launch shadow key, identity.key a later import (pre-fix bug).
     let dir = tempfile::tempdir().unwrap();
     let legacy_path = dir.path().join("identity.key");
 
@@ -606,19 +600,18 @@ fn present_keyring_with_mismatched_file_adopts_file_key() {
     let store = FakeIdentityStore::present_with(&keyring_nsec);
     let resolved = resolve_identity_with_store(&store, &legacy_path, dir.path()).unwrap();
 
-    // The file's key (user's explicit import) wins.
-    assert_key_eq(&file_keys, &resolved.keys);
+    let expected = expected_key(&keyring_keys, &file_keys);
+    assert_key_eq(expected, &resolved.keys);
     assert_eq!(resolved.recovery, RecoveryState::None);
 
-    // The keyring now holds the file's key (overwritten with read-back verify).
-    let file_nsec = file_keys.secret_key().to_bech32().unwrap();
+    let expected_keyring_nsec = expected.secret_key().to_bech32().unwrap();
     assert_eq!(
         store
             .slot
             .borrow()
             .get(IDENTITY_KEY_NAME)
             .map(String::as_str),
-        Some(file_nsec.as_str())
+        Some(expected_keyring_nsec.as_str())
     );
 
     // identity.key was removed after adoption.
@@ -636,11 +629,7 @@ fn present_keyring_with_mismatched_file_adopts_file_key() {
 
 #[test]
 fn present_keyring_mismatched_file_adoption_store_failure_boots_with_file_key() {
-    // Present + mismatched identity.key + keyring write fails during adoption.
-    // Boot must succeed with the FILE's key (the user's intent). The file must
-    // survive on disk because the write was rejected — adoption retries on the
-    // next boot when the keyring is reachable. The keyring slot must be
-    // unchanged (shadow nsec still present, not overwritten).
+    // Present + mismatched identity.key with rejected unmanaged adoption.
     let dir = tempfile::tempdir().unwrap();
     let legacy_path = dir.path().join("identity.key");
 
@@ -654,18 +643,16 @@ fn present_keyring_mismatched_file_adoption_store_failure_boots_with_file_key() 
     let store = FakeIdentityStore::present_with_store_failing(&keyring_nsec);
     let resolved = resolve_identity_with_store(&store, &legacy_path, dir.path()).unwrap();
 
-    // File key (user's explicit import) is returned.
-    assert_key_eq(&file_keys, &resolved.keys);
+    assert_key_eq(expected_key(&keyring_keys, &file_keys), &resolved.keys);
     assert_eq!(resolved.recovery, RecoveryState::None);
 
-    // identity.key must survive — adoption write failed, so it is the only
-    // durable copy of the imported key until the next-boot retry.
-    assert!(
+    // Unmanaged: the failed write leaves identity.key the only durable copy.
+    assert_eq!(
         legacy_path.exists(),
-        "identity.key must be kept when keyring adoption write fails"
+        !KEYRING_AUTHORITATIVE,
+        "unmanaged keeps identity.key when adoption write fails; managed removes it"
     );
 
-    // Keyring slot unchanged — write was rejected, no overwrite occurred.
     assert_eq!(
         store
             .slot
@@ -673,7 +660,7 @@ fn present_keyring_mismatched_file_adoption_store_failure_boots_with_file_key() 
             .get(IDENTITY_KEY_NAME)
             .map(String::as_str),
         Some(keyring_nsec.as_str()),
-        "keyring slot must be unchanged when adoption write fails"
+        "keyring slot must be unchanged when the adoption write is rejected"
     );
 }
 
@@ -720,7 +707,7 @@ fn present_keyring_with_mismatched_file_adopts_file_key_marker_failure_keeps_fil
     // legacy_path reliably there. What matters is that if resolve succeeded
     // it returned the file's key, and did NOT delete the file.
     if let Ok(resolved) = resolved {
-        assert_key_eq(&file_keys, &resolved.keys);
+        assert_key_eq(expected_key(&keyring_keys, &file_keys), &resolved.keys);
         assert_eq!(resolved.recovery, RecoveryState::None);
         // identity.key must NOT have been deleted — it is the only
         // fallback when the marker could not be written.
@@ -914,14 +901,27 @@ fn reachable_but_empty_with_marker_and_no_file_returns_lost_ephemeral_not_persis
     );
 }
 
-#[cfg(feature = "evaos-teams-managed")]
-fn authorize_managed_signing_test(state: &AppState) {
+// Managed keeps the Keychain authoritative over a divergent identity.key;
+// unmanaged adopts the file as the user's explicit import.
+pub(crate) const KEYRING_AUTHORITATIVE: bool = cfg!(feature = "evaos-teams-managed");
+
+fn expected_key<'a>(keyring: &'a Keys, file: &'a Keys) -> &'a Keys {
+    if KEYRING_AUTHORITATIVE {
+        keyring
+    } else {
+        file
+    }
+}
+
+#[cfg(all(test, feature = "evaos-teams-managed"))]
+pub(crate) fn authorize_managed_signing_test(state: &AppState) {
     let expiry = &state.managed_entitlement_expires_at_unix;
-    expiry.store(i64::MAX, std::sync::atomic::Ordering::Relaxed);
+    expiry.store(i64::MAX, std::sync::atomic::Ordering::Release);
     *state.relay_url_override.lock().unwrap() = Some("wss://relay.example.com".to_string());
 }
 #[cfg(not(feature = "evaos-teams-managed"))]
 fn authorize_managed_signing_test(_state: &AppState) {}
+
 #[test]
 fn signing_keys_returns_ok_when_normal() {
     let state = build_app_state();
