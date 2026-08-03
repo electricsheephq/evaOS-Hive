@@ -1,5 +1,13 @@
 # Hive thin-adapter runbook
 
+> **August 2026 scope: INTERNAL ONLY.** ElectricSheep-internal dogfood of the
+> v0.5.2-es Internal Canary only — zero customer exposure, no guarded beta, no
+> general rollout, mobile and Windows out of scope. The beta and 1.0 milestones
+> are deferred (not dropped) to the September readiness read. Scope statements
+> for the Electric adapter live here and in `VISION_HIVE.md`; the other
+> `VISION_*.md` files are upstream Buzz documents and are deliberately left
+> unmodified to keep the adapter thin.
+
 This runbook covers the Electric-only adapter on the exact upstream Buzz
 v0.5.2 base. It is not authority to replace native Buzz features or Hermes.
 
