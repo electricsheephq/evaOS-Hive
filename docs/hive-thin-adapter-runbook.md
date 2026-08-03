@@ -11,6 +11,12 @@
 This runbook covers the Electric-only adapter on the exact upstream Buzz
 v0.5.2 base. It is not authority to replace native Buzz features or Hermes.
 
+## Build feature boundary
+
+The Electric adapter is a compile-time feature. Release and canary builds must
+pass `evaos-teams-managed`; setting `EVAOS_REQUIRE_MANAGED=1` makes a missing
+feature fail the build instead of producing a plain Buzz artifact (issue #92).
+
 ## Boundaries
 
 - Buzz owns native collaboration, identities, signing, encryption, huddles, and
