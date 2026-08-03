@@ -360,26 +360,44 @@ fn signed_challenge(
         .map_err(|error| format!("could not encode managed key challenge: {error}"))
 }
 
-/// Return whether the membership already has a canonical native identity.
-///
-/// `Ok(false)` is the first-enrollment state. A present but different key is a
-/// recovery state and must never be rebound by a fresh local key.
-fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Result<bool, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum ExistingNativeIdentity {
+    Unbound,
+    Ready,
+    Mismatched,
+}
+
+fn classify_existing_native_identity(
+    binding: &IdentityBinding,
+    keys: &Keys,
+) -> Result<ExistingNativeIdentity, String> {
     uuid::Uuid::parse_str(&binding.membership_id)
         .map_err(|_| "Electric Sheep returned an invalid membership".to_string())?;
     let Some(canonical) = binding.public_key.as_deref() else {
-        return Ok(false);
+        return Ok(ExistingNativeIdentity::Unbound);
     };
     if !valid_public_key(canonical) {
         return Err("Electric Sheep returned an invalid canonical Hive identity".to_string());
     }
     if canonical != keys.public_key().to_hex() {
-        return Err(
+        return Ok(ExistingNativeIdentity::Mismatched);
+    }
+    Ok(ExistingNativeIdentity::Ready)
+}
+
+/// Return whether the membership already has a canonical native identity.
+///
+/// `Ok(false)` is the first-enrollment state. A present but different key is a
+/// recovery state and must never be rebound by a fresh local key.
+fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Result<bool, String> {
+    match classify_existing_native_identity(binding, keys)? {
+        ExistingNativeIdentity::Ready => Ok(true),
+        ExistingNativeIdentity::Unbound => Ok(false),
+        ExistingNativeIdentity::Mismatched => Err(
             "This device's native Buzz identity does not match the canonical Hive identity"
                 .to_string(),
-        );
+        ),
     }
-    Ok(true)
 }
 fn install_entitlement(
     app_state: &AppState,

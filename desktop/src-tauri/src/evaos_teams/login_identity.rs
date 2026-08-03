@@ -127,8 +127,10 @@ pub(super) fn local_identity_ready_for_login(
     let Some(keys) = local_keys else {
         return Ok(false);
     };
-    verify_existing_native_identity(binding, keys)?;
-    Ok(true)
+    Ok(matches!(
+        classify_existing_native_identity(binding, keys)?,
+        ExistingNativeIdentity::Ready
+    ))
 }
 
 pub(super) async fn complete_login(
