@@ -52,7 +52,10 @@ pub(crate) use company_agents::list_hive_company_agent_authorizations;
 use identity_binding::get_identity_binding;
 #[cfg(test)]
 use identity_binding::IdentityBindingResponse;
-use identity_binding::{validate_challenge_for_binding, validate_refresh, IdentityBinding};
+use identity_binding::{
+    validate_challenge_for_binding, validate_refresh, verify_existing_native_identity,
+    IdentityBinding,
+};
 pub(crate) use identity_rotation::replace_lost_evaos_teams_identity;
 use identity_rotation::PendingIdentityReset;
 use keychain_migration::{
@@ -360,27 +363,6 @@ fn signed_challenge(
         .map_err(|error| format!("could not encode managed key challenge: {error}"))
 }
 
-/// Return whether the membership already has a canonical native identity.
-///
-/// `Ok(false)` is the first-enrollment state. A present but different key is a
-/// recovery state and must never be rebound by a fresh local key.
-fn verify_existing_native_identity(binding: &IdentityBinding, keys: &Keys) -> Result<bool, String> {
-    uuid::Uuid::parse_str(&binding.membership_id)
-        .map_err(|_| "Electric Sheep returned an invalid membership".to_string())?;
-    let Some(canonical) = binding.public_key.as_deref() else {
-        return Ok(false);
-    };
-    if !valid_public_key(canonical) {
-        return Err("Electric Sheep returned an invalid canonical Hive identity".to_string());
-    }
-    if canonical != keys.public_key().to_hex() {
-        return Err(
-            "This device's native Buzz identity does not match the canonical Hive identity"
-                .to_string(),
-        );
-    }
-    Ok(true)
-}
 fn install_entitlement(
     app_state: &AppState,
     keys: &Keys,

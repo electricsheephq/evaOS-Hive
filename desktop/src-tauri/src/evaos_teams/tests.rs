@@ -611,17 +611,47 @@ fn identity_reset_requires_genuine_native_identity_loss() {
 
 #[cfg(feature = "evaos-teams-managed")]
 #[test]
-fn healthy_mismatched_native_identity_is_rejected_without_reset() {
+fn healthy_mismatched_native_identity_recovers_on_login_but_reauths_on_resume() {
     let local_keys = Keys::generate();
     let canonical_keys = Keys::generate();
     let binding = authoritative_binding(Some(canonical_keys.public_key().to_hex()));
-    let state = EvaosTeamsState::default();
-    let before_key = local_keys.public_key();
 
-    assert!(login_identity::local_identity_ready_for_login(&binding, Some(&local_keys)).is_err());
-    assert_eq!(local_keys.public_key(), before_key);
-    assert!(state.pending_identity_reset.lock().unwrap().is_none());
+    // Managed sign-in: a readable non-canonical key is "not ready", so
+    // complete_login falls through to managed recovery instead of erroring.
+    assert!(!login_identity::local_identity_ready_for_login(&binding, Some(&local_keys)).unwrap());
+
+    // Session resume cannot recover in place, so it still hard-errors and
+    // defers to a fresh sign-in rather than rebinding the local key.
+    assert!(verify_existing_native_identity(&binding, &local_keys).is_err());
+
+    // A present, unlocked identity is never treated as identity loss.
     assert!(require_genuine_native_identity_loss(false, false).is_err());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn matching_native_identity_is_ready_for_login() {
+    let keys = Keys::generate();
+    let binding = authoritative_binding(Some(keys.public_key().to_hex()));
+
+    assert!(login_identity::local_identity_ready_for_login(&binding, Some(&keys)).unwrap());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn login_identity_validation_failures_remain_hard_errors() {
+    let keys = Keys::generate();
+
+    let mut malformed_membership = authoritative_binding(Some(keys.public_key().to_hex()));
+    malformed_membership.membership_id = "not-a-uuid".to_string();
+    assert!(
+        login_identity::local_identity_ready_for_login(&malformed_membership, Some(&keys)).is_err()
+    );
+
+    let invalid_canonical = authoritative_binding(Some("z".repeat(64)));
+    assert!(
+        login_identity::local_identity_ready_for_login(&invalid_canonical, Some(&keys)).is_err()
+    );
 }
 
 #[cfg(feature = "evaos-teams-managed")]
@@ -631,6 +661,15 @@ fn genuine_identity_loss_remains_reset_eligible_without_local_keys() {
 
     assert!(require_genuine_native_identity_loss(true, false).is_ok());
     assert!(!login_identity::local_identity_ready_for_login(&binding, None).unwrap());
+}
+
+#[cfg(feature = "evaos-teams-managed")]
+#[test]
+fn unbound_membership_is_not_ready_for_login() {
+    let keys = Keys::generate();
+    let binding = authoritative_binding(None);
+
+    assert!(!login_identity::local_identity_ready_for_login(&binding, Some(&keys)).unwrap());
 }
 
 #[test]

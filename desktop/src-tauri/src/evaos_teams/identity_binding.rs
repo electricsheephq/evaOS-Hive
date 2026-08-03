@@ -1,8 +1,12 @@
+use nostr::Keys;
 use serde::Deserialize;
 
 #[cfg(feature = "evaos-teams-managed")]
 use super::{http_api::post_json, relay_websocket_url};
-use super::{validate_challenge, validate_entitlement, ChallengeResponse, EvaosTeamsEntitlement};
+use super::{
+    valid_public_key, validate_challenge, validate_entitlement, ChallengeResponse,
+    EvaosTeamsEntitlement,
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(super) struct IdentityBinding {
@@ -16,6 +20,56 @@ pub(super) struct IdentityBinding {
 pub(super) struct IdentityBindingResponse {
     pub(super) status: String,
     pub(super) binding: IdentityBinding,
+}
+
+/// How the local native key relates to the membership's canonical identity.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ExistingNativeIdentity {
+    /// First enrollment: the membership has no canonical identity yet.
+    Unbound,
+    /// The local key is the canonical identity.
+    Ready,
+    /// A readable local key that is not the canonical one. This is a recovery
+    /// state and must never be rebound by the local key.
+    Mismatched,
+}
+
+pub(super) fn classify_existing_native_identity(
+    binding: &IdentityBinding,
+    keys: &Keys,
+) -> Result<ExistingNativeIdentity, String> {
+    uuid::Uuid::parse_str(&binding.membership_id)
+        .map_err(|_| "Electric Sheep returned an invalid membership".to_string())?;
+    let Some(canonical) = binding.public_key.as_deref() else {
+        return Ok(ExistingNativeIdentity::Unbound);
+    };
+    if !valid_public_key(canonical) {
+        return Err("Electric Sheep returned an invalid canonical Hive identity".to_string());
+    }
+    if canonical != keys.public_key().to_hex() {
+        return Ok(ExistingNativeIdentity::Mismatched);
+    }
+    Ok(ExistingNativeIdentity::Ready)
+}
+
+/// Return whether the membership already has a canonical native identity.
+///
+/// `Ok(false)` is the first-enrollment state. A mismatch is an error here: the
+/// session-resume path cannot recover in place, so it must re-authenticate
+/// rather than rebind a fresh local key. The managed sign-in path classifies
+/// the mismatch itself and routes it to recovery.
+pub(super) fn verify_existing_native_identity(
+    binding: &IdentityBinding,
+    keys: &Keys,
+) -> Result<bool, String> {
+    match classify_existing_native_identity(binding, keys)? {
+        ExistingNativeIdentity::Ready => Ok(true),
+        ExistingNativeIdentity::Unbound => Ok(false),
+        ExistingNativeIdentity::Mismatched => Err(
+            "This device's native Buzz identity does not match the canonical Hive identity"
+                .to_string(),
+        ),
+    }
 }
 
 pub(super) fn validate_identity_binding(

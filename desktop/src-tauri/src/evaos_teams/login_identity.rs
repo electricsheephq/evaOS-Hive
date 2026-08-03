@@ -127,8 +127,12 @@ pub(super) fn local_identity_ready_for_login(
     let Some(keys) = local_keys else {
         return Ok(false);
     };
-    verify_existing_native_identity(binding, keys)?;
-    Ok(true)
+    // Only a canonical-vs-local mismatch is "not ready": complete_login then
+    // routes it to managed recovery. Every other failure stays an error.
+    Ok(matches!(
+        super::identity_binding::classify_existing_native_identity(binding, keys)?,
+        super::identity_binding::ExistingNativeIdentity::Ready
+    ))
 }
 
 pub(super) async fn complete_login(
