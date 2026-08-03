@@ -139,8 +139,9 @@ jobs:
           key: mesh-llama-${{ runner.os }}-metal-${{ steps.mesh_rev.outputs.rev }}
 
       - name: Build unsigned Tauri app
-        run: cd desktop && pnpm tauri build --verbose --no-sign --features mesh-llm --config src-tauri/tauri.canary.conf.json
+        run: cd desktop && pnpm tauri build --verbose --no-sign --features mesh-llm,evaos-teams-managed --config src-tauri/tauri.canary.conf.json
         env:
+          EVAOS_REQUIRE_MANAGED: "1"
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           MACOSX_DEPLOYMENT_TARGET: "10.15"
           CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"

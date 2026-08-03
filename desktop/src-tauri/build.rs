@@ -50,6 +50,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_OBSERVER_ARCHIVE_DEFAULT");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AGENT_METRIC_ARCHIVE_DEFAULT");
     println!("cargo:rerun-if-env-changed=BUZZ_BUILD_AUTO_CONNECT_DEFAULT_RELAY");
+    println!("cargo:rerun-if-env-changed=EVAOS_REQUIRE_MANAGED");
     println!("cargo:rustc-check-cfg=cfg(buzz_updater_enabled)");
 
     if let Ok(relay_url) = std::env::var("BUZZ_RELAY_URL") {
@@ -141,6 +142,12 @@ fn main() {
         .filter(|value| !value.is_empty());
 
     let managed = std::env::var_os("CARGO_FEATURE_EVAOS_TEAMS_MANAGED").is_some();
+    let require_managed = std::env::var("EVAOS_REQUIRE_MANAGED")
+        .map(|value| value == "1" || value == "true")
+        .unwrap_or(false);
+    if require_managed && !managed {
+        panic!("EVAOS_REQUIRE_MANAGED is set but the evaos-teams-managed feature is not enabled; this artifact would ship as plain Buzz (see issue #92)");
+    }
     let updater_enabled = if managed {
         if buzz_updater_public_key.is_some() || buzz_updater_endpoint.is_some() {
             panic!("Hive builds reject the upstream Buzz updater configuration");
