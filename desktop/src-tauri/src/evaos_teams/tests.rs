@@ -630,10 +630,7 @@ fn genuine_identity_loss_remains_reset_eligible_without_local_keys() {
     let binding = authoritative_binding(Some(Keys::generate().public_key().to_hex()));
 
     assert!(require_genuine_native_identity_loss(true, false).is_ok());
-    assert_eq!(
-        login_identity::local_identity_ready_for_login(&binding, None).unwrap(),
-        false
-    );
+    assert!(!login_identity::local_identity_ready_for_login(&binding, None).unwrap());
 }
 
 #[test]

@@ -202,6 +202,22 @@ desktop-tauri-check: _ensure-sidecar-stubs
 desktop-tauri-test: _ensure-sidecar-stubs
     cd desktop/src-tauri && cargo test
 
+# Lint and test the Electric-only managed adapter.
+#
+# `evaos-teams-managed` is a compile-time boundary (managed key custody must not
+# be switchable by an inherited env var at runtime), and it is not a default
+# feature - so every other recipe here compiles the adapter OUT. Without this
+# recipe the managed identity/custody/login code has no lint or test coverage.
+#
+# The test run is deliberately SCOPED to the adapter's own module. The full
+# suite does not yet pass under this feature: 9 tests written against the
+# unmanaged build fail because their fixtures never establish an Electric
+# session, so signing hits the managed authorization gate. Tracked in #93 -
+# widen this to the full suite once those fixtures grow managed variants.
+desktop-tauri-managed-check: _ensure-sidecar-stubs
+    cargo clippy --manifest-path {{desktop_tauri_manifest}} --all-targets --features evaos-teams-managed -- -D warnings
+    cd desktop/src-tauri && cargo test --features evaos-teams-managed evaos_teams
+
 # Verify compiled-flag behavior under both compile states (clean + internal).
 # Runs the observer_archive focused test twice with independently supplied
 # expected values; build.rs rerun-if-env-changed triggers recompilation.
