@@ -1,5 +1,15 @@
 # Hive product vision
 
+> **August 2026 scope: INTERNAL ONLY.** Hive ships to nobody outside Electric
+> Sheep this month. August is an ElectricSheep-internal dogfood of the v0.5.2-es
+> Internal Canary — Andrew, Eva, and Benjamin plus a small number of bridged
+> company agents on one internal relay. **Zero customer exposure**: no design
+> partner distribution, no guarded beta, no general rollout. The "Guarded
+> Business Beta" and "Hive 1.0 — General Rollout" milestones are **deferred, not
+> dropped** — their gates stay open and are re-scoped at the September readiness
+> read. Nothing in this document authorizes distribution by itself; see "Release
+> proof" below.
+
 Hive is native upstream Buzz with a small Electric Sheep product adapter. The
 adapter selects who may enter a managed company workspace; it does not replace
 Buzz collaboration, identity signing, agent transport, or Hermes.
