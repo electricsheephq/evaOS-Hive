@@ -1081,4 +1081,4 @@ pub(crate) fn save_key_file(path: &std::path::Path, keys: &Keys) -> Result<(), S
 
 #[cfg(test)]
 #[path = "app_state_tests.rs"]
-mod tests;
+pub(crate) mod tests;
